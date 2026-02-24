@@ -1,0 +1,10 @@
+This library contains code derived from the pi-mono project.
+
+ORIGINAL WORK:
+- pi-mono TUI library
+- Copyright (c) 2025 Mario Zechner
+- Licensed under MIT License
+- Source: https://github.com/badlogic/pi-mono
+
+This library is a port of the TUI components from pi-mono to Go,
+maintaining the same functionality and design patterns.
