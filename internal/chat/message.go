@@ -13,12 +13,12 @@ import (
 // MessageComponent renders text with a left border.
 // For assistant messages it renders markdown; for others plain text.
 type MessageComponent struct {
-	content      string
-	borderChar   string
-	borderColor  func(string) string
-	bodyColor    func(string) string
-	markdown     bool
-	mdTheme      components.MarkdownTheme
+	content     string
+	borderChar  string
+	borderColor func(string) string
+	bodyColor   func(string) string
+	markdown    bool
+	mdTheme     components.MarkdownTheme
 
 	cachedContent string
 	cachedWidth   int
@@ -29,11 +29,11 @@ func NewMessage(content string, borderChar string, borderColor, bodyColor func(s
 	content = strings.TrimSpace(content)
 
 	m := &MessageComponent{
-		content:      content,
-		borderChar:   borderChar,
-		borderColor:  borderColor,
-		bodyColor:    bodyColor,
-		markdown:     markdown,
+		content:     content,
+		borderChar:  borderChar,
+		borderColor: borderColor,
+		bodyColor:   bodyColor,
+		markdown:    markdown,
 	}
 	if markdown {
 		m.mdTheme = defaultMarkdownTheme()

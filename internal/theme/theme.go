@@ -78,8 +78,8 @@ func AnsiBgOnly(r, g, b int) func(string) string {
 
 // Border characters
 const (
-	BorderThin  = "│"  // Thin vertical line
-	BorderThick = "║"  // Double (thick) vertical line
+	BorderThin  = "│" // Thin vertical line
+	BorderThick = "║" // Double (thick) vertical line
 )
 
 // Theme colors
