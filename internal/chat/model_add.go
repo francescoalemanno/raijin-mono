@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/components"
@@ -18,15 +19,16 @@ const modelAddMaxVisible = 10
 
 // catalogItem represents a provider+model from the catwalk catalog.
 type catalogItem struct {
-	providerID    string
-	providerName  string
-	providerType  string
-	baseURL       string
-	modelID       string
-	modelName     string
-	maxTokens     int64
-	contextWindow int64
-	canReason     bool
+	providerID     string
+	providerName   string
+	providerType   string
+	providerAPIKey string
+	baseURL        string
+	modelID        string
+	modelName      string
+	maxTokens      int64
+	contextWindow  int64
+	canReason      bool
 }
 
 type modelAddStep int
@@ -136,15 +138,16 @@ func (m *ModelAddComponent) loadCatalog() {
 				modelName = model.ID
 			}
 			items = append(items, catalogItem{
-				providerID:    string(p.ID),
-				providerName:  providerName,
-				providerType:  string(p.Type),
-				baseURL:       p.APIEndpoint,
-				modelID:       model.ID,
-				modelName:     modelName,
-				maxTokens:     model.DefaultMaxTokens,
-				contextWindow: model.ContextWindow,
-				canReason:     model.CanReason,
+				providerID:     string(p.ID),
+				providerName:   providerName,
+				providerType:   string(p.Type),
+				providerAPIKey: p.APIKey,
+				baseURL:        p.APIEndpoint,
+				modelID:        model.ID,
+				modelName:      modelName,
+				maxTokens:      model.DefaultMaxTokens,
+				contextWindow:  model.ContextWindow,
+				canReason:      model.CanReason,
 			})
 		}
 	}
@@ -215,13 +218,33 @@ func (m *ModelAddComponent) confirmModelSelection() {
 	}
 	item := m.filtered[m.selectedIndex]
 
+	if shouldSkipAPIKeyPrompt(item.providerID) {
+		if m.onDone != nil {
+			m.onDone(ModelAddResult{
+				ProviderID:    item.providerID,
+				ProviderName:  item.providerName,
+				ProviderType:  item.providerType,
+				BaseURL:       item.baseURL,
+				ModelID:       item.modelID,
+				ModelName:     item.modelName,
+				MaxTokens:     item.maxTokens,
+				ContextWindow: item.contextWindow,
+				CanReason:     item.canReason,
+				APIKey:        "",
+			})
+		}
+		return
+	}
+
 	// Move to API key step
 	m.pendingItem = &item
 	m.step = stepEnterAPIKey
 
-	// Pre-populate with existing key if available
+	// Pre-populate with existing key if available, else try provider default from env placeholder.
 	if existingKey := m.providerKeys[item.providerID]; existingKey != "" {
 		m.apiKeyInput.SetValue(existingKey)
+	} else if envKey := resolveCatalogProviderAPIKey(item.providerID, item.providerAPIKey); envKey != "" {
+		m.apiKeyInput.SetValue(envKey)
 	} else {
 		m.apiKeyInput.SetValue("")
 	}
@@ -378,4 +401,77 @@ func knownProviders() []catalog.Provider {
 		return nil
 	}
 	return result
+}
+
+func resolveCatalogProviderAPIKey(providerID, raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "$") {
+		envVar := strings.TrimPrefix(trimmed, "$")
+		if envVar != "" {
+			if value := strings.TrimSpace(os.Getenv(envVar)); value != "" {
+				return value
+			}
+		}
+	}
+	if trimmed != "" && !strings.HasPrefix(trimmed, "$") {
+		return trimmed
+	}
+
+	for _, envVar := range fallbackProviderAPIKeyEnvVars(providerID) {
+		if value := strings.TrimSpace(os.Getenv(envVar)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func shouldSkipAPIKeyPrompt(providerID string) bool {
+	return strings.EqualFold(strings.TrimSpace(providerID), catalog.OpenAICodexProviderID)
+}
+
+func fallbackProviderAPIKeyEnvVars(providerID string) []string {
+	switch strings.ToLower(strings.TrimSpace(providerID)) {
+	case "openai":
+		return []string{"OPENAI_API_KEY"}
+	case "anthropic":
+		return []string{"ANTHROPIC_API_KEY"}
+	case "gemini", "google":
+		return []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}
+	case "openrouter":
+		return []string{"OPENROUTER_API_KEY"}
+	case "synthetic":
+		return []string{"SYNTHETIC_API_KEY"}
+	case "opencode", "opencode-zen-free":
+		return []string{"OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"}
+	case "xai":
+		return []string{"XAI_API_KEY"}
+	case "zai":
+		return []string{"ZAI_API_KEY"}
+	case "groq":
+		return []string{"GROQ_API_KEY"}
+	case "cerebras":
+		return []string{"CEREBRAS_API_KEY"}
+	case "venice":
+		return []string{"VENICE_API_KEY"}
+	case "chutes":
+		return []string{"CHUTES_API_KEY"}
+	case "huggingface":
+		return []string{"HUGGINGFACE_API_KEY", "HF_TOKEN"}
+	case "aihubmix":
+		return []string{"AIHUBMIX_API_KEY"}
+	case "kimi-coding":
+		return []string{"KIMI_API_KEY", "MOONSHOT_API_KEY"}
+	case "copilot":
+		return []string{"GITHUB_TOKEN", "COPILOT_API_KEY"}
+	case "vercel":
+		return []string{"VERCEL_API_KEY", "VERCEL_TOKEN"}
+	case "minimax":
+		return []string{"MINIMAX_API_KEY"}
+	case "ionet":
+		return []string{"IONET_API_KEY"}
+	case "azure":
+		return []string{"AZURE_OPENAI_API_KEY", "AZURE_API_KEY"}
+	default:
+		return nil
+	}
 }
