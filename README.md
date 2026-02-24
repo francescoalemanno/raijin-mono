@@ -47,13 +47,13 @@ We haven't been able to test all providers personally (it takes API keys and mon
 
 ## Features
 
-- **~~ expansion** - Expand git/bash command output directly in your prompt to send to the LLM without copy-paste
-- **/amplify** - Generate custom tools, skills, or prompt templates for your own use -- e.g. Search Engine tool ;)
+- **`~~ expansion`** - Expand git/bash command output directly in your prompt to send to the LLM without copy-paste
+- **`/amplify`** - Generate custom tools, skills, or prompt templates for your own use -- e.g. Search Engine tool ;)
 - **Prompt templates** - Build reusable prompts for recurring tasks
 - **Skills** - Callable both by the LLM and manually by the user using the $SkillName syntax (works also within prompt templates)
 - **Session persistence** - Resume past sessions seamlessly
 - **Compaction** - Split session history to keep recent interactions intact while compressing earlier ones
-- **/fork** - Fork a session at any user prompt to branch from a good checkpoint
+- **`/fork`** - Fork a session at any user prompt to branch from a good checkpoint
 
 ## What You Don't Get
 
