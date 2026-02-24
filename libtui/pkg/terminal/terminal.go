@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"regexp"
 	"runtime"
 	"sync"
-	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -67,6 +65,8 @@ type ProcessTerminal struct {
 	writeLogPath        string
 	quitChan            chan struct{}
 	dataChan            chan []byte
+	lastCols            int
+	lastRows            int
 }
 
 var (
@@ -124,14 +124,9 @@ func (pt *ProcessTerminal) Start(onInput func(string), onResize func()) {
 	// Enable bracketed paste mode
 	pt.writeOutput(BRACKETED_PASTE_ENABLE)
 
-	// Set up resize handler
-	pt.setupResizeHandler(onResize)
-
-	// Refresh terminal dimensions on Unix
-	// Send SIGWINCH to ourselves to refresh dimensions (may be stale after suspend/resume)
-	if runtime.GOOS != "windows" {
-		syscall.Kill(os.Getpid(), syscall.SIGWINCH)
-	}
+	// Track and watch terminal resize in a cross-platform way
+	pt.initResizeWatcher()
+	pt.checkResize()
 
 	// Enable Windows VT input if needed
 	pt.enableWindowsVTInput()
@@ -361,6 +356,52 @@ func (pt *ProcessTerminal) SetTitle(title string) {
 	pt.writeOutput(OSC_TITLE_PREFIX + title + OSC_TITLE_SUFFIX)
 }
 
+// initResizeWatcher starts a cross-platform resize watcher using periodic size checks.
+func (pt *ProcessTerminal) initResizeWatcher() {
+	cols, rows, err := getTerminalSize()
+	if err != nil {
+		cols, rows = 0, 0
+	}
+	pt.mu.Lock()
+	pt.lastCols = cols
+	pt.lastRows = rows
+	pt.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pt.quitChan:
+				return
+			case <-ticker.C:
+				pt.checkResize()
+			}
+		}
+	}()
+}
+
+// checkResize compares current terminal size with last seen size and emits resize callback.
+func (pt *ProcessTerminal) checkResize() {
+	cols, rows, err := getTerminalSize()
+	if err != nil {
+		return
+	}
+
+	pt.mu.Lock()
+	changed := cols != pt.lastCols || rows != pt.lastRows
+	if changed {
+		pt.lastCols = cols
+		pt.lastRows = rows
+	}
+	handler := pt.resizeHandler
+	pt.mu.Unlock()
+
+	if changed && handler != nil {
+		handler()
+	}
+}
+
 // readStdin reads from stdin in a separate goroutine
 func (pt *ProcessTerminal) readStdin() {
 	buf := make([]byte, 1024)
@@ -395,33 +436,6 @@ func (pt *ProcessTerminal) processStdinBuffer() {
 			pt.stdinBuffer.Process(data)
 		}
 	}
-}
-
-// setupResizeHandler sets up handler for terminal resize events
-func (pt *ProcessTerminal) setupResizeHandler(onResize func()) {
-	if runtime.GOOS == "windows" {
-		// Windows doesn't have SIGWINCH; skip
-		return
-	}
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGWINCH)
-
-	go func() {
-		for {
-			select {
-			case <-sigChan:
-				pt.mu.Lock()
-				handler := pt.resizeHandler
-				pt.mu.Unlock()
-				if handler != nil {
-					handler()
-				}
-			case <-pt.quitChan:
-				return
-			}
-		}
-	}()
 }
 
 // enableWindowsVTInput enables VT input mode on Windows (TODO)
