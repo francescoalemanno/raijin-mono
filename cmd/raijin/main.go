@@ -1,16 +1,26 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"strings"
 
-	chat "github.com/francescoalemanno/raijin-mono/internal/chat"
+	"github.com/francescoalemanno/raijin-mono/internal/chat"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
+	"github.com/francescoalemanno/raijin-mono/internal/version"
 	bridgecfg "github.com/francescoalemanno/raijin-mono/llmbridge/pkg/config"
 )
 
 func main() {
+	versionFlag := flag.Bool("version", false, "show version")
+	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println("raijin " + version.Version)
+		os.Exit(0)
+	}
+
 	cfg, err := bridgecfg.Load()
 	if err != nil && err != bridgecfg.ErrConfigNotFound {
 		fmt.Fprintln(os.Stderr, "failed to load config:", err)

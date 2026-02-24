@@ -11,6 +11,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/utils"
 
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
+	"github.com/francescoalemanno/raijin-mono/internal/version"
 )
 
 // welcomeQuotes is a curated list of phrases about storms, lightning, power, and creation.
@@ -134,6 +135,11 @@ func (w *WelcomeComponent) Render(width int) []string {
 
 	// Separator
 	lines = append(lines, truncLine(w.centerLine(theme.ColorMuted("─"+strings.Repeat("─", max(0, contentWidth-2))+"─"), width)))
+
+	// Version (centered below the logo)
+	if version.Version != "" {
+		lines = append(lines, truncLine(w.centerLine(theme.ColorMuted("v"+version.Version), width)))
+	}
 
 	// Random quote
 	quote := welcomeQuotes[rand.Intn(len(welcomeQuotes))]
