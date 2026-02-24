@@ -32,6 +32,7 @@ type Provider struct {
 	ID          string
 	Name        string
 	Type        llm.ProviderType
+	APIKey      string
 	APIEndpoint string
 	Models      []Model
 }
@@ -186,6 +187,7 @@ func fromCatwalkProvider(provider catwalk.Provider) Provider {
 		ID:          string(provider.ID),
 		Name:        provider.Name,
 		Type:        llm.ProviderType(provider.Type),
+		APIKey:      provider.APIKey,
 		APIEndpoint: provider.APIEndpoint,
 		Models:      models,
 	}
