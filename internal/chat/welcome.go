@@ -173,13 +173,7 @@ func (w *WelcomeComponent) Render(width int) []string {
 	lines = append(lines, truncLine(w.centerLine(theme.ColorAccentAltBold("COMMANDS"), width)))
 	lines = append(lines, "")
 
-	var commands []commandHelp
-	for _, c := range commandNamesDescs {
-		if strings.Contains(c.Command, " ") {
-			continue
-		}
-		commands = append(commands, c)
-	}
+	commands := commandNamesDescs
 
 	for _, c := range commands {
 		cmdStr := theme.ColorAccent(c.Command)
