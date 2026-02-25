@@ -455,7 +455,7 @@ func TestResolveAttachmentFileTildeExpansion(t *testing.T) {
 	}
 
 	// Test quoted tilde path (quotes are stripped by normalizePath before resolveAttachmentFile)
-	path, mediaType, info, ok = resolveAttachmentFile("~/test_tilde_attachment.txt")
+	path, _, _, ok = resolveAttachmentFile("~/test_tilde_attachment.txt")
 	if !ok {
 		t.Fatal("Failed to resolve quoted tilde path")
 	}

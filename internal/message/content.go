@@ -2,10 +2,7 @@ package message
 
 import (
 	"encoding/json"
-	"slices"
 	"time"
-
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/codec"
 )
 
 type MessageRole string
@@ -20,13 +17,11 @@ const (
 type FinishReason string
 
 const (
-	FinishReasonEndTurn          FinishReason = "end_turn"
-	FinishReasonMaxTokens        FinishReason = "max_tokens"
-	FinishReasonToolUse          FinishReason = "tool_use"
-	FinishReasonCanceled         FinishReason = "canceled"
-	FinishReasonError            FinishReason = "error"
-	FinishReasonPermissionDenied FinishReason = "permission_denied"
-	FinishReasonUnknown          FinishReason = "unknown"
+	FinishReasonEndTurn   FinishReason = "end_turn"
+	FinishReasonMaxTokens FinishReason = "max_tokens"
+	FinishReasonToolUse   FinishReason = "tool_use"
+	FinishReasonError     FinishReason = "error"
+	FinishReasonUnknown   FinishReason = "unknown"
 )
 
 type ContentPart interface {
@@ -55,17 +50,6 @@ func (tc TextContent) String() string {
 }
 
 func (TextContent) isPart() {}
-
-type ImageURLContent struct {
-	URL    string `json:"url"`
-	Detail string `json:"detail,omitempty"`
-}
-
-func (iuc ImageURLContent) String() string {
-	return iuc.URL
-}
-
-func (ImageURLContent) isPart() {}
 
 type BinaryContent struct {
 	Path     string
@@ -129,89 +113,29 @@ type Message struct {
 }
 
 func (m *Message) Content() TextContent {
-	for _, part := range m.Parts {
-		if c, ok := part.(TextContent); ok {
-			return c
-		}
-	}
-	return TextContent{}
+	content, _ := firstPart[TextContent](m.Parts)
+	return content
 }
 
 func (m *Message) ReasoningContent() ReasoningContent {
-	for _, part := range m.Parts {
-		if c, ok := part.(ReasoningContent); ok {
-			return c
-		}
-	}
-	return ReasoningContent{}
-}
-
-func (m *Message) ImageURLContent() []ImageURLContent {
-	var contents []ImageURLContent
-	for _, part := range m.Parts {
-		if c, ok := part.(ImageURLContent); ok {
-			contents = append(contents, c)
-		}
-	}
-	return contents
+	content, _ := firstPart[ReasoningContent](m.Parts)
+	return content
 }
 
 func (m *Message) BinaryContent() []BinaryContent {
-	var contents []BinaryContent
-	for _, part := range m.Parts {
-		if c, ok := part.(BinaryContent); ok {
-			contents = append(contents, c)
-		}
-	}
-	return contents
+	return allParts[BinaryContent](m.Parts)
 }
 
 func (m *Message) SkillContent() []SkillContent {
-	var contents []SkillContent
-	for _, part := range m.Parts {
-		if c, ok := part.(SkillContent); ok {
-			contents = append(contents, c)
-		}
-	}
-	return contents
+	return allParts[SkillContent](m.Parts)
 }
 
 func (m *Message) ToolCalls() []ToolCall {
-	var calls []ToolCall
-	for _, part := range m.Parts {
-		if c, ok := part.(ToolCall); ok {
-			calls = append(calls, c)
-		}
-	}
-	return calls
+	return allParts[ToolCall](m.Parts)
 }
 
 func (m *Message) ToolResults() []ToolResult {
-	var results []ToolResult
-	for _, part := range m.Parts {
-		if c, ok := part.(ToolResult); ok {
-			results = append(results, c)
-		}
-	}
-	return results
-}
-
-func (m *Message) IsFinished() bool {
-	for _, part := range m.Parts {
-		if _, ok := part.(Finish); ok {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *Message) FinishReason() FinishReason {
-	for _, part := range m.Parts {
-		if c, ok := part.(Finish); ok {
-			return c.Reason
-		}
-	}
-	return ""
+	return allParts[ToolResult](m.Parts)
 }
 
 func (m *Message) AppendContent(delta string) {
@@ -320,7 +244,7 @@ func (m *Message) Clone() Message {
 func (m *Message) AddFinish(reason FinishReason, message, details string) {
 	for i, part := range m.Parts {
 		if _, ok := part.(Finish); ok {
-			m.Parts = slices.Delete(m.Parts, i, i+1)
+			m.Parts = append(m.Parts[:i], m.Parts[i+1:]...)
 			break
 		}
 	}
@@ -332,111 +256,25 @@ func (m *Message) AddFinish(reason FinishReason, message, details string) {
 	})
 }
 
-// ToAppMessage converts a persisted message to codec DTO form.
-func (m *Message) ToAppMessage() codec.AppMessage {
-	out := codec.AppMessage{
-		Role:        toAppRole(m.Role),
-		Text:        m.Content().Text,
-		Attachments: ToAppAttachments(m.BinaryContent()),
-		Skills:      ToAppSkills(m.SkillContent()),
-	}
-
-	reasoning := m.ReasoningContent()
-	if reasoning.Thinking != "" || len(reasoning.ProviderMetadata) > 0 {
-		out.Reasoning = &codec.AppReasoning{
-			Text:             reasoning.Thinking,
-			ProviderMetadata: cloneProviderMetadata(reasoning.ProviderMetadata),
+func firstPart[T any](parts []ContentPart) (T, bool) {
+	var zero T
+	for _, part := range parts {
+		if typed, ok := part.(T); ok {
+			return typed, true
 		}
 	}
-
-	for _, call := range m.ToolCalls() {
-		out.ToolCalls = append(out.ToolCalls, codec.AppToolCall{
-			ID:               call.ID,
-			Name:             call.Name,
-			Input:            call.Input,
-			ProviderExecuted: call.ProviderExecuted,
-		})
-	}
-
-	for _, result := range m.ToolResults() {
-		out.Results = append(out.Results, codec.AppToolResult{
-			ToolCallID: result.ToolCallID,
-			Name:       result.Name,
-			Content:    result.Content,
-			Data:       result.Data,
-			MIMEType:   result.MIMEType,
-			Metadata:   result.Metadata,
-			IsError:    result.IsError,
-		})
-	}
-
-	return out
+	return zero, false
 }
 
-func toAppRole(role MessageRole) codec.AppRole {
-	switch role {
-	case System:
-		return codec.AppRoleSystem
-	case User:
-		return codec.AppRoleUser
-	case Tool:
-		return codec.AppRoleTool
-	default:
-		return codec.AppRoleAssistant
+func allParts[T any](parts []ContentPart) []T {
+	out := make([]T, 0)
+	for _, part := range parts {
+		if typed, ok := part.(T); ok {
+			out = append(out, typed)
+		}
 	}
-}
-
-// ToAppAttachments converts message binary contents to codec DTOs.
-func ToAppAttachments(attachments []BinaryContent) []codec.AppAttachment {
-	if len(attachments) == 0 {
+	if len(out) == 0 {
 		return nil
 	}
-	out := make([]codec.AppAttachment, 0, len(attachments))
-	for _, attachment := range attachments {
-		out = append(out, codec.AppAttachment{
-			Path:     attachment.Path,
-			MIMEType: attachment.MIMEType,
-			Data:     attachment.Data,
-		})
-	}
 	return out
-}
-
-// ToAppSkills converts message skill contents to codec DTOs.
-func ToAppSkills(skills []SkillContent) []codec.AppSkill {
-	if len(skills) == 0 {
-		return nil
-	}
-	out := make([]codec.AppSkill, 0, len(skills))
-	for _, skill := range skills {
-		out = append(out, codec.AppSkill{
-			Name:    skill.Name,
-			Content: skill.Content,
-		})
-	}
-	return out
-}
-
-// ToolResultFromApp converts a codec tool result into a persisted message part.
-func ToolResultFromApp(result codec.AppToolResult) ToolResult {
-	return ToolResult{
-		ToolCallID: result.ToolCallID,
-		Name:       result.Name,
-		Content:    result.Content,
-		Data:       result.Data,
-		MIMEType:   result.MIMEType,
-		Metadata:   result.Metadata,
-		IsError:    result.IsError,
-	}
-}
-
-func cloneProviderMetadata(metadata map[string]json.RawMessage) map[string]json.RawMessage {
-	if len(metadata) == 0 {
-		return nil
-	}
-	cloned := make(map[string]json.RawMessage, len(metadata))
-	for key, value := range metadata {
-		cloned[key] = append(json.RawMessage(nil), value...)
-	}
-	return cloned
 }

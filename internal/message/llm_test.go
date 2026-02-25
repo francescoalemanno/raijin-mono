@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/codec"
 	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
@@ -29,7 +28,7 @@ func TestPromptWithUserAttachmentsTextFiles(t *testing.T) {
 		},
 	}
 
-	got := codec.PromptWithUserAttachments("Review these files", ToAppAttachments(attachments), nil)
+	got := PromptWithUserAttachments("Review these files", attachments, nil)
 
 	if !strings.HasPrefix(got, "Review these files") {
 		t.Fatalf("prompt prefix not preserved: %q", got)
@@ -60,7 +59,7 @@ func TestPromptWithUserAttachmentsTextFiles(t *testing.T) {
 	}
 }
 
-func TestMessageToLLMMessageUserTextAndImageAttachments(t *testing.T) {
+func TestToLLMMessagesUserTextAndImageAttachments(t *testing.T) {
 	t.Parallel()
 
 	msg := Message{
@@ -84,7 +83,7 @@ func TestMessageToLLMMessageUserTextAndImageAttachments(t *testing.T) {
 		},
 	}
 
-	llmMessages := codec.ToLLMMessages(msg.ToAppMessage())
+	llmMessages := ToLLMMessages(msg)
 	if len(llmMessages) != 1 {
 		t.Fatalf("expected one LLM message, got %d", len(llmMessages))
 	}
@@ -129,24 +128,15 @@ func TestMessageToLLMMessageUserTextAndImageAttachments(t *testing.T) {
 	}
 }
 
-func TestPromptWithUserAttachmentsSkills(t *testing.T) {
+func TestPrepareUserRequest_AppendsAllowedToolsNotice(t *testing.T) {
 	t.Parallel()
 
-	got := codec.PromptWithUserAttachments(
-		"Use this",
-		nil,
-		ToAppSkills([]SkillContent{
-			{
-				Name:    "commit",
-				Content: "<instructions>Commit changes</instructions>",
-			},
-		}),
-	)
-
-	if !strings.Contains(got, "explicitly loaded by the user") {
-		t.Fatalf("missing skill system info: %q", got)
-	}
-	if !strings.Contains(got, `<skill name="commit">`) {
-		t.Fatalf("missing skill tag: %q", got)
+	got := PrepareUserRequest(UserRequest{
+		Prompt:       "Review this file.",
+		AllowedTools: []string{"grep", "read"},
+	}).Prompt
+	want := "<system_info>For this specific user request the only tools that are allowed are: grep, read.</system_info>"
+	if !strings.Contains(got, want) {
+		t.Fatalf("prompt missing notice.\nGot: %q\nWant to contain: %q", got, want)
 	}
 }

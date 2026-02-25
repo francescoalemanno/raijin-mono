@@ -2,11 +2,14 @@ package message
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrMessageNotFound = errors.New("message not found")
 
 type CreateParams struct {
 	Role     MessageRole

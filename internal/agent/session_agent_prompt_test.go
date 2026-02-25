@@ -5,13 +5,13 @@ import (
 	"testing"
 
 	"github.com/francescoalemanno/raijin-mono/internal/core"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/codec"
+	"github.com/francescoalemanno/raijin-mono/internal/message"
 )
 
 func TestPrepareUserRequest_NoAllowedToolsNotice(t *testing.T) {
 	t.Parallel()
 
-	got := codec.PrepareUserRequest(codec.UserRequest{
+	got := message.PrepareUserRequest(message.UserRequest{
 		Prompt: "Review this file.",
 	}).Prompt
 	if strings.Contains(got, "only tools that are allowed are") {
@@ -22,7 +22,7 @@ func TestPrepareUserRequest_NoAllowedToolsNotice(t *testing.T) {
 func TestPrepareUserRequest_AppendsAllowedToolsNotice(t *testing.T) {
 	t.Parallel()
 
-	got := codec.PrepareUserRequest(codec.UserRequest{
+	got := message.PrepareUserRequest(message.UserRequest{
 		Prompt:       "Review this file.",
 		AllowedTools: core.DedupeSorted([]string{" read ", "GREP", "read"}),
 	}).Prompt

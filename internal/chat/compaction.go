@@ -239,23 +239,6 @@ func (app *ChatApp) maybeAutoCompact() bool {
 	return true
 }
 
-// getContextTokenCount returns the estimated token count and context window for the current session.
-// Returns (tokenCount, contextWindow, error).
-func (app *ChatApp) getContextTokenCount() (int64, int64, error) {
-	if app.session == nil || app.session.Agent() == nil || app.session.ID() == "" {
-		return 0, 0, fmt.Errorf("no active session")
-	}
-	sessionID := app.session.ID()
-	msgSvc := app.session.Agent().Messages()
-	msgs, err := msgSvc.List(context.Background(), sessionID)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to list messages: %w", err)
-	}
-	model := app.session.Agent().Model()
-	contextWindow := modelContextWindow(model)
-	return estimateConversationTokens(msgs), contextWindow, nil
-}
-
 func generateCompactionSummary(ctx context.Context, model bridgecfg.RuntimeModel, msgs []message.Message, customInstructions string) (string, error) {
 	conversation := serializeConversationForCompaction(msgs)
 	if strings.TrimSpace(conversation) == "" {

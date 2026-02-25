@@ -1,4 +1,4 @@
-package codec
+package message
 
 import (
 	"encoding/json"
@@ -8,70 +8,11 @@ import (
 	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
-// AppRole is a message role in app-facing DTOs.
-type AppRole string
-
-const (
-	AppRoleSystem    AppRole = "system"
-	AppRoleUser      AppRole = "user"
-	AppRoleAssistant AppRole = "assistant"
-	AppRoleTool      AppRole = "tool"
-)
-
-// AppMessage is a lightweight application-facing DTO for codec helpers.
-type AppMessage struct {
-	Role        AppRole
-	Text        string
-	Reasoning   *AppReasoning
-	Attachments []AppAttachment
-	Skills      []AppSkill
-	ToolCalls   []AppToolCall
-	Results     []AppToolResult
-}
-
-// AppReasoning is reasoning metadata content.
-type AppReasoning struct {
-	Text             string
-	ProviderMetadata map[string]json.RawMessage
-}
-
-// AppAttachment is a user attachment.
-type AppAttachment struct {
-	Path     string
-	MIMEType string
-	Data     []byte
-}
-
-// AppSkill is a loaded skill content block.
-type AppSkill struct {
-	Name    string
-	Content string
-}
-
-// AppToolCall is a tool call entry.
-type AppToolCall struct {
-	ID               string
-	Name             string
-	Input            string
-	ProviderExecuted bool
-}
-
-// AppToolResult is a tool result entry.
-type AppToolResult struct {
-	ToolCallID string
-	Name       string
-	Content    string
-	Data       string
-	MIMEType   string
-	Metadata   string
-	IsError    bool
-}
-
-// UserRequest is a user input payload ready for LLM request preparation.
+// UserRequest is a user input payload ready for llm.StreamRequest preparation.
 type UserRequest struct {
 	Prompt       string
-	Attachments  []AppAttachment
-	Skills       []AppSkill
+	Attachments  []BinaryContent
+	Skills       []SkillContent
 	AllowedTools []string
 }
 
@@ -81,7 +22,7 @@ type PreparedUserRequest struct {
 	Files  []llm.FilePart
 }
 
-// PrepareUserRequest builds a prompt and file attachments from app DTO input.
+// PrepareUserRequest builds a prompt and file attachments from message input.
 func PrepareUserRequest(req UserRequest) PreparedUserRequest {
 	prompt := PromptWithUserAttachments(req.Prompt, req.Attachments, req.Skills)
 	prompt = withAllowedToolsNotice(prompt, req.AllowedTools)
@@ -91,28 +32,28 @@ func PrepareUserRequest(req UserRequest) PreparedUserRequest {
 	}
 }
 
-// ToLLMMessages converts one app DTO message into llm messages.
-func ToLLMMessages(msg AppMessage) []llm.Message {
+// ToLLMMessages converts one persisted message into llm messages.
+func ToLLMMessages(msg Message) []llm.Message {
 	switch msg.Role {
-	case AppRoleUser:
+	case User:
 		return toUserMessages(msg)
-	case AppRoleAssistant:
+	case Assistant:
 		return toAssistantMessages(msg)
-	case AppRoleTool:
+	case Tool:
 		return toToolMessages(msg)
 	default:
 		return nil
 	}
 }
 
-func toUserMessages(msg AppMessage) []llm.Message {
-	parts := make([]llm.Part, 0, 1+len(msg.Attachments))
-	text := strings.TrimSpace(msg.Text)
-	text = PromptWithUserAttachments(text, msg.Attachments, msg.Skills)
+func toUserMessages(msg Message) []llm.Message {
+	parts := make([]llm.Part, 0, 1+len(msg.BinaryContent()))
+	text := strings.TrimSpace(msg.Content().Text)
+	text = PromptWithUserAttachments(text, msg.BinaryContent(), msg.SkillContent())
 	if text != "" {
 		parts = append(parts, llm.TextPart{Text: text})
 	}
-	for _, file := range msg.Attachments {
+	for _, file := range msg.BinaryContent() {
 		if strings.HasPrefix(file.MIMEType, "text/") {
 			continue
 		}
@@ -125,19 +66,20 @@ func toUserMessages(msg AppMessage) []llm.Message {
 	return []llm.Message{{Role: llm.RoleUser, Content: parts}}
 }
 
-func toAssistantMessages(msg AppMessage) []llm.Message {
-	parts := make([]llm.Part, 0, 1+len(msg.ToolCalls))
-	text := strings.TrimSpace(msg.Text)
+func toAssistantMessages(msg Message) []llm.Message {
+	parts := make([]llm.Part, 0, 1+len(msg.ToolCalls()))
+	text := strings.TrimSpace(msg.Content().Text)
 	if text != "" {
 		parts = append(parts, llm.TextPart{Text: text})
 	}
-	if msg.Reasoning != nil && msg.Reasoning.Text != "" {
+	reasoning := msg.ReasoningContent()
+	if reasoning.Thinking != "" {
 		parts = append(parts, llm.ReasoningPart{
-			Text:             msg.Reasoning.Text,
-			ProviderMetadata: cloneProviderMetadata(msg.Reasoning.ProviderMetadata),
+			Text:             reasoning.Thinking,
+			ProviderMetadata: cloneProviderMetadata(reasoning.ProviderMetadata),
 		})
 	}
-	for _, call := range msg.ToolCalls {
+	for _, call := range msg.ToolCalls() {
 		parts = append(parts, llm.ToolCallPart{
 			ToolCallID:       call.ID,
 			ToolName:         call.Name,
@@ -148,9 +90,9 @@ func toAssistantMessages(msg AppMessage) []llm.Message {
 	return []llm.Message{{Role: llm.RoleAssistant, Content: parts}}
 }
 
-func toToolMessages(msg AppMessage) []llm.Message {
-	parts := make([]llm.Part, 0, len(msg.Results))
-	for _, result := range msg.Results {
+func toToolMessages(msg Message) []llm.Message {
+	parts := make([]llm.Part, 0, len(msg.ToolResults()))
+	for _, result := range msg.ToolResults() {
 		output := llm.ToolResultOutput{Type: llm.ToolResultOutputText, Text: result.Content}
 		if result.IsError {
 			output = llm.ToolResultOutput{
@@ -165,25 +107,18 @@ func toToolMessages(msg AppMessage) []llm.Message {
 				MediaType: result.MIMEType,
 			}
 		}
-		parts = append(parts, llm.ToolResultPart{ToolCallID: result.ToolCallID, Output: output, Metadata: result.Metadata})
+		parts = append(parts, llm.ToolResultPart{
+			ToolCallID: result.ToolCallID,
+			Output:     output,
+			Metadata:   result.Metadata,
+		})
 	}
 	return []llm.Message{{Role: llm.RoleTool, Content: parts}}
 }
 
-func cloneProviderMetadata(metadata map[string]json.RawMessage) map[string]json.RawMessage {
-	if len(metadata) == 0 {
-		return nil
-	}
-	out := make(map[string]json.RawMessage, len(metadata))
-	for key, value := range metadata {
-		out[key] = append(json.RawMessage(nil), value...)
-	}
-	return out
-}
-
-// FromToolResult converts an llm tool-result part into app DTO form.
-func FromToolResult(toolName string, part llm.ToolResultPart) AppToolResult {
-	result := AppToolResult{
+// FromLLMToolResult converts an llm tool-result part into a persisted message part.
+func FromLLMToolResult(toolName string, part llm.ToolResultPart) ToolResult {
+	result := ToolResult{
 		ToolCallID: part.ToolCallID,
 		Name:       toolName,
 		Metadata:   part.Metadata,
@@ -205,7 +140,7 @@ func FromToolResult(toolName string, part llm.ToolResultPart) AppToolResult {
 	return result
 }
 
-func nonTextFiles(attachments []AppAttachment) []llm.FilePart {
+func nonTextFiles(attachments []BinaryContent) []llm.FilePart {
 	files := make([]llm.FilePart, 0, len(attachments))
 	for _, attachment := range attachments {
 		if strings.HasPrefix(attachment.MIMEType, "text/") {
@@ -236,7 +171,7 @@ func withAllowedToolsNotice(prompt string, allowedTools []string) string {
 }
 
 // PromptWithUserAttachments injects structured attachment context in a user prompt.
-func PromptWithUserAttachments(prompt string, attachments []AppAttachment, skills []AppSkill) string {
+func PromptWithUserAttachments(prompt string, attachments []BinaryContent, skills []SkillContent) string {
 	var sb strings.Builder
 	sb.WriteString(prompt)
 
@@ -320,4 +255,15 @@ func PromptWithUserAttachments(prompt string, attachments []AppAttachment, skill
 	}
 
 	return sb.String()
+}
+
+func cloneProviderMetadata(metadata map[string]json.RawMessage) map[string]json.RawMessage {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(metadata))
+	for key, value := range metadata {
+		out[key] = append(json.RawMessage(nil), value...)
+	}
+	return out
 }

@@ -17,7 +17,6 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/catalog"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/codec"
 	bridgecfg "github.com/francescoalemanno/raijin-mono/llmbridge/pkg/config"
 	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
@@ -168,12 +167,12 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) (*llm.Run
 		if isEmptyMessage(m) {
 			continue
 		}
-		history = append(history, codec.ToLLMMessages(m.ToAppMessage())...)
+		history = append(history, message.ToLLMMessages(m)...)
 	}
-	preparedUser := codec.PrepareUserRequest(codec.UserRequest{
+	preparedUser := message.PrepareUserRequest(message.UserRequest{
 		Prompt:       call.Prompt,
-		Attachments:  message.ToAppAttachments(call.Attachments),
-		Skills:       message.ToAppSkills(call.Skills),
+		Attachments:  call.Attachments,
+		Skills:       call.Skills,
 		AllowedTools: allowedTools,
 	})
 
@@ -298,10 +297,10 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) (*llm.Run
 			if m.ID == retryUserMsg.ID || isEmptyMessage(m) {
 				continue
 			}
-			nextHistory = append(nextHistory, codec.ToLLMMessages(m.ToAppMessage())...)
+			nextHistory = append(nextHistory, message.ToLLMMessages(m)...)
 		}
 
-		retryPrepared := codec.PrepareUserRequest(codec.UserRequest{
+		retryPrepared := message.PrepareUserRequest(message.UserRequest{
 			Prompt:       retryText,
 			AllowedTools: allowedTools,
 		})
@@ -427,7 +426,7 @@ func (rs *runState) onToolCall(tc llm.ToolCallPart) error {
 }
 
 func (rs *runState) onToolResult(tr llm.ToolResultPart, toolName string) error {
-	toolResult := message.ToolResultFromApp(codec.FromToolResult(toolName, tr))
+	toolResult := message.FromLLMToolResult(toolName, tr)
 	created, err := rs.agent.messages.Create(rs.genCtx, rs.call.SessionID, message.CreateParams{
 		Role:  message.Tool,
 		Parts: []message.ContentPart{toolResult},

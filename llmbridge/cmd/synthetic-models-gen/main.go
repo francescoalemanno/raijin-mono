@@ -101,13 +101,8 @@ func fetchSyntheticModels(client *http.Client, endpoint string) ([]syntheticMode
 	}
 
 	// Filter only synthetic provider models
-	var syntheticModels []syntheticModel
-	for _, model := range parsed.Data {
-		//	if strings.EqualFold(strings.TrimSpace(model.Provider), "synthetic") {
-		syntheticModels = append(syntheticModels, model)
-		//	}
-	}
-
+	syntheticModels := make([]syntheticModel, 0, len(parsed.Data))
+	syntheticModels = append(syntheticModels, parsed.Data...)
 	return syntheticModels, nil
 }
 
