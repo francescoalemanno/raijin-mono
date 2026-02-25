@@ -18,7 +18,6 @@ var syntheticGeneratedModels = []Model{
 		ContextWindow:     191488,
 		DefaultMaxTokens:  65536,
 		CanReason:         true,
-		SupportsImages:    true,
 		CostPer1MIn:       0.6,
 		CostPer1MOut:      3,
 		CostPer1MInCached: 0.6,

@@ -4,18 +4,6 @@ package catalog
 
 var zenGeneratedModels = []Model{
 	{
-		ID:               "alpha-gpt-5.3-codex",
-		Name:             "alpha-gpt-5.3-codex",
-		ContextWindow:    200000,
-		DefaultMaxTokens: 16384,
-	},
-	{
-		ID:               "alpha-gpt-5.4",
-		Name:             "alpha-gpt-5.4",
-		ContextWindow:    200000,
-		DefaultMaxTokens: 16384,
-	},
-	{
 		ID:               "big-pickle",
 		Name:             "Big Pickle",
 		ContextWindow:    200000,
@@ -268,6 +256,17 @@ var zenGeneratedModels = []Model{
 	{
 		ID:                "gpt-5.2-codex",
 		Name:              "GPT-5.2 Codex",
+		ContextWindow:     400000,
+		DefaultMaxTokens:  128000,
+		CanReason:         true,
+		SupportsImages:    true,
+		CostPer1MIn:       1.75,
+		CostPer1MOut:      14,
+		CostPer1MInCached: 0.175,
+	},
+	{
+		ID:                "gpt-5.3-codex",
+		Name:              "GPT-5.3 Codex",
 		ContextWindow:     400000,
 		DefaultMaxTokens:  128000,
 		CanReason:         true,
