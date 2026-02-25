@@ -7,6 +7,18 @@ import (
 	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
+// Config is the bridge-owned plain configuration model.
+type Config struct {
+	Providers map[string]ProviderConfig `toml:"providers,omitempty"`
+	Model     SelectedModel             `toml:"model,omitempty"`
+	UI        UIConfig                  `toml:"ui,omitempty"`
+}
+
+// UIConfig stores UI-related configuration.
+type UIConfig struct {
+	Theme string `json:"theme" toml:"theme"`
+}
+
 // SelectedModel stores the selected model configuration.
 type SelectedModel struct {
 	Model    string `json:"model" toml:"model"`
@@ -88,39 +100,4 @@ func (m ModelConfig) ToSelectedModel() SelectedModel {
 		ContextWindow: m.ContextWindow,
 		ThinkingLevel: thinkingLevel,
 	}
-}
-
-// Config is the bridge-owned plain configuration model.
-type Config struct {
-	Providers map[string]ProviderConfig
-	Model     SelectedModel
-}
-
-// FileConfig is the on-disk TOML shape.
-type FileConfig struct {
-	Providers map[string]FileProviderConfig `toml:"providers"`
-	Model     FileModelConfig               `toml:"model"`
-}
-
-// FileProviderConfig is the on-disk provider config shape.
-type FileProviderConfig struct {
-	Name               *string           `toml:"name"`
-	Type               *string           `toml:"type"`
-	APIKey             *string           `toml:"api_key"`
-	BaseURL            *string           `toml:"base_url"`
-	Disable            *bool             `toml:"disable"`
-	SystemPromptPrefix *string           `toml:"system_prompt_prefix"`
-	ExtraHeaders       map[string]string `toml:"extra_headers"`
-	ProviderOptions    map[string]any    `toml:"provider_options"`
-}
-
-// FileModelConfig is the on-disk model config shape.
-type FileModelConfig struct {
-	ThinkingLevel *string  `toml:"thinking_level"`
-	Model         *string  `toml:"model"`
-	Provider      *string  `toml:"provider"`
-	MaxTokens     *int64   `toml:"max_tokens"`
-	Temperature   *float64 `toml:"temperature"`
-	TopP          *float64 `toml:"top_p"`
-	TopK          *int64   `toml:"top_k"`
 }

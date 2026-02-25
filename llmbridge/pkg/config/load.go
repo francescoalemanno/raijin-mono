@@ -48,54 +48,19 @@ func Load() (*Config, error) {
 
 // FromFile parses TOML config from disk.
 func FromFile(path string) (*Config, error) {
-	var fileCfg FileConfig
-	if _, err := toml.DecodeFile(path, &fileCfg); err != nil {
+	cfg := NewConfig()
+	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		return nil, err
 	}
-
-	cfg := NewConfig()
-
-	for id, fp := range fileCfg.Providers {
-		pc := ProviderConfig{
-			ID:                 id,
-			Name:               valueOrEmpty(fp.Name),
-			BaseURL:            valueOrEmpty(fp.BaseURL),
-			APIKey:             valueOrEmpty(fp.APIKey),
-			SystemPromptPrefix: valueOrEmpty(fp.SystemPromptPrefix),
-			ExtraHeaders:       fp.ExtraHeaders,
-			ProviderOptions:    fp.ProviderOptions,
-		}
-		if fp.Type != nil {
-			pc.Type = llm.ProviderType(*fp.Type)
-		}
-		if fp.Disable != nil {
-			pc.Disable = *fp.Disable
-		}
-		cfg.Providers[id] = pc
-	}
-
-	fm := fileCfg.Model
-	cfg.Model = SelectedModel{
-		ThinkingLevel: llm.NormalizeThinkingLevel(llm.ThinkingLevel(valueOrEmpty(fm.ThinkingLevel))),
-		Model:         valueOrEmpty(fm.Model),
-		Provider:      valueOrEmpty(fm.Provider),
-		Temperature:   fm.Temperature,
-		TopP:          fm.TopP,
-		TopK:          fm.TopK,
-	}
-	if fm.MaxTokens != nil {
-		cfg.Model.MaxTokens = *fm.MaxTokens
-	}
-
+	cfg.Model.ThinkingLevel = llm.NormalizeThinkingLevel(cfg.Model.ThinkingLevel)
 	return cfg, nil
 }
 
 // ConfigureProviders resolves env refs and infers provider defaults.
 func (c *Config) ConfigureProviders() error {
 	for id, pc := range c.Providers {
-		if pc.APIKey != "" && strings.HasPrefix(pc.APIKey, "$") {
-			envVar := strings.TrimPrefix(pc.APIKey, "$")
-			if val := os.Getenv(envVar); val != "" {
+		if strings.HasPrefix(pc.APIKey, "$") {
+			if val := os.Getenv(strings.TrimPrefix(pc.APIKey, "$")); val != "" {
 				pc.APIKey = val
 			}
 		}
@@ -158,15 +123,14 @@ func (c *Config) Resolve(value string) (string, error) {
 
 // ActiveModel returns the configured model and its provider.
 func (c *Config) ActiveModel() (SelectedModel, ProviderConfig, bool) {
-	sm := c.Model
-	if sm.Provider == "" {
+	if c.Model.Provider == "" {
 		return SelectedModel{}, ProviderConfig{}, false
 	}
-	pc, ok := c.GetProvider(sm.Provider)
+	pc, ok := c.GetProvider(c.Model.Provider)
 	if !ok {
 		return SelectedModel{}, ProviderConfig{}, false
 	}
-	return sm, pc, true
+	return c.Model, pc, true
 }
 
 // MaxTokens returns the configured max output tokens for the active model.
@@ -177,9 +141,45 @@ func (c *Config) MaxTokens() int {
 	return DefaultMaxTokens
 }
 
-func valueOrEmpty(val *string) string {
-	if val == nil {
-		return ""
+// ConfigPath returns the path to the config file.
+func ConfigPath() string {
+	return paths.RaijinConfigPath()
+}
+
+// Save writes the current config to the config file.
+// It preserves existing data and only updates the UI section.
+func (c *Config) Save() error {
+	path := paths.RaijinConfigPath()
+	if path == "" {
+		return fmt.Errorf("failed to resolve config dir")
 	}
-	return *val
+
+	var cfg Config
+	if existing, err := FromFile(path); err == nil {
+		cfg = *existing
+	}
+
+	if c.UI.Theme != "" {
+		cfg.UI = c.UI
+	}
+
+	tmpPath := path + ".tmp"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to create temp config: %w", err)
+	}
+	defer f.Close()
+
+	encoder := toml.NewEncoder(f)
+	if err := encoder.Encode(cfg); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to encode config: %w", err)
+	}
+	f.Close()
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	return nil
 }
