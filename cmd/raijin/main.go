@@ -21,14 +21,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	cfg, err := bridgecfg.Load()
-	if err != nil && err != bridgecfg.ErrConfigNotFound {
-		fmt.Fprintln(os.Stderr, "failed to load config:", err)
-		os.Exit(1)
-	}
-	if cfg == nil {
-		cfg = bridgecfg.NewConfig()
-	}
+	cfg := bridgecfg.NewConfig()
 
 	if store, err := modelconfig.LoadModelStore(); err == nil && store != nil {
 		if modelCfg, ok := store.GetDefault(); ok {

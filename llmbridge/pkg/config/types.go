@@ -7,16 +7,11 @@ import (
 	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
-// Config is the bridge-owned plain configuration model.
+// Config is the runtime configuration model.
+// Model state is loaded from models.toml, not from disk.
 type Config struct {
-	Providers map[string]ProviderConfig `toml:"providers,omitempty"`
-	Model     SelectedModel             `toml:"model,omitempty"`
-	UI        UIConfig                  `toml:"ui,omitempty"`
-}
-
-// UIConfig stores UI-related configuration.
-type UIConfig struct {
-	Theme string `json:"theme" toml:"theme"`
+	Providers map[string]ProviderConfig
+	Model     SelectedModel
 }
 
 // SelectedModel stores the selected model configuration.
