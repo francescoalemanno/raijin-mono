@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
@@ -121,11 +123,18 @@ type TUI struct {
 	maxLinesRendered    int
 	previousViewportTop int
 	fullRedrawCount     int
-	stopped             bool
+	stopped             atomic.Bool
 
 	tasks  chan uiTask
 	stopCh chan struct{}
 	doneCh chan struct{}
+
+	enqueueMu     sync.Mutex
+	renderPending bool
+
+	inputMu      sync.Mutex
+	inputQueue   []string
+	inputPending bool
 }
 
 // NewTUI creates a new TUI instance
@@ -205,7 +214,7 @@ func (t *TUI) Invalidate() {
 
 // Start starts the TUI
 func (t *TUI) Start() {
-	t.stopped = false
+	t.stopped.Store(false)
 	t.Terminal.Start(t.handleInput, func() { t.RequestRender() })
 	t.Terminal.HideCursor()
 	t.RequestRender()
@@ -233,7 +242,7 @@ func (t *TUI) RemoveInputListener(listener InputListener) {
 
 // Stop stops the TUI
 func (t *TUI) Stop() {
-	t.stopped = true
+	t.stopped.Store(true)
 	select {
 	case t.stopCh <- struct{}{}:
 	default:
@@ -254,15 +263,55 @@ func (t *TUI) Stop() {
 	t.Terminal.Stop()
 }
 
-// RequestRender requests a render
+// RequestRender requests a render.
+// Render requests are coalesced: at most one pending render marker is queued.
 func (t *TUI) RequestRender(force ...bool) {
 	f := len(force) > 0 && force[0]
-	t.tasks <- uiTask{fn: nil, force: f}
+	t.enqueueMu.Lock()
+	if t.renderPending {
+		t.enqueueMu.Unlock()
+		return
+	}
+	t.renderPending = true
+	t.enqueueMu.Unlock()
+
+	task := uiTask{fn: nil, force: f}
+	select {
+	case t.tasks <- task:
+		return
+	case <-t.doneCh:
+		t.enqueueMu.Lock()
+		t.renderPending = false
+		t.enqueueMu.Unlock()
+		return
+	default:
+	}
+
+	go func() {
+		if !t.enqueueTask(task) {
+			t.enqueueMu.Lock()
+			t.renderPending = false
+			t.enqueueMu.Unlock()
+		}
+	}()
 }
 
 // Dispatch sends fn to be executed in the event loop before the next render.
 func (t *TUI) Dispatch(fn func()) {
-	t.tasks <- uiTask{fn: fn}
+	if fn == nil {
+		return
+	}
+	task := uiTask{fn: fn}
+	select {
+	case t.tasks <- task:
+		return
+	case <-t.doneCh:
+		return
+	default:
+	}
+	go func() {
+		_ = t.enqueueTask(task)
+	}()
 }
 
 // UIToken is an unforgeable proof that the holder is executing on the UI
@@ -274,10 +323,13 @@ type UIToken struct{ _ struct{} }
 // cancelled or the TUI shut down before the function could execute.
 func (t *TUI) DispatchSync(ctx context.Context, fn func(UIToken)) bool {
 	done := make(chan struct{})
-	t.tasks <- uiTask{fn: func() {
+	task := uiTask{fn: func() {
 		fn(UIToken{})
 		close(done)
 	}}
+	if !t.enqueueTaskWithContext(ctx, task) {
+		return false
+	}
 	select {
 	case <-done:
 		return true
@@ -288,6 +340,34 @@ func (t *TUI) DispatchSync(ctx context.Context, fn func(UIToken)) bool {
 	}
 }
 
+func (t *TUI) enqueueTask(task uiTask) bool {
+	select {
+	case t.tasks <- task:
+		return true
+	case <-t.doneCh:
+		return false
+	}
+}
+
+func (t *TUI) enqueueTaskWithContext(ctx context.Context, task uiTask) bool {
+	select {
+	case t.tasks <- task:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-t.doneCh:
+		return false
+	}
+}
+
+func (t *TUI) onRenderTaskDequeued() {
+	t.enqueueMu.Lock()
+	t.renderPending = false
+	t.enqueueMu.Unlock()
+}
+
+const maxTasksPerRenderCycle = 256
+
 func (t *TUI) loop() {
 	defer close(t.doneCh)
 	for {
@@ -296,22 +376,28 @@ func (t *TUI) loop() {
 			return
 		case task := <-t.tasks:
 			forceRedraw := false
-			if task.fn != nil {
-				task.fn()
-			} else if task.force {
-				forceRedraw = true
+			processed := 0
+			handleTask := func(next uiTask) {
+				processed++
+				if next.fn != nil {
+					next.fn()
+					return
+				}
+				t.onRenderTaskDequeued()
+				if next.force {
+					forceRedraw = true
+				}
 			}
+
+			handleTask(task)
+
 			draining := true
-			for draining {
+			for draining && processed < maxTasksPerRenderCycle {
 				select {
 				case <-t.stopCh:
 					return
 				case next := <-t.tasks:
-					if next.fn != nil {
-						next.fn()
-					} else if next.force {
-						forceRedraw = true
-					}
+					handleTask(next)
 				default:
 					draining = false
 				}
@@ -329,8 +415,39 @@ func (t *TUI) loop() {
 	}
 }
 
+const maxInputEventsPerBatch = 128
+
 func (t *TUI) handleInput(data string) {
-	t.tasks <- uiTask{fn: func() { t.handleInputDirect(data) }}
+	t.inputMu.Lock()
+	t.inputQueue = append(t.inputQueue, data)
+	if t.inputPending {
+		t.inputMu.Unlock()
+		return
+	}
+	t.inputPending = true
+	t.inputMu.Unlock()
+
+	t.Dispatch(t.drainInputQueue)
+}
+
+func (t *TUI) drainInputQueue() {
+	processed := 0
+	for processed < maxInputEventsPerBatch {
+		t.inputMu.Lock()
+		if len(t.inputQueue) == 0 {
+			t.inputPending = false
+			t.inputMu.Unlock()
+			return
+		}
+		next := t.inputQueue[0]
+		t.inputQueue = t.inputQueue[1:]
+		t.inputMu.Unlock()
+
+		t.handleInputDirect(next)
+		processed++
+	}
+
+	t.Dispatch(t.drainInputQueue)
 }
 
 func (t *TUI) handleInputDirect(data string) {
@@ -406,7 +523,7 @@ func (t *TUI) extractCursorPosition(lines []string, height int) (row, col int, f
 
 // doRender performs the actual rendering
 func (t *TUI) doRender() {
-	if t.stopped {
+	if t.stopped.Load() {
 		return
 	}
 
