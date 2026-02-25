@@ -50,3 +50,6 @@ This script creates binaries for multiple architectures in the `build/` director
 - When the user requests catalog updates:
   1. Update Catwalk to the latest version.
   2. Run catalog generation after the dependency update (example: `cd llmbridge/pkg/catalog && go generate`).
+
+# TODOs
+See [TODOS/todo.md](./TODOS/todo.md) for the current task list.
