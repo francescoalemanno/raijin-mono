@@ -1488,12 +1488,12 @@ func (app *ChatApp) applyModelAdd(result ModelAddResult) {
 	if result.CanReason {
 		thinkingLevel = llm.ThinkingLevelMedium
 	}
-	modelCfg := bridgecfg.ModelConfig{
+	modelCfg := bridgecfg.SelectedModel{
 		Name:          result.ProviderID + "/" + result.ModelID,
 		Provider:      result.ProviderID,
 		Model:         result.ModelID,
 		APIKey:        result.APIKey,
-		MaxTokens:     maxTokens,
+		MaxTokens:     int64(maxTokens),
 		ContextWindow: result.ContextWindow,
 		ThinkingLevel: thinkingLevel,
 	}
@@ -1523,10 +1523,10 @@ func (app *ChatApp) applyModelAdd(result ModelAddResult) {
 	app.refreshHeader()
 }
 
-func applyModelConfig(current *bridgecfg.Config, modelCfg bridgecfg.ModelConfig) {
+func applyModelConfig(current *bridgecfg.Config, modelCfg bridgecfg.SelectedModel) {
 	providerCfg := modelCfg.ToProviderConfig()
 	current.Providers[providerCfg.ID] = providerCfg
-	current.Model = modelCfg.ToSelectedModel()
+	current.Model = modelCfg.Normalize()
 }
 
 // ---------------------------------------------------------------------------

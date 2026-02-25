@@ -13,7 +13,7 @@ func TestApplyModelChoice_BlockedWhileRunning(t *testing.T) {
 	app := newChatApp(&chatNoopTerminal{}, nil, &bridgecfg.Config{Providers: map[string]bridgecfg.ProviderConfig{}}, nil)
 	store := loadTestModelStore(t)
 
-	oldModel := bridgecfg.ModelConfig{
+	oldModel := bridgecfg.SelectedModel{
 		Name:          "test/old",
 		Provider:      "test",
 		APIKey:        "k",
@@ -21,7 +21,7 @@ func TestApplyModelChoice_BlockedWhileRunning(t *testing.T) {
 		MaxTokens:     2048,
 		ContextWindow: 8192,
 	}
-	newModel := bridgecfg.ModelConfig{
+	newModel := bridgecfg.SelectedModel{
 		Name:          "test/new",
 		Provider:      "test",
 		APIKey:        "k",
@@ -43,7 +43,7 @@ func TestApplyModelChoice_BlockedWhileRunning(t *testing.T) {
 		app.store = store
 		app.cfg = &bridgecfg.Config{
 			Providers: map[string]bridgecfg.ProviderConfig{},
-			Model:     oldModel.ToSelectedModel(),
+			Model:     oldModel.Normalize(),
 		}
 		app.state = stateRunning
 		app.applyModelChoice(newModel.Name)
@@ -61,7 +61,7 @@ func TestApplyModelAdd_BlockedWhileRunning(t *testing.T) {
 	app := newChatApp(&chatNoopTerminal{}, nil, &bridgecfg.Config{Providers: map[string]bridgecfg.ProviderConfig{}}, nil)
 	store := loadTestModelStore(t)
 
-	oldModel := bridgecfg.ModelConfig{
+	oldModel := bridgecfg.SelectedModel{
 		Name:          "test/old",
 		Provider:      "test",
 		APIKey:        "k",
@@ -80,7 +80,7 @@ func TestApplyModelAdd_BlockedWhileRunning(t *testing.T) {
 		app.store = store
 		app.cfg = &bridgecfg.Config{
 			Providers: map[string]bridgecfg.ProviderConfig{},
-			Model:     oldModel.ToSelectedModel(),
+			Model:     oldModel.Normalize(),
 		}
 		app.state = stateRunning
 		app.applyModelAdd(ModelAddResult{
@@ -108,7 +108,7 @@ func TestGlobalKeyListener_CtrlPBlockedWhileRunning(t *testing.T) {
 	app := newChatApp(&chatNoopTerminal{}, nil, &bridgecfg.Config{Providers: map[string]bridgecfg.ProviderConfig{}}, nil)
 	store := loadTestModelStore(t)
 
-	model := bridgecfg.ModelConfig{
+	model := bridgecfg.SelectedModel{
 		Name:          "test/model",
 		Provider:      "test",
 		APIKey:        "k",
@@ -128,7 +128,7 @@ func TestGlobalKeyListener_CtrlPBlockedWhileRunning(t *testing.T) {
 		app.store = store
 		app.cfg = &bridgecfg.Config{
 			Providers: map[string]bridgecfg.ProviderConfig{},
-			Model:     model.ToSelectedModel(),
+			Model:     model.Normalize(),
 		}
 		app.state = stateRunning
 		res = app.globalKeyListener("\x10") // ctrl+p

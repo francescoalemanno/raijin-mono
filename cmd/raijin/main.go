@@ -27,7 +27,7 @@ func main() {
 		if modelCfg, ok := store.GetDefault(); ok {
 			pc := modelCfg.ToProviderConfig()
 			cfg.Providers[pc.ID] = pc
-			cfg.Model = modelCfg.ToSelectedModel()
+			cfg.Model = modelCfg.Normalize()
 		}
 	}
 

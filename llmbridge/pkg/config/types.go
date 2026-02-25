@@ -16,8 +16,16 @@ type Config struct {
 
 // SelectedModel stores the selected model configuration.
 type SelectedModel struct {
+	// Name is the identifier for this model configuration in the store.
+	Name string `json:"name,omitempty" toml:"name,omitempty"`
+
 	Model    string `json:"model" toml:"model"`
 	Provider string `json:"provider" toml:"provider"`
+
+	// APIKey is the API key for the provider (storage only, not used in runtime Config).
+	APIKey string `json:"api_key,omitempty" toml:"api_key,omitempty"`
+	// BaseURL is an optional custom base URL for the provider.
+	BaseURL *string `json:"base_url,omitempty" toml:"base_url,omitempty"`
 
 	ThinkingLevel llm.ThinkingLevel `json:"thinking_level,omitempty" toml:"thinking_level,omitempty"`
 
@@ -55,20 +63,8 @@ type ProviderConfig struct {
 	Models []catalog.Model `json:"models,omitempty" toml:"models,omitempty"`
 }
 
-// ModelConfig stores app-level selectable model settings.
-type ModelConfig struct {
-	Name          string            `toml:"name"`
-	Provider      string            `toml:"provider"`
-	APIKey        string            `toml:"api_key"`
-	Model         string            `toml:"model"`
-	MaxTokens     int               `toml:"max_tokens"`
-	ContextWindow int64             `toml:"context_window"`
-	BaseURL       *string           `toml:"base_url"`
-	ThinkingLevel llm.ThinkingLevel `toml:"thinking_level"`
-}
-
-// ToProviderConfig converts the stored model settings into provider settings.
-func (m ModelConfig) ToProviderConfig() ProviderConfig {
+// ToProviderConfig converts the selected model into provider settings.
+func (m SelectedModel) ToProviderConfig() ProviderConfig {
 	pc := ProviderConfig{
 		ID:     m.Provider,
 		Name:   m.Provider,
@@ -81,18 +77,25 @@ func (m ModelConfig) ToProviderConfig() ProviderConfig {
 	return pc
 }
 
-// ToSelectedModel converts the stored model settings into a selected model.
-func (m ModelConfig) ToSelectedModel() SelectedModel {
+// Normalize returns a normalized copy of the selected model with defaults applied.
+func (m SelectedModel) Normalize() SelectedModel {
 	thinkingLevel := llm.NormalizeThinkingLevel(m.ThinkingLevel)
 	if strings.EqualFold(strings.TrimSpace(m.Provider), catalog.OpenAICodexProviderID) && !thinkingLevel.Enabled() {
 		thinkingLevel = llm.ThinkingLevelMedium
 	}
 
 	return SelectedModel{
-		Model:         m.Model,
-		Provider:      m.Provider,
-		MaxTokens:     int64(m.MaxTokens),
-		ContextWindow: m.ContextWindow,
-		ThinkingLevel: thinkingLevel,
+		Name:            m.Name,
+		Model:           m.Model,
+		Provider:        m.Provider,
+		APIKey:          m.APIKey,
+		BaseURL:         m.BaseURL,
+		MaxTokens:       m.MaxTokens,
+		ContextWindow:   m.ContextWindow,
+		ThinkingLevel:   thinkingLevel,
+		Temperature:     m.Temperature,
+		TopP:            m.TopP,
+		TopK:            m.TopK,
+		ProviderOptions: m.ProviderOptions,
 	}
 }
