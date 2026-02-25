@@ -5,75 +5,68 @@ import (
 	"strings"
 )
 
-// Ansi24 returns a function that wraps text in 24-bit foreground color.
-func Ansi24(r, g, b int) func(string) string {
-	prefix := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
-	return func(s string) string {
-		if s == "" {
-			return ""
-		}
-		return prefix + s + "\x1b[0m"
-	}
+// Color represents an RGB color.
+type Color struct {
+	R, G, B byte
 }
 
-// AnsiBold wraps text in bold + 24-bit foreground color.
-func AnsiBold(r, g, b int) func(string) string {
-	prefix := fmt.Sprintf("\x1b[1;38;2;%d;%d;%dm", r, g, b)
-	return func(s string) string {
-		if s == "" {
-			return ""
-		}
-		return prefix + s + "\x1b[0m"
+// Ansi24 returns the text wrapped in 24-bit foreground color ANSI codes.
+func (c Color) Ansi24(s string) string {
+	if s == "" {
+		return ""
 	}
+	prefix := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", c.R, c.G, c.B)
+	return prefix + s + "\x1b[0m"
 }
 
-// AnsiUnderline wraps text in underline + 24-bit foreground color.
-func AnsiUnderline(r, g, b int) func(string) string {
-	prefix := fmt.Sprintf("\x1b[4;38;2;%d;%d;%dm", r, g, b)
-	return func(s string) string {
-		if s == "" {
-			return ""
-		}
-		return prefix + s + "\x1b[0m"
+// AnsiBold returns the text wrapped in bold + 24-bit foreground color.
+func (c Color) AnsiBold(s string) string {
+	if s == "" {
+		return ""
 	}
+	prefix := fmt.Sprintf("\x1b[1;38;2;%d;%d;%dm", c.R, c.G, c.B)
+	return prefix + s + "\x1b[0m"
 }
 
-// AnsiItalic wraps text in italic + 24-bit foreground color.
-func AnsiItalic(r, g, b int) func(string) string {
-	prefix := fmt.Sprintf("\x1b[3;38;2;%d;%d;%dm", r, g, b)
-	return func(s string) string {
-		if s == "" {
-			return ""
-		}
-		return prefix + s + "\x1b[0m"
+// AnsiUnderline returns the text wrapped in underline + 24-bit foreground color.
+func (c Color) AnsiUnderline(s string) string {
+	if s == "" {
+		return ""
 	}
+	prefix := fmt.Sprintf("\x1b[4;38;2;%d;%d;%dm", c.R, c.G, c.B)
+	return prefix + s + "\x1b[0m"
 }
 
-// AnsiBoldItalic wraps text in bold+italic + 24-bit foreground color.
-func AnsiBoldItalic(r, g, b int) func(string) string {
-	prefix := fmt.Sprintf("\x1b[1;3;38;2;%d;%d;%dm", r, g, b)
-	return func(s string) string {
-		if s == "" {
-			return ""
-		}
-		return prefix + s + "\x1b[0m"
+// AnsiItalic returns the text wrapped in italic + 24-bit foreground color.
+func (c Color) AnsiItalic(s string) string {
+	if s == "" {
+		return ""
 	}
+	prefix := fmt.Sprintf("\x1b[3;38;2;%d;%d;%dm", c.R, c.G, c.B)
+	return prefix + s + "\x1b[0m"
 }
 
-// AnsiBgOnly returns a function that sets only the background color (no foreground change).
+// AnsiBoldItalic returns the text wrapped in bold+italic + 24-bit foreground color.
+func (c Color) AnsiBoldItalic(s string) string {
+	if s == "" {
+		return ""
+	}
+	prefix := fmt.Sprintf("\x1b[1;3;38;2;%d;%d;%dm", c.R, c.G, c.B)
+	return prefix + s + "\x1b[0m"
+}
+
+// AnsiBgOnly returns the text wrapped in background color only (no foreground change).
 // Uses \x1b[49m (reset background only) instead of \x1b[0m (full reset) to avoid
 // killing foreground styles.
-func AnsiBgOnly(r, g, b int) func(string) string {
-	prefix := fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
-	return func(s string) string {
-		if s == "" {
-			return ""
-		}
-		// Re-inject background after every full reset (\x1b[0m) in the content
-		// so the background persists across styled text segments.
-		patched := strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+prefix)
-		return prefix + patched + "\x1b[49m"
+func (c Color) AnsiBgOnly(s string) string {
+	if s == "" {
+		return ""
 	}
+	prefix := fmt.Sprintf("\x1b[48;2;%d;%d;%dm", c.R, c.G, c.B)
+	// Re-inject background after every full reset (\x1b[0m) in the content
+	// so the background persists across styled text segments.
+	patched := strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+prefix)
+	return prefix + patched + "\x1b[49m"
 }
 
 // Border characters
@@ -82,72 +75,127 @@ const (
 	BorderThick = "║" // Double (thick) vertical line
 )
 
-// Theme colors
+// Theme holds all theme colors for the application.
+type Theme struct {
+	// Foreground colors
+	Foreground Color
+	Muted      Color
+	Accent     Color
+	AccentAlt  Color
+	Success    Color
+	Danger     Color
+
+	// Gradient colors for title rendering (start and end points)
+	GradientLight Color
+	GradientDark  Color
+
+	// Diff-specific foreground colors (lighter for code previews)
+	DiffAdded   Color
+	DiffRemoved Color
+
+	// Background colors for tool execution states
+	BgToolPending Color
+	BgToolSuccess Color
+	BgToolError   Color
+
+	// Tool title style color
+	ToolTitle Color
+
+	// Thinking block text color
+	ThinkingMuted Color
+}
+
+// Default theme with Gruvbox-inspired colors
+var Default = Theme{
+	Foreground: Color{0xEB, 0xDB, 0xB2}, // #EBDBB2
+	Muted:      Color{0xA8, 0x99, 0x84}, // #A89984
+	Accent:     Color{0xFA, 0xBD, 0x2F}, // #FABD2F
+	AccentAlt:  Color{0xFE, 0x80, 0x19}, // #FE8019
+	Success:    Color{0xB8, 0xBB, 0x26}, // #B8BB26
+	Danger:     Color{0xFB, 0x49, 0x34}, // #FB4934
+
+	GradientLight: Color{0xEB, 0xDB, 0xB2}, // #EBDBB2 (same as Foreground)
+	GradientDark:  Color{0xFB, 0x49, 0x34}, // #FB4934 (same as Danger)
+
+	DiffAdded:   Color{0x8E, 0xC0, 0x7C}, // #8EC07C
+	DiffRemoved: Color{0xFB, 0x49, 0x34}, // #FB4934
+
+	BgToolPending: Color{0x3C, 0x38, 0x36}, // neutral dark (gruvbox gray)
+	BgToolSuccess: Color{0x2F, 0x3B, 0x28}, // dark olive tint
+	BgToolError:   Color{0x3F, 0x2A, 0x2A}, // dark red tint
+
+	ToolTitle: Color{0xFE, 0x80, 0x19}, // #FE8019
+
+	ThinkingMuted: Color{0xA8, 0x99, 0x84}, // #A89984 (same as Muted)
+}
+
+// Convenience variables for backward compatibility and easier access
 var (
-	ColorForeground = Ansi24(0xEB, 0xDB, 0xB2) // #EBDBB2
-	ColorMuted      = Ansi24(0xA8, 0x99, 0x84) // #A89984
-	ColorAccent     = Ansi24(0xFA, 0xBD, 0x2F) // #FABD2F
-	ColorAccentAlt  = Ansi24(0xFE, 0x80, 0x19) // #FE8019
-	ColorSuccess    = Ansi24(0xB8, 0xBB, 0x26) // #B8BB26
-	ColorDanger     = Ansi24(0xFB, 0x49, 0x34) // #FB4934
+	// Foreground colors
+	ColorForeground = Default.Foreground.Ansi24
+	ColorMuted      = Default.Muted.Ansi24
+	ColorAccent     = Default.Accent.Ansi24
+	ColorAccentAlt  = Default.AccentAlt.Ansi24
+	ColorSuccess    = Default.Success.Ansi24
+	ColorDanger     = Default.Danger.Ansi24
 
-	// Diff-specific foreground colors (lighter than success/danger for code previews)
-	ColorDiffAdded   = Ansi24(0x8E, 0xC0, 0x7C) // #8EC07C
-	ColorDiffRemoved = Ansi24(0xFB, 0x49, 0x34) // #FB4934
+	// Diff colors
+	ColorDiffAdded   = Default.DiffAdded.Ansi24
+	ColorDiffRemoved = Default.DiffRemoved.Ansi24
 
-	// Typography variants in the base foreground color.
-	ColorForegroundBold       = AnsiBold(0xEB, 0xDB, 0xB2)       // #EBDBB2
-	ColorForegroundUnderline  = AnsiUnderline(0xEB, 0xDB, 0xB2)  // #EBDBB2
-	ColorForegroundItalic     = AnsiItalic(0xEB, 0xDB, 0xB2)     // #EBDBB2
-	ColorForegroundBoldItalic = AnsiBoldItalic(0xEB, 0xDB, 0xB2) // #EBDBB2
+	// Typography variants in the base foreground color
+	ColorForegroundBold       = Default.Foreground.AnsiBold
+	ColorForegroundUnderline  = Default.Foreground.AnsiUnderline
+	ColorForegroundItalic     = Default.Foreground.AnsiItalic
+	ColorForegroundBoldItalic = Default.Foreground.AnsiBoldItalic
 
-	ColorAccentAltBold = AnsiBold(0xFE, 0x80, 0x19) // #FE8019
+	ColorAccentAltBold = Default.AccentAlt.AnsiBold
 
-	// Tool execution background colors (subtle dark tints)
-	BgToolPending = AnsiBgOnly(0x3C, 0x38, 0x36) // neutral dark (gruvbox gray)
-	BgToolSuccess = AnsiBgOnly(0x2F, 0x3B, 0x28) // dark olive tint
-	BgToolError   = AnsiBgOnly(0x3F, 0x2A, 0x2A) // dark red tint
+	// Background colors for tool execution states
+	BgToolPending = Default.BgToolPending.AnsiBgOnly
+	BgToolSuccess = Default.BgToolSuccess.AnsiBgOnly
+	BgToolError   = Default.BgToolError.AnsiBgOnly
 
-	// Tool title style (bold accent)
-	ColorToolTitle = AnsiBold(0xFE, 0x80, 0x19) // #FE8019
-
-	// Brand gradient colors for the title
-	GradientColors = []func(string) string{
-		Ansi24(0xEB, 0xDB, 0xB2), // #EBDBB2
-		Ansi24(0xD5, 0xC4, 0xA1), // #D5C4A1
-		Ansi24(0xFA, 0xBD, 0x2F), // #FABD2F
-		Ansi24(0xFE, 0x80, 0x19), // #FE8019
-		Ansi24(0xD6, 0x5D, 0x0E), // #D65D0E
-		Ansi24(0xFB, 0x49, 0x34), // #FB4934
-	}
-	GradientBold = []func(string) string{
-		AnsiBold(0xEB, 0xDB, 0xB2), // #EBDBB2
-		AnsiBold(0xD5, 0xC4, 0xA1), // #D5C4A1
-		AnsiBold(0xFA, 0xBD, 0x2F), // #FABD2F
-		AnsiBold(0xFE, 0x80, 0x19), // #FE8019
-		AnsiBold(0xD6, 0x5D, 0x0E), // #D65D0E
-		AnsiBold(0xFB, 0x49, 0x34), // #FB4934
-	}
+	// Tool title style
+	ColorToolTitle = Default.ToolTitle.AnsiBold
 )
 
-// RenderGradientTitle renders the RAIJIN brand title with a gradient.
-func RenderGradientTitle(text string) string {
-	parts := strings.Split(text, "RAIJIN")
-	if len(parts) != 2 {
-		return text
+// RenderGradient applies a gradient color to text, interpolating between
+// GradientLight and GradientDark across the length of the string.
+// Alphabetic characters (A-Z, a-z) are rendered in bold.
+func (t Theme) RenderGradient(text string) string {
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	n := len(runes)
+	if n == 0 {
+		return ""
 	}
 	var b strings.Builder
-	if parts[0] != "" {
-		b.WriteString(GradientColors[0](parts[0]))
-	}
-	runes := []rune("RAIJIN")
-	n := len(GradientBold)
 	for i, r := range runes {
-		idx := i * (n - 1) / max(len(runes)-1, 1)
-		b.WriteString(GradientBold[idx](string(r)))
-	}
-	if parts[1] != "" {
-		b.WriteString(GradientColors[n-1](parts[1]))
+		frac := float64(i) / float64(max(n-1, 1))
+		c := t.GradientLight.Interpolate(t.GradientDark, frac)
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+			b.WriteString(c.AnsiBold(string(r)))
+		} else {
+			b.WriteString(c.Ansi24(string(r)))
+		}
 	}
 	return b.String()
+}
+
+// Interpolate returns a color between c and target based on fraction (0.0 to 1.0).
+func (c Color) Interpolate(target Color, frac float64) Color {
+	if frac <= 0 {
+		return c
+	}
+	if frac >= 1 {
+		return target
+	}
+	return Color{
+		R: byte(float64(c.R) + (float64(target.R)-float64(c.R))*frac),
+		G: byte(float64(c.G) + (float64(target.G)-float64(c.G))*frac),
+		B: byte(float64(c.B) + (float64(target.B)-float64(c.B))*frac),
+	}
 }

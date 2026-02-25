@@ -254,7 +254,7 @@ func (app *ChatApp) quit() {
 
 func (app *ChatApp) refreshHeader() {
 	// Logo
-	app.logo.SetText(theme.RenderGradientTitle("//////// RAIJIN ////////"))
+	app.logo.SetText(theme.Default.RenderGradient("//////// RAIJIN ////////"))
 
 	sm, _, ok := app.cfg.ActiveModel()
 
@@ -296,7 +296,7 @@ func renderWorkingDir() string {
 	if err == nil && (cwd == home || strings.HasPrefix(cwd, home+string(os.PathSeparator))) {
 		cwd = "~" + cwd[len(home):]
 	}
-	return theme.GradientColors[0](cwd)
+	return theme.Default.Foreground.Ansi24(cwd)
 }
 
 func (app *ChatApp) refreshStatus() {

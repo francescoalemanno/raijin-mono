@@ -16,9 +16,9 @@ import (
 const thinkingPreviewLines = 4
 
 var (
-	thinkingMutedBold       = theme.AnsiBold(0xA8, 0x99, 0x84)
-	thinkingMutedItalic     = theme.AnsiItalic(0xA8, 0x99, 0x84)
-	thinkingMutedBoldItalic = theme.AnsiBoldItalic(0xA8, 0x99, 0x84)
+	thinkingMutedBold       = theme.Default.ThinkingMuted.AnsiBold
+	thinkingMutedItalic     = theme.Default.ThinkingMuted.AnsiItalic
+	thinkingMutedBoldItalic = theme.Default.ThinkingMuted.AnsiBoldItalic
 )
 
 // inlineFormat applies basic markdown formatting (**bold** and *italic*) to text.
