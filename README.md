@@ -8,7 +8,7 @@ Raijin is an AI-powered command line assistant written in Go. A coding agent tha
 
 Most coding agents are bloated. They come with MCP servers, a dozen integrations, permission dialogs, and safety rails that get in your way. We think that's unnecessary.
 
-Raijin strips away the complexity. No MCP. No custom tool bloat. No hidden sub-agents. Just a model, a terminal, and eight tools.
+Raijin strips away the complexity. No MCP. No excessive tool bloat. No hidden sub-agents. Just a model, a terminal, and eight tools.
 
 ## Why This Works
 
