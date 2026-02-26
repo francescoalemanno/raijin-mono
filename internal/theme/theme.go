@@ -3,6 +3,8 @@ package theme
 import (
 	"fmt"
 	"strings"
+
+	"github.com/alecthomas/chroma/v2"
 )
 
 // Color represents an RGB color.
@@ -105,31 +107,39 @@ type Theme struct {
 	ThinkingMuted Color
 }
 
-// Default theme with Gruvbox-inspired colors
+// Default theme with Nord colors
+// Nord is an arctic, north-bluish color palette by Arctic Ice Studio
+// https://www.nordtheme.com/
 var Default = Theme{
-	Foreground: Color{0xEB, 0xDB, 0xB2}, // #EBDBB2
-	Muted:      Color{0xA8, 0x99, 0x84}, // #A89984
-	Accent:     Color{0xFA, 0xBD, 0x2F}, // #FABD2F
-	AccentAlt:  Color{0xFE, 0x80, 0x19}, // #FE8019
-	Success:    Color{0xB8, 0xBB, 0x26}, // #B8BB26
-	Danger:     Color{0xFB, 0x49, 0x34}, // #FB4934
+	// Snow Storm - bright text colors
+	Foreground: Color{0xE5, 0xE9, 0xF0}, // #E5E9F0 (nord5 - brighter for main text)
+	Muted:      Color{0x81, 0xA1, 0xC1}, // #81A1C1 (nord9 - muted blue-gray)
 
-	GradientLight: Color{0xEB, 0xDB, 0xB2}, // #EBDBB2 (same as Foreground)
-	GradientDark:  Color{0xFB, 0x49, 0x34}, // #FB4934 (same as Danger)
+	// Aurora accent colors (bright, vibrant)
+	Accent:    Color{0xEB, 0xCB, 0x8B}, // #EBCB8B (nord13 - yellow, warm accent)
+	AccentAlt: Color{0xD0, 0x87, 0x70}, // #D08770 (nord12 - orange, secondary accent)
+	Success:   Color{0xA3, 0xBE, 0x8C}, // #A3BE8C (nord14 - green)
+	Danger:    Color{0xBF, 0x61, 0x6A}, // #BF616A (nord11 - red)
 
-	DiffAdded:   Color{0x8E, 0xC0, 0x7C}, // #8EC07C
-	DiffRemoved: Color{0xFB, 0x49, 0x34}, // #FB4934
+	// Gradient from Frost blue to Aurora purple
+	GradientLight: Color{0x88, 0xC0, 0xD0}, // #88C0D0 (nord8 - light cyan)
+	GradientDark:  Color{0xB4, 0x8E, 0xAD}, // #B48EAD (nord15 - purple)
 
-	BgToolPending: Color{0x3C, 0x38, 0x36}, // neutral dark (gruvbox gray)
-	BgToolSuccess: Color{0x2F, 0x3B, 0x28}, // dark olive tint
-	BgToolError:   Color{0x3F, 0x2A, 0x2A}, // dark red tint
+	// Diff colors - slightly brighter versions for readability
+	DiffAdded:   Color{0xA3, 0xBE, 0x8C}, // #A3BE8C (nord14 - green)
+	DiffRemoved: Color{0xBF, 0x61, 0x6A}, // #BF616A (nord11 - red)
 
-	ToolTitle: Color{0xFE, 0x80, 0x19}, // #FE8019
+	// Polar Night backgrounds (dark, subtle)
+	BgToolPending: Color{0x3B, 0x42, 0x52}, // #3B4252 (nord1 - dark blue-gray)
+	BgToolSuccess: Color{0x2E, 0x34, 0x40}, // #2E3440 with green tint (nord0 variant)
+	BgToolError:   Color{0x3B, 0x2E, 0x32}, // Dark red-tinted background
 
-	ThinkingMuted: Color{0xA8, 0x99, 0x84}, // #A89984 (same as Muted)
+	// Tool title uses orange accent
+	ToolTitle: Color{0xD0, 0x87, 0x70}, // #D08770 (nord12 - orange)
+
+	// Thinking block uses muted blue
+	ThinkingMuted: Color{0x81, 0xA1, 0xC1}, // #81A1C1 (nord9 - muted blue)
 }
-
-
 
 // RenderGradient applies a gradient color to text, interpolating between
 // GradientLight and GradientDark across the length of the string.
@@ -169,4 +179,121 @@ func (c Color) Interpolate(target Color, frac float64) Color {
 		G: byte(float64(c.G) + (float64(target.G)-float64(c.G))*frac),
 		B: byte(float64(c.B) + (float64(target.B)-float64(c.B))*frac),
 	}
+}
+
+// toHex returns the color as a hex string (e.g., "#RRGGBB").
+func (c Color) toHex() string {
+	return fmt.Sprintf("#%02X%02X%02X", c.R, c.G, c.B)
+}
+
+// ChromaStyle returns a Chroma syntax highlighting style based on the theme colors.
+func (t Theme) ChromaStyle() *chroma.Style {
+	fg := t.Foreground.toHex()
+	muted := t.Muted.toHex()
+	accent := t.Accent.toHex()
+	accentAlt := t.AccentAlt.toHex()
+	success := t.Success.toHex()
+	danger := t.Danger.toHex()
+
+	b := chroma.NewStyleBuilder("raijin")
+
+	// Base text and background
+	b.Add(chroma.Background, fg)
+	b.Add(chroma.Text, fg)
+	b.Add(chroma.TextWhitespace, fg)
+
+	// Comments - muted color, italic
+	b.Add(chroma.Comment, "italic "+muted)
+	b.Add(chroma.CommentHashbang, "italic "+muted)
+	b.Add(chroma.CommentMultiline, "italic "+muted)
+	b.Add(chroma.CommentSingle, "italic "+muted)
+	b.Add(chroma.CommentSpecial, "italic "+muted)
+	b.Add(chroma.CommentPreproc, muted)
+	b.Add(chroma.CommentPreprocFile, muted)
+
+	// Keywords - accent alt (orange), bold
+	b.Add(chroma.Keyword, "bold "+accentAlt)
+	b.Add(chroma.KeywordConstant, "bold "+accentAlt)
+	b.Add(chroma.KeywordDeclaration, "bold "+accentAlt)
+	b.Add(chroma.KeywordNamespace, "bold "+accentAlt)
+	b.Add(chroma.KeywordPseudo, accentAlt)
+	b.Add(chroma.KeywordReserved, "bold "+accentAlt)
+	b.Add(chroma.KeywordType, accentAlt)
+
+	// Names - foreground
+	b.Add(chroma.Name, fg)
+	b.Add(chroma.NameAttribute, accent)
+	b.Add(chroma.NameBuiltin, accentAlt)
+	b.Add(chroma.NameBuiltinPseudo, accentAlt)
+	b.Add(chroma.NameClass, success)
+	b.Add(chroma.NameConstant, accent)
+	b.Add(chroma.NameDecorator, accentAlt)
+	b.Add(chroma.NameEntity, accent)
+	b.Add(chroma.NameException, danger)
+	b.Add(chroma.NameFunction, success)
+	b.Add(chroma.NameFunctionMagic, success)
+	b.Add(chroma.NameLabel, accent)
+	b.Add(chroma.NameNamespace, success)
+	b.Add(chroma.NameOther, fg)
+	b.Add(chroma.NameProperty, accent)
+	b.Add(chroma.NameTag, accentAlt)
+	b.Add(chroma.NameVariable, fg)
+	b.Add(chroma.NameVariableClass, fg)
+	b.Add(chroma.NameVariableGlobal, fg)
+	b.Add(chroma.NameVariableInstance, fg)
+	b.Add(chroma.NameVariableMagic, fg)
+
+	// Literals
+	b.Add(chroma.Literal, accent)
+	b.Add(chroma.LiteralDate, accent)
+
+	// Strings - accent (yellow/gold)
+	b.Add(chroma.String, accent)
+	b.Add(chroma.StringAffix, accent)
+	b.Add(chroma.StringBacktick, accent)
+	b.Add(chroma.StringChar, accent)
+	b.Add(chroma.StringDelimiter, accent)
+	b.Add(chroma.StringDoc, "italic "+muted)
+	b.Add(chroma.StringDouble, accent)
+	b.Add(chroma.StringEscape, success)
+	b.Add(chroma.StringHeredoc, accent)
+	b.Add(chroma.StringInterpol, fg)
+	b.Add(chroma.StringOther, accent)
+	b.Add(chroma.StringRegex, success)
+	b.Add(chroma.StringSingle, accent)
+	b.Add(chroma.StringSymbol, accent)
+
+	// Numbers - accent alt (orange)
+	b.Add(chroma.Number, accentAlt)
+	b.Add(chroma.NumberBin, accentAlt)
+	b.Add(chroma.NumberFloat, accentAlt)
+	b.Add(chroma.NumberHex, accentAlt)
+	b.Add(chroma.NumberInteger, accentAlt)
+	b.Add(chroma.NumberIntegerLong, accentAlt)
+	b.Add(chroma.NumberOct, accentAlt)
+
+	// Operators and punctuation
+	b.Add(chroma.Operator, fg)
+	b.Add(chroma.OperatorWord, "bold "+accentAlt)
+	b.Add(chroma.Punctuation, fg)
+
+	// Generic tokens
+	b.Add(chroma.Generic, fg)
+	b.Add(chroma.GenericDeleted, danger)
+	b.Add(chroma.GenericEmph, "italic")
+	b.Add(chroma.GenericError, danger)
+	b.Add(chroma.GenericHeading, "bold "+success)
+	b.Add(chroma.GenericInserted, success)
+	b.Add(chroma.GenericOutput, fg)
+	b.Add(chroma.GenericPrompt, "bold "+muted)
+	b.Add(chroma.GenericStrong, "bold")
+	b.Add(chroma.GenericSubheading, "bold "+success)
+	b.Add(chroma.GenericTraceback, danger)
+	b.Add(chroma.GenericUnderline, "underline")
+
+	// Errors
+	b.Add(chroma.Error, danger)
+
+	style, _ := b.Build()
+	return style
 }
