@@ -72,6 +72,10 @@ func NewModelSelector(
 		onCancel:      onCancel,
 	}
 
+	// Set foreground color for padding/margins
+	m.hintText.SetFgColorFn(theme.Default.Foreground.Ansi24)
+	m.searchInput.SetPaddingColorFn(theme.Default.Foreground.Ansi24)
+
 	m.searchInput.SetOnSubmit(func(_ string) {
 		m.confirmSelection()
 	})
@@ -186,7 +190,7 @@ func (m *ModelSelectorComponent) renderModelLine(item modelItem, selected bool) 
 	if awaitingDelete {
 		return theme.Default.Danger.Ansi24("  "+item.name) + providerBadge + checkmark
 	}
-	return "  " + item.name + providerBadge + checkmark
+	return theme.Default.Foreground.Ansi24("  ") + theme.Default.Foreground.Ansi24(item.name) + providerBadge + checkmark
 }
 
 func (m *ModelSelectorComponent) confirmSelection() {

@@ -51,6 +51,10 @@ func NewForkSelector(candidates []forkCandidate, onSelect func(candidate forkCan
 		onCancel:      onCancel,
 	}
 
+	// Set foreground color for padding/margins
+	m.hintText.SetFgColorFn(theme.Default.Foreground.Ansi24)
+	m.searchInput.SetPaddingColorFn(theme.Default.Foreground.Ansi24)
+
 	m.filtered = append([]forkCandidate(nil), candidates...)
 	m.nav = listNavigator{
 		count:    func() int { return len(m.filtered) },
@@ -113,7 +117,7 @@ func (m *ForkSelectorComponent) renderLine(item forkCandidate, selected bool) st
 	if selected {
 		return theme.Default.Accent.Ansi24("→ ") + theme.Default.Accent.Ansi24(label)
 	}
-	return "  " + label
+	return theme.Default.Foreground.Ansi24("  ") + theme.Default.Foreground.Ansi24(label)
 }
 
 func (m *ForkSelectorComponent) confirmSelection() {

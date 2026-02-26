@@ -134,9 +134,10 @@ func (t *ThinkingComponent) updateContent() {
 }
 
 func (t *ThinkingComponent) buildContent() string {
-	header := "⟳ " + theme.Default.ToolTitle.AnsiBold("Thinking…")
+	fg := theme.Default.Foreground.Ansi24
+	header := fg("⟳ ") + theme.Default.ToolTitle.AnsiBold("Thinking…")
 	if t.done {
-		header = "✓ " + theme.Default.ToolTitle.AnsiBold("Thinking")
+		header = theme.Default.Success.Ansi24("✓ ") + theme.Default.ToolTitle.AnsiBold("Thinking")
 	}
 
 	body := strings.TrimSpace(t.text)

@@ -98,6 +98,11 @@ func NewModelAdd(
 		onCancel:      onCancel,
 	}
 
+	// Set foreground color for padding/margins
+	m.hintText.SetFgColorFn(theme.Default.Foreground.Ansi24)
+	m.searchInput.SetPaddingColorFn(theme.Default.Foreground.Ansi24)
+	m.apiKeyInput.SetPaddingColorFn(theme.Default.Foreground.Ansi24)
+
 	m.searchInput.SetOnSubmit(func(_ string) {
 		m.confirmModelSelection()
 	})
@@ -209,7 +214,7 @@ func (m *ModelAddComponent) renderCatalogLine(item catalogItem, selected bool) s
 	if selected {
 		return theme.Default.Accent.Ansi24("→ " + item.modelName)
 	}
-	return "  " + item.modelName
+	return theme.Default.Foreground.Ansi24("  ") + theme.Default.Foreground.Ansi24(item.modelName)
 }
 
 func (m *ModelAddComponent) confirmModelSelection() {

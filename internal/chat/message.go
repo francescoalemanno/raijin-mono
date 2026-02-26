@@ -77,10 +77,13 @@ func (m *MessageComponent) Render(width int) []string {
 
 	var contentLines []string
 	if m.markdown {
-		md := components.NewMarkdown(m.content, 0, 0, m.mdTheme, nil)
+		defaultStyle := &components.DefaultTextStyle{
+			Color: theme.Default.Foreground.Ansi24,
+		}
+		md := components.NewMarkdown(m.content, 0, 0, m.mdTheme, defaultStyle)
 		contentLines = md.Render(contentWidth)
 	} else {
-		contentLines = utils.WrapTextWithAnsi(m.content, contentWidth)
+		contentLines = utils.WrapTextWithAnsi(m.bodyColor(m.content), contentWidth)
 	}
 
 	if len(contentLines) == 0 {
@@ -93,7 +96,8 @@ func (m *MessageComponent) Render(width int) []string {
 		if pad < 0 {
 			pad = 0
 		}
-		full := borderPrefix + line + strings.Repeat(" ", pad)
+		padding := theme.Default.Foreground.Ansi24(strings.Repeat(" ", pad))
+		full := borderPrefix + line + padding
 		result[i] = utils.TruncateToWidth(full, width, "")
 	}
 
@@ -106,6 +110,7 @@ func (m *MessageComponent) Render(width int) []string {
 var _ tui.Component = (*MessageComponent)(nil)
 
 func defaultMarkdownTheme() components.MarkdownTheme {
+	chromaStyle := theme.Default.ChromaStyle()
 	return components.MarkdownTheme{
 		Heading:         theme.Default.Foreground.AnsiBold,
 		Link:            theme.Default.Accent.Ansi24,
@@ -122,7 +127,7 @@ func defaultMarkdownTheme() components.MarkdownTheme {
 		Strikethrough:   theme.Default.Muted.Ansi24,
 		Underline:       theme.Default.Foreground.AnsiUnderline,
 		HighlightCode: func(code string, lang string) []string {
-			return utils.HighlightCodeLines(code, lang, "")
+			return utils.HighlightCodeLines(code, lang, "", chromaStyle)
 		},
 	}
 }

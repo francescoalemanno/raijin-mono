@@ -136,18 +136,18 @@ func (t *ToolExecutionComponent) buildContent() string {
 
 	title, body := t.renderParts(args, output, isError)
 	if t.result != nil && t.result.media != nil && strings.TrimSpace(body) == "" {
-		body = fmt.Sprintf("media attached (%s)", t.result.media.MIMEType)
+		body = theme.Default.Foreground.Ansi24(fmt.Sprintf("media attached (%s)", t.result.media.MIMEType))
 	}
 
-	icon := "⟳"
+	icon := theme.Default.Foreground.Ansi24("⟳")
 	if t.result != nil {
 		if t.result.isError {
-			icon = "✗"
+			icon = theme.Default.Danger.Ansi24("✗")
 		} else {
-			icon = "✓"
+			icon = theme.Default.Success.Ansi24("✓")
 		}
 	}
-	header := fmt.Sprintf("%s %s", icon, theme.Default.ToolTitle.AnsiBold(title))
+	header := icon + theme.Default.Foreground.Ansi24(" ") + theme.Default.ToolTitle.AnsiBold(title)
 
 	if body != "" {
 		return header + "\n" + t.truncateContent(body)
@@ -192,20 +192,20 @@ func (t *ToolExecutionComponent) renderParts(args json.RawMessage, output string
 	// Fallback title when a tool has no renderer or args are malformed.
 	if title == t.toolName {
 		if argsPreview := compactJSON(args, 72); argsPreview != "" {
-			title = fmt.Sprintf("%s %s", title, argsPreview)
+			title = theme.Default.ToolTitle.AnsiBold(title) + theme.Default.Foreground.Ansi24(" "+argsPreview)
 		} else if strings.TrimSpace(t.rawInput) != "" {
-			title = title + " (partial args)"
+			title = theme.Default.ToolTitle.AnsiBold(title) + theme.Default.Foreground.Ansi24(" (partial args)")
 		}
 	}
 
 	// Always surface failures. Some tool renderers intentionally hide raw output.
 	if isError && strings.TrimSpace(body) == "" {
 		if strings.TrimSpace(output) != "" {
-			body = output
+			body = theme.Default.Foreground.Ansi24(output)
 		} else if strings.TrimSpace(t.rawInput) != "" && !argsValid {
-			body = "partial arguments:\n" + strings.TrimSpace(t.rawInput)
+			body = theme.Default.Foreground.Ansi24("partial arguments:\n" + strings.TrimSpace(t.rawInput))
 		} else {
-			body = "tool failed with no error details"
+			body = theme.Default.Foreground.Ansi24("tool failed with no error details")
 		}
 	}
 
@@ -235,13 +235,13 @@ func compactJSON(raw json.RawMessage, maxRunes int) string {
 func (t *ToolExecutionComponent) truncateContent(content string) string {
 	lines := strings.Split(content, "\n")
 	if t.status.IsExpanded() || len(lines) <= toolPreviewLines {
-		return content
+		return theme.Default.Foreground.Ansi24(content)
 	}
 
 	preview := strings.Join(lines[:toolPreviewLines], "\n")
 	remaining := len(lines) - toolPreviewLines
 	hint := theme.Default.Muted.Ansi24(fmt.Sprintf("… (%d more lines, press 'ctrl+o' to expand)", remaining))
-	return preview + "\n" + hint
+	return theme.Default.Foreground.Ansi24(preview) + "\n" + hint
 }
 
 // ---------------------------------------------------------------------------

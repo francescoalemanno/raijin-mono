@@ -138,6 +138,7 @@ func newChatApp(term terminal.Terminal, sess *chatsession.Session, cfg *bridgecf
 
 	// Logo at top
 	app.logo = components.NewText("", 0, 0, nil)
+	app.logo.SetFgColorFn(theme.Default.Foreground.Ansi24)
 	app.ui.AddChild(app.logo)
 
 	// History container — messages flow here, natural scrollback
@@ -146,8 +147,10 @@ func newChatApp(term terminal.Terminal, sess *chatsession.Session, cfg *bridgecf
 
 	editorTheme := components.EditorTheme{
 		BorderColor:    theme.Default.Accent.Ansi24,
+		Foreground:     theme.Default.Foreground.Ansi24,
 		ShellLineColor: theme.Default.AccentAlt.Ansi24,
 		SelectList: components.SelectListTheme{
+			Prefix:         theme.Default.Foreground.Ansi24,
 			SelectedPrefix: theme.Default.Accent.Ansi24,
 			SelectedText:   theme.Default.Accent.Ansi24,
 			Description:    theme.Default.Muted.Ansi24,
@@ -169,6 +172,7 @@ func newChatApp(term terminal.Terminal, sess *chatsession.Session, cfg *bridgecf
 	// Status container — swaps between text and loader
 	app.statusContainer = &tui.Container{}
 	app.statusText = components.NewText("", 1, 0, nil)
+	app.statusText.SetFgColorFn(theme.Default.Foreground.Ansi24)
 	app.statusContainer.AddChild(app.statusText)
 	app.ui.AddChild(app.statusContainer)
 	app.editorContainer = &tui.Container{}
@@ -182,6 +186,7 @@ func newChatApp(term terminal.Terminal, sess *chatsession.Session, cfg *bridgecf
 
 	// Footer
 	app.footer = components.NewText("", 1, 0, nil)
+	app.footer.SetFgColorFn(theme.Default.Foreground.Ansi24)
 	app.ui.AddChild(app.footer)
 
 	// Global key listener — intercepts before editor sees input

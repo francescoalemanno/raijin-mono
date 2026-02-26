@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/francescoalemanno/raijin-mono/internal/theme"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/tui"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/utils"
 )
@@ -48,7 +49,9 @@ func (b *infoBar) Render(width int) []string {
 	if gap < 1 {
 		gap = 1
 	}
-	line := left + strings.Repeat(" ", gap) + right
+	// Theme the gap spaces with foreground color
+	gapSpaces := theme.Default.Foreground.Ansi24(strings.Repeat(" ", gap))
+	line := left + gapSpaces + right
 	return []string{utils.TruncateToWidth(padToWidth(line, width), width, "")}
 }
 
