@@ -19,6 +19,7 @@ type forkCandidate struct {
 	Prompt    string
 	Preview   string
 	Ordinal   int // 1-based user-message index in chronological order
+	IsHead    bool
 }
 
 type ForkSelectorComponent struct {
@@ -114,8 +115,11 @@ func (m *ForkSelectorComponent) updateList() {
 
 func (m *ForkSelectorComponent) renderLine(item forkCandidate, selected bool) string {
 	label := fmt.Sprintf("#%d %s", item.Ordinal, item.Preview)
+	if item.IsHead {
+		label = "[new] " + item.Preview
+	}
 	if selected {
-		return theme.Default.Accent.Ansi24("→ ") + theme.Default.Accent.Ansi24(label)
+		return theme.Default.Accent.Ansi24("->") + theme.Default.Accent.Ansi24(label)
 	}
 	return theme.Default.Foreground.Ansi24("  ") + theme.Default.Foreground.Ansi24(label)
 }

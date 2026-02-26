@@ -19,22 +19,25 @@ func TestCollectForkCandidates_NewestFirstAndUserOnly(t *testing.T) {
 	}
 
 	candidates := collectForkCandidates(msgs)
-	if len(candidates) != 3 {
-		t.Fatalf("candidate count = %d, want 3", len(candidates))
+	if len(candidates) != 4 {
+		t.Fatalf("candidate count = %d, want 4", len(candidates))
 	}
 
-	if candidates[0].MessageID != "u3" || candidates[0].Ordinal != 3 {
-		t.Fatalf("first candidate = %#v, want newest user message u3 ordinal 3", candidates[0])
+	if !candidates[0].IsHead {
+		t.Fatalf("first candidate should be head option, got %#v", candidates[0])
 	}
-	if candidates[1].MessageID != "u2" || candidates[1].Ordinal != 2 {
-		t.Fatalf("second candidate = %#v, want u2 ordinal 2", candidates[1])
+	if candidates[1].MessageID != "u3" || candidates[1].Ordinal != 3 {
+		t.Fatalf("second candidate = %#v, want newest user message u3 ordinal 3", candidates[1])
 	}
-	if candidates[2].MessageID != "u1" || candidates[2].Ordinal != 1 {
-		t.Fatalf("third candidate = %#v, want u1 ordinal 1", candidates[2])
+	if candidates[2].MessageID != "u2" || candidates[2].Ordinal != 2 {
+		t.Fatalf("third candidate = %#v, want u2 ordinal 2", candidates[2])
+	}
+	if candidates[3].MessageID != "u1" || candidates[3].Ordinal != 1 {
+		t.Fatalf("fourth candidate = %#v, want u1 ordinal 1", candidates[3])
 	}
 
-	if candidates[1].Preview != "second prompt" {
-		t.Fatalf("normalized preview = %q, want %q", candidates[1].Preview, "second prompt")
+	if candidates[2].Preview != "second prompt" {
+		t.Fatalf("normalized preview = %q, want %q", candidates[2].Preview, "second prompt")
 	}
 }
 

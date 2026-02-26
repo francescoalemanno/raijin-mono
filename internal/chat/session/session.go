@@ -123,17 +123,17 @@ func (s *Session) Clear(ctx context.Context) error {
 	return nil
 }
 
-// ForkTo creates a new durable session pre-populated with msgs and switches
-// to it. The caller provides the slice of messages that should survive into
-// the fork (i.e. everything up to the chosen branch point).
-func (s *Session) ForkTo(ctx context.Context, msgs []message.Message) error {
+// ForkTo creates a new durable child session pre-populated with msgs and
+// switches to it. The new session is linked to parentSessionID and the
+// message at forkedFromMessageID.
+func (s *Session) ForkTo(ctx context.Context, parentSessionID, forkedFromMessageID string, msgs []message.Message) error {
 	if s.agent == nil {
 		return nil
 	}
 	if s.persistStore == nil {
 		return errors.New("session persistence is not available")
 	}
-	forked, err := s.persistStore.ForkSession(msgs)
+	forked, err := s.persistStore.ForkSession(parentSessionID, forkedFromMessageID, msgs)
 	if err != nil {
 		return err
 	}

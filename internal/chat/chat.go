@@ -1271,6 +1271,14 @@ func collectForkCandidates(msgs []message.Message) []forkCandidate {
 	for i, j := 0, len(candidates)-1; i < j; i, j = i+1, j-1 {
 		candidates[i], candidates[j] = candidates[j], candidates[i]
 	}
+
+	headPreview := "continue conversation in a fork."
+	candidates = append([]forkCandidate{{
+		IsHead:  true,
+		Prompt:  "",
+		Preview: headPreview,
+		Ordinal: ordinal + 1,
+	}}, candidates...)
 	return candidates
 }
 
@@ -1296,6 +1304,32 @@ func (app *ChatApp) applyForkCandidate(ctx context.Context, candidate forkCandid
 		return err
 	}
 
+	// Head fork: keep full history and start a fresh branch from current tip.
+	// We inject an empty user message in the child so future forks can branch
+	// from this explicit "new turn" node instead of reusing a parent message.
+	if candidate.IsHead {
+		parentSessionID := app.session.ID()
+		if err := app.session.ForkTo(ctx, parentSessionID, "", msgs); err != nil {
+			return err
+		}
+		if _, err := app.session.Agent().Messages().Create(ctx, app.session.ID(), message.CreateParams{
+			Role:  message.User,
+			Parts: []message.ContentPart{message.TextContent{Text: ""}},
+		}); err != nil {
+			return err
+		}
+		app.dispatchSync(func(_ tui.UIToken) {
+			app.resetConversationView(false)
+			app.restoreHistoryFromSession(ctx)
+			app.editor.SetText("")
+			app.ui.SetFocus(app.editor)
+			app.refreshHeader()
+			app.refreshStatus()
+		})
+		app.ui.RequestRender(true)
+		return nil
+	}
+
 	// Collect only the messages that precede the fork point (exclude the
 	// selected message and everything after it).
 	var keep []message.Message
@@ -1306,8 +1340,9 @@ func (app *ChatApp) applyForkCandidate(ctx context.Context, candidate forkCandid
 		keep = append(keep, msg)
 	}
 
-	// Create a new durable session pre-populated with those messages.
-	if err := app.session.ForkTo(ctx, keep); err != nil {
+	// Create a new durable child session pre-populated with those messages.
+	parentSessionID := app.session.ID()
+	if err := app.session.ForkTo(ctx, parentSessionID, candidate.MessageID, keep); err != nil {
 		return err
 	}
 
