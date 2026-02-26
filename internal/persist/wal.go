@@ -33,6 +33,8 @@ const (
 	titleMaxLen = 72 // runes
 )
 
+var ErrSessionDeleteActiveLineage = errors.New("session can be deleted only if inactive")
+
 // entryType identifies a WAL entry.
 type entryType string
 
@@ -58,10 +60,12 @@ type walEntry struct {
 
 // walSession is the serialisable form of session.Session.
 type walSession struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
+	ID                  string `json:"id"`
+	Title               string `json:"title"`
+	ParentSessionID     string `json:"parent_session_id,omitempty"`
+	ForkedFromMessageID string `json:"forked_from_message_id,omitempty"`
+	CreatedAt           int64  `json:"created_at"`
+	UpdatedAt           int64  `json:"updated_at"`
 }
 
 // walMessage is the serialisable form of message.Message.
@@ -96,10 +100,12 @@ type walPart struct {
 
 // SessionSummary is the information exposed to the /sessions selector.
 type SessionSummary struct {
-	ID        string
-	ShortID   string
-	Title     string
-	UpdatedAt int64
+	ID                  string
+	ShortID             string
+	Title               string
+	ParentSessionID     string
+	ForkedFromMessageID string
+	UpdatedAt           int64
 }
 
 // Store is the entry point for persistence. It owns two service
@@ -176,25 +182,17 @@ func (st *Store) CreateEphemeral() (sessionstore.Session, error) {
 	return sess, nil
 }
 
-// ForkSession creates a new durable session whose WAL is pre-populated with
-// the provided messages. It returns the new session so the caller can switch
-// to it. Unlike CreateEphemeral, the WAL file is written immediately.
-func (st *Store) ForkSession(msgs []message.Message) (sessionstore.Session, error) {
+// ForkSession creates a new durable child session linked to a parent session
+// and to the parent message where the fork starts. The child WAL starts with
+// session metadata only; ancestor messages are resolved at read time.
+func (st *Store) ForkSession(parentSessionID, forkedFromMessageID string, msgs []message.Message) (sessionstore.Session, error) {
 	now := time.Now().Unix()
 	sess := sessionstore.Session{
-		ID:        uuid.New().String(),
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	// Derive title from the first user message if present.
-	for _, m := range msgs {
-		if m.Role == message.User {
-			if text := m.Content().Text; text != "" {
-				sess.Title = TitleFromFirstUserMessage(text)
-			}
-			break
-		}
+		ID:                  uuid.New().String(),
+		ParentSessionID:     parentSessionID,
+		ForkedFromMessageID: forkedFromMessageID,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 
 	path := st.walPath(sess.ID)
@@ -215,30 +213,21 @@ func (st *Store) ForkSession(msgs []message.Message) (sessionstore.Session, erro
 		return err
 	}
 
-	// Write session header.
 	if err := writeEntry(walEntry{
-		T:       now,
-		Typ:     entrySessionCreate,
-		Session: &walSession{ID: sess.ID, Title: sess.Title, CreatedAt: sess.CreatedAt, UpdatedAt: sess.UpdatedAt},
+		T:   now,
+		Typ: entrySessionCreate,
+		Session: &walSession{
+			ID:                  sess.ID,
+			Title:               sess.Title,
+			ParentSessionID:     sess.ParentSessionID,
+			ForkedFromMessageID: sess.ForkedFromMessageID,
+			CreatedAt:           sess.CreatedAt,
+			UpdatedAt:           sess.UpdatedAt,
+		},
 	}); err != nil {
 		f.Close()
 		os.Remove(tmp)
 		return sessionstore.Session{}, fmt.Errorf("persist: fork wal write header: %w", err)
-	}
-
-	// Write one msg.create per message, preserving original timestamps.
-	for _, m := range msgs {
-		m.SessionID = sess.ID
-		wm := messageToWalMsg(m)
-		if err := writeEntry(walEntry{
-			T:   m.CreatedAt,
-			Typ: entryMsgCreate,
-			Msg: &wm,
-		}); err != nil {
-			f.Close()
-			os.Remove(tmp)
-			return sessionstore.Session{}, fmt.Errorf("persist: fork wal write msg: %w", err)
-		}
 	}
 
 	if err := f.Sync(); err != nil {
@@ -256,55 +245,122 @@ func (st *Store) ForkSession(msgs []message.Message) (sessionstore.Session, erro
 		return sessionstore.Session{}, fmt.Errorf("persist: fork wal rename: %w", renameErr)
 	}
 
-	// Register in memory so the session is immediately usable.
 	st.sessSvc.mu.Lock()
 	st.sessSvc.sessions[sess.ID] = sess
 	st.sessSvc.current = sess.ID
 	st.sessSvc.mu.Unlock()
 
-	// Pre-populate message cache so ensureLoaded is a no-op.
+	// Child session starts with no local messages. Leave loaded=false so
+	// ensureLoaded can materialize inherited lineage on first read.
 	st.msgSvc.mu.Lock()
-	for _, m := range msgs {
-		m.SessionID = sess.ID
-		st.msgSvc.messages[m.ID] = m
-		st.msgSvc.bySession[sess.ID] = append(st.msgSvc.bySession[sess.ID], m.ID)
-		if m.Role == message.User {
-			st.msgSvc.titled[sess.ID] = true
-		}
-	}
-	st.msgSvc.loaded[sess.ID] = true
+	delete(st.msgSvc.loaded, sess.ID)
+	delete(st.msgSvc.bySession, sess.ID)
 	st.msgSvc.mu.Unlock()
 
 	st.saveState(sess.ID)
 	return sess, nil
 }
 
-// RemoveSession permanently deletes a session from memory and removes its WAL
-// file from disk. If the deleted session is the current one, current is cleared.
+// RemoveSession permanently deletes a session subtree from memory and removes
+// WAL files from disk. Deleting a parent deletes all descendants.
 func (st *Store) RemoveSession(sessionID string) error {
 	st.sessSvc.mu.Lock()
 	if _, ok := st.sessSvc.sessions[sessionID]; !ok {
 		st.sessSvc.mu.Unlock()
 		return sessionstore.ErrSessionNotFound
 	}
-	delete(st.sessSvc.sessions, sessionID)
-	if st.sessSvc.current == sessionID {
+	if st.isOnCurrentLineageLocked(sessionID) {
+		st.sessSvc.mu.Unlock()
+		return ErrSessionDeleteActiveLineage
+	}
+
+	toDelete := st.collectSessionSubtreeLocked(sessionID)
+	clearCurrent := false
+	for _, id := range toDelete {
+		delete(st.sessSvc.sessions, id)
+		if st.sessSvc.current == id {
+			clearCurrent = true
+		}
+	}
+	if clearCurrent {
 		st.sessSvc.current = ""
 	}
 	st.sessSvc.mu.Unlock()
 
 	st.msgSvc.mu.Lock()
-	ids := st.msgSvc.bySession[sessionID]
-	for _, id := range ids {
-		delete(st.msgSvc.messages, id)
+	for _, sid := range toDelete {
+		ids := st.msgSvc.bySession[sid]
+		for _, id := range ids {
+			delete(st.msgSvc.messages, id)
+		}
+		delete(st.msgSvc.bySession, sid)
+		delete(st.msgSvc.loaded, sid)
+		delete(st.msgSvc.titled, sid)
+		delete(st.msgSvc.pendingFlush, sid)
 	}
-	delete(st.msgSvc.bySession, sessionID)
-	delete(st.msgSvc.loaded, sessionID)
-	delete(st.msgSvc.titled, sessionID)
 	st.msgSvc.mu.Unlock()
 
-	_ = os.Remove(st.walPath(sessionID))
+	for _, sid := range toDelete {
+		_ = os.Remove(st.walPath(sid))
+	}
+
+	if clearCurrent {
+		st.saveState("")
+	}
 	return nil
+}
+
+// collectSessionSubtreeLocked returns the root session plus all descendants.
+// Caller must hold st.sessSvc.mu.
+func (st *Store) collectSessionSubtreeLocked(rootID string) []string {
+	queue := []string{rootID}
+	out := make([]string, 0, 4)
+	seen := map[string]struct{}{rootID: {}}
+
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		out = append(out, node)
+
+		for id, sess := range st.sessSvc.sessions {
+			if sess.ParentSessionID != node {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			queue = append(queue, id)
+		}
+	}
+	return out
+}
+
+// isOnCurrentLineageLocked reports whether sessionID is on the active lineage,
+// defined as current session plus its ancestor chain to the root.
+// Caller must hold st.sessSvc.mu.
+func (st *Store) isOnCurrentLineageLocked(sessionID string) bool {
+	current := st.sessSvc.current
+	if current == "" {
+		return false
+	}
+
+	seen := make(map[string]struct{}, 8)
+	for current != "" {
+		if current == sessionID {
+			return true
+		}
+		if _, ok := seen[current]; ok {
+			break
+		}
+		seen[current] = struct{}{}
+		sess, ok := st.sessSvc.sessions[current]
+		if !ok {
+			break
+		}
+		current = sess.ParentSessionID
+	}
+	return false
 }
 
 // walPath returns the WAL file path for a session ID.
@@ -428,10 +484,12 @@ func replaySessionMeta(path string) (sessionstore.Session, error) {
 		case entrySessionCreate, entrySessionTitle:
 			if entry.Session != nil {
 				sess = sessionstore.Session{
-					ID:        entry.Session.ID,
-					Title:     entry.Session.Title,
-					CreatedAt: entry.Session.CreatedAt,
-					UpdatedAt: entry.Session.UpdatedAt,
+					ID:                  entry.Session.ID,
+					Title:               entry.Session.Title,
+					ParentSessionID:     entry.Session.ParentSessionID,
+					ForkedFromMessageID: entry.Session.ForkedFromMessageID,
+					CreatedAt:           entry.Session.CreatedAt,
+					UpdatedAt:           entry.Session.UpdatedAt,
 				}
 			}
 		}
@@ -456,7 +514,14 @@ func (st *Store) compactWAL(sessionID string, msgs []message.Message) {
 		T:         time.Now().Unix(),
 		Typ:       entrySessionCreate,
 		SessionID: sessionID,
-		Session:   &walSession{ID: sess.ID, Title: sess.Title, CreatedAt: sess.CreatedAt, UpdatedAt: sess.UpdatedAt},
+		Session: &walSession{
+			ID:                  sess.ID,
+			Title:               sess.Title,
+			ParentSessionID:     sess.ParentSessionID,
+			ForkedFromMessageID: sess.ForkedFromMessageID,
+			CreatedAt:           sess.CreatedAt,
+			UpdatedAt:           sess.UpdatedAt,
+		},
 	}
 	headerLine, err := json.Marshal(headerEntry)
 	if err != nil {
@@ -506,18 +571,20 @@ func (st *Store) compactWAL(sessionID string, msgs []message.Message) {
 }
 
 // replayMessages reads a WAL file and reconstructs the ordered message list.
-func replayMessages(path string) ([]message.Message, error) {
+// The returned bool is true when at least one msg.delete_all entry was seen.
+func replayMessages(path string) ([]message.Message, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 	defer f.Close()
 
 	msgs := make(map[string]message.Message)
 	order := make([]string, 0)
+	hadDeleteAll := false
 
 	scanner := bufio.NewScanner(f)
 	buf := make([]byte, 0, 64*1024)
@@ -562,12 +629,13 @@ func replayMessages(path string) ([]message.Message, error) {
 				}
 			}
 		case entryMsgDeleteAll:
+			hadDeleteAll = true
 			msgs = make(map[string]message.Message)
 			order = order[:0]
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, hadDeleteAll, err
 	}
 
 	result := make([]message.Message, 0, len(order))
@@ -576,7 +644,7 @@ func replayMessages(path string) ([]message.Message, error) {
 			result = append(result, m)
 		}
 	}
-	return result, nil
+	return result, hadDeleteAll, nil
 }
 
 // ---------------------------------------------------------------------------

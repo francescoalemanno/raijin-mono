@@ -2,6 +2,7 @@ package persist
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,7 +35,61 @@ func newMessageService(st *Store) *MessageService {
 	}
 }
 
+func lineageMessageID(sessionID, originalID string) string {
+	return "lin:" + sessionID + ":" + originalID
+}
+
+func (ms *MessageService) resolveLineageMessages(sessionID string) ([]message.Message, error) {
+	ms.store.sessSvc.mu.RLock()
+	sess, ok := ms.store.sessSvc.sessions[sessionID]
+	ms.store.sessSvc.mu.RUnlock()
+	if !ok || sess.ParentSessionID == "" {
+		return nil, nil
+	}
+
+	lineage, err := ms.resolveLineageMessages(sess.ParentSessionID)
+	if err != nil {
+		return nil, err
+	}
+	parentLocal, hadDeleteAll, err := replayMessages(ms.store.walPath(sess.ParentSessionID))
+	if err != nil {
+		return nil, err
+	}
+	parentMsgs := lineage
+	if hadDeleteAll {
+		parentMsgs = nil
+	}
+	parentMsgs = append(parentMsgs, parentLocal...)
+
+	if sess.ForkedFromMessageID == "" {
+		return parentMsgs, nil
+	}
+	cut := len(parentMsgs)
+	for i, m := range parentMsgs {
+		if m.ID == sess.ForkedFromMessageID {
+			cut = i
+			break
+		}
+	}
+	if cut < 0 {
+		cut = 0
+	}
+	if cut > len(parentMsgs) {
+		cut = len(parentMsgs)
+	}
+	result := make([]message.Message, 0, cut)
+	for _, m := range parentMsgs[:cut] {
+		clone := m.Clone()
+		clone.ID = lineageMessageID(sessionID, m.ID)
+		clone.SessionID = sessionID
+		result = append(result, clone)
+	}
+	return result, nil
+}
+
 // ensureLoaded replays the WAL for sessionID if not yet loaded.
+// For forked sessions, it materializes lineage messages from ancestors up to
+// the fork point, then applies local WAL mutations on top.
 // Caller must NOT hold ms.mu.
 func (ms *MessageService) ensureLoaded(sessionID string) {
 	ms.mu.RLock()
@@ -44,16 +99,34 @@ func (ms *MessageService) ensureLoaded(sessionID string) {
 		return
 	}
 
-	msgs, err := replayMessages(ms.store.walPath(sessionID))
+	lineageMsgs, err := ms.resolveLineageMessages(sessionID)
 	if err != nil {
-		// Best-effort: treat as empty session.
-		msgs = nil
+		lineageMsgs = nil
 	}
 
-	// Compact the WAL now that we have the full replayed state.
-	if len(msgs) > 0 {
-		ms.store.compactWAL(sessionID, msgs)
+	localMsgs, hadDeleteAll, err := replayMessages(ms.store.walPath(sessionID))
+	if err != nil {
+		// Best-effort: treat as empty local WAL.
+		localMsgs = nil
+		hadDeleteAll = false
 	}
+
+	msgs := lineageMsgs
+	if hadDeleteAll {
+		msgs = nil
+	}
+	msgs = append(msgs, localMsgs...)
+
+	// Compact only local session messages. For forks, lineage is inherited and
+	// must not be copied into the child WAL.
+	if len(localMsgs) > 0 {
+		ms.store.compactWAL(sessionID, localMsgs)
+	}
+
+	ms.store.sessSvc.mu.RLock()
+	sess, ok := ms.store.sessSvc.sessions[sessionID]
+	hasTitle := ok && strings.TrimSpace(sess.Title) != ""
+	ms.store.sessSvc.mu.RUnlock()
 
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -63,10 +136,8 @@ func (ms *MessageService) ensureLoaded(sessionID string) {
 	for _, m := range msgs {
 		ms.messages[m.ID] = m
 		ms.bySession[sessionID] = append(ms.bySession[sessionID], m.ID)
-		if m.Role == message.User && !ms.titled[sessionID] {
-			ms.titled[sessionID] = true
-		}
 	}
+	ms.titled[sessionID] = hasTitle
 	ms.loaded[sessionID] = true
 }
 
@@ -92,8 +163,15 @@ func (ms *MessageService) flushSession(sessionID string) {
 	}
 
 	_ = ms.store.appendEntry(sessionID, walEntry{
-		Typ:     entrySessionCreate,
-		Session: &walSession{ID: sess.ID, Title: sess.Title, CreatedAt: sess.CreatedAt, UpdatedAt: sess.UpdatedAt},
+		Typ: entrySessionCreate,
+		Session: &walSession{
+			ID:                  sess.ID,
+			Title:               sess.Title,
+			ParentSessionID:     sess.ParentSessionID,
+			ForkedFromMessageID: sess.ForkedFromMessageID,
+			CreatedAt:           sess.CreatedAt,
+			UpdatedAt:           sess.UpdatedAt,
+		},
 	})
 	ms.store.saveState(sessionID)
 }
@@ -126,22 +204,21 @@ func (ms *MessageService) Create(ctx context.Context, sessionID string, params m
 		return message.Message{}, err
 	}
 
+	text := strings.TrimSpace(msg.Content().Text)
+
 	ms.mu.Lock()
 	ms.messages[msg.ID] = msg
 	ms.bySession[sessionID] = append(ms.bySession[sessionID], msg.ID)
 	titled := ms.titled[sessionID]
-	if params.Role == message.User && !titled {
+	if params.Role == message.User && !titled && text != "" {
 		ms.titled[sessionID] = true
 	}
 	ms.mu.Unlock()
 
-	// Derive session title from first user message (outside the lock).
-	if params.Role == message.User && !titled {
-		text := msg.Content().Text
-		if text != "" {
-			title := TitleFromFirstUserMessage(text)
-			ms.store.sessSvc.setTitle(ctx, sessionID, title)
-		}
+	// Derive session title from first non-empty user message (outside the lock).
+	if params.Role == message.User && !titled && text != "" {
+		title := TitleFromFirstUserMessage(text)
+		ms.store.sessSvc.setTitle(ctx, sessionID, title)
 	}
 
 	return msg.Clone(), nil

@@ -37,8 +37,15 @@ func (s *SessionService) Create(ctx context.Context) (sessionstore.Session, erro
 	}
 
 	if err := s.store.appendEntry(sess.ID, walEntry{
-		Typ:     entrySessionCreate,
-		Session: &walSession{ID: sess.ID, Title: sess.Title, CreatedAt: sess.CreatedAt, UpdatedAt: sess.UpdatedAt},
+		Typ: entrySessionCreate,
+		Session: &walSession{
+			ID:                  sess.ID,
+			Title:               sess.Title,
+			ParentSessionID:     sess.ParentSessionID,
+			ForkedFromMessageID: sess.ForkedFromMessageID,
+			CreatedAt:           sess.CreatedAt,
+			UpdatedAt:           sess.UpdatedAt,
+		},
 	}); err != nil {
 		return sessionstore.Session{}, err
 	}
@@ -75,8 +82,15 @@ func (s *SessionService) Update(ctx context.Context, sess sessionstore.Session) 
 	s.mu.Unlock()
 
 	return s.store.appendEntry(sess.ID, walEntry{
-		Typ:     entrySessionTitle,
-		Session: &walSession{ID: sess.ID, Title: sess.Title, CreatedAt: sess.CreatedAt, UpdatedAt: sess.UpdatedAt},
+		Typ: entrySessionTitle,
+		Session: &walSession{
+			ID:                  sess.ID,
+			Title:               sess.Title,
+			ParentSessionID:     sess.ParentSessionID,
+			ForkedFromMessageID: sess.ForkedFromMessageID,
+			CreatedAt:           sess.CreatedAt,
+			UpdatedAt:           sess.UpdatedAt,
+		},
 	})
 }
 
@@ -146,8 +160,15 @@ func (s *SessionService) setTitle(ctx context.Context, sessionID, title string) 
 	s.mu.Unlock()
 
 	_ = s.store.appendEntry(sessionID, walEntry{
-		Typ:     entrySessionTitle,
-		Session: &walSession{ID: sess.ID, Title: sess.Title, CreatedAt: sess.CreatedAt, UpdatedAt: sess.UpdatedAt},
+		Typ: entrySessionTitle,
+		Session: &walSession{
+			ID:                  sess.ID,
+			Title:               sess.Title,
+			ParentSessionID:     sess.ParentSessionID,
+			ForkedFromMessageID: sess.ForkedFromMessageID,
+			CreatedAt:           sess.CreatedAt,
+			UpdatedAt:           sess.UpdatedAt,
+		},
 	})
 }
 
@@ -167,10 +188,12 @@ func (s *SessionService) summariesLocked() []SessionSummary {
 			continue
 		}
 		out = append(out, SessionSummary{
-			ID:        sess.ID,
-			ShortID:   ShortID(sess.ID),
-			Title:     sess.Title,
-			UpdatedAt: sess.UpdatedAt,
+			ID:                  sess.ID,
+			ShortID:             ShortID(sess.ID),
+			Title:               sess.Title,
+			ParentSessionID:     sess.ParentSessionID,
+			ForkedFromMessageID: sess.ForkedFromMessageID,
+			UpdatedAt:           sess.UpdatedAt,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

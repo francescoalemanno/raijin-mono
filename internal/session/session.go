@@ -12,10 +12,12 @@ import (
 var ErrSessionNotFound = errors.New("session not found")
 
 type Session struct {
-	ID        string
-	Title     string
-	CreatedAt int64
-	UpdatedAt int64
+	ID                  string
+	Title               string
+	ParentSessionID     string
+	ForkedFromMessageID string
+	CreatedAt           int64
+	UpdatedAt           int64
 }
 
 type Service interface {
