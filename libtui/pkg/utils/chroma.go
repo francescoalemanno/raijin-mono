@@ -8,25 +8,15 @@ import (
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
-	"github.com/alecthomas/chroma/v2/styles"
 )
 
-var (
-	chromaFormatter = formatters.Get("terminal16m")
-	chromaStyle     = resolveChromaStyle()
-)
+var chromaFormatter = formatters.Get("terminal16m")
 
-func resolveChromaStyle() *chroma.Style {
-	if style := styles.Get("nord"); style != nil {
-		return style
-	}
-	return styles.Fallback
-}
-
-// HighlightCodeANSI returns ANSI-highlighted code using Chroma.
+// HighlightCodeANSI returns ANSI-highlighted code using Chroma with the provided style.
+// If style is nil, the code is returned unchanged (no highlighting).
 // If no suitable lexer is found, the original code is returned unchanged.
-func HighlightCodeANSI(code, language, filename string) string {
-	if code == "" || chromaFormatter == nil {
+func HighlightCodeANSI(code, language, filename string, style *chroma.Style) string {
+	if code == "" || chromaFormatter == nil || style == nil {
 		return code
 	}
 
@@ -48,7 +38,7 @@ func HighlightCodeANSI(code, language, filename string) string {
 	}
 
 	var buf bytes.Buffer
-	if err := chromaFormatter.Format(&buf, chromaStyle, iterator); err != nil {
+	if err := chromaFormatter.Format(&buf, style, iterator); err != nil {
 		return code
 	}
 
@@ -63,11 +53,11 @@ func HighlightCodeANSI(code, language, filename string) string {
 }
 
 // HighlightCodeLines returns ANSI-highlighted code split by lines.
-func HighlightCodeLines(code, language, filename string) []string {
+func HighlightCodeLines(code, language, filename string, style *chroma.Style) []string {
 	if code == "" {
 		return []string{}
 	}
-	return strings.Split(HighlightCodeANSI(code, language, filename), "\n")
+	return strings.Split(HighlightCodeANSI(code, language, filename, style), "\n")
 }
 
 func selectCodeLexer(code, language, filename string) chroma.Lexer {
