@@ -107,10 +107,10 @@ type Theme struct {
 	ThinkingMuted Color
 }
 
-// Default theme with Nord colors
+// Dark theme with Nord colors
 // Nord is an arctic, north-bluish color palette by Arctic Ice Studio
 // https://www.nordtheme.com/
-var Default = Theme{
+var Dark = Theme{
 	// Snow Storm - bright text colors
 	Foreground: Color{0xE5, 0xE9, 0xF0}, // #E5E9F0 (nord5 - brighter for main text)
 	Muted:      Color{0x81, 0xA1, 0xC1}, // #81A1C1 (nord9 - muted blue-gray)
@@ -139,6 +139,61 @@ var Default = Theme{
 
 	// Thinking block uses muted blue
 	ThinkingMuted: Color{0x81, 0xA1, 0xC1}, // #81A1C1 (nord9 - muted blue)
+}
+
+// Default is the active theme. It starts as Dark but can be switched at startup.
+var Default = Dark
+
+// Light theme - designed for light terminal backgrounds
+// Uses darker colors for contrast against light backgrounds
+var Light = Theme{
+	// Dark text colors for readability on light backgrounds
+	Foreground: Color{0x2E, 0x34, 0x40}, // #2E3440 (nord0 - dark gray)
+	Muted:      Color{0x4C, 0x56, 0x6A}, // #4C566A (nord3 - muted gray)
+
+	// Aurora accent colors (same vibrant palette)
+	Accent:    Color{0xD0, 0x87, 0x70}, // #D08770 (nord12 - orange, darker for contrast)
+	AccentAlt: Color{0xB0, 0x6D, 0x5A}, // Darker orange variant
+	Success:   Color{0x5E, 0x81, 0x50}, // #5E8150 (darker green for visibility)
+	Danger:    Color{0xBF, 0x3E, 0x4A}, // #BF3E4A (darker red for visibility)
+
+	// Gradient from Frost blue to Aurora purple (darker variants)
+	GradientLight: Color{0x5E, 0x81, 0xAC}, // #5E81AC (nord10 - darker blue)
+	GradientDark:  Color{0x81, 0x61, 0x9A}, // #81619A (darker purple)
+
+	// Diff colors - darker for visibility
+	DiffAdded:   Color{0x5E, 0x81, 0x50}, // Darker green
+	DiffRemoved: Color{0xBF, 0x3E, 0x4A}, // Darker red
+
+	// Light backgrounds for tool execution states
+	BgToolPending: Color{0xE5, 0xE9, 0xF0}, // #E5E9F0 (nord5 - light gray)
+	BgToolSuccess: Color{0xD8, 0xDE, 0xE9}, // Lighter success background
+	BgToolError:   Color{0xEB, 0xE1, 0xE3}, // Light red-tinted background
+
+	// Tool title uses accent color
+	ToolTitle: Color{0xD0, 0x87, 0x70}, // #D08770 (nord12 - orange)
+
+	// Thinking block uses muted gray
+	ThinkingMuted: Color{0x4C, 0x56, 0x6A}, // #4C566A (nord3 - muted gray)
+}
+
+// SetTheme sets the default theme by name. Returns true if the theme was found and set.
+func SetTheme(name string) bool {
+	switch name {
+	case "light":
+		Default = Light
+		return true
+	case "dark":
+		Default = Dark
+		return true
+	default:
+		return false
+	}
+}
+
+// AvailableThemes returns a list of available theme names.
+func AvailableThemes() []string {
+	return []string{"dark", "light"}
 }
 
 // RenderGradient applies a gradient color to text, interpolating between
