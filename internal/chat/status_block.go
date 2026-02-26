@@ -31,7 +31,7 @@ type StatusBlock struct {
 
 func NewStatusBlock(ui components.UILike, loaderPrimary, loaderSecondary func(string) string, loaderLabel string) *StatusBlock {
 	s := &StatusBlock{ui: ui}
-	s.box = components.NewBox(1, 0, theme.BgToolPending)
+	s.box = components.NewBox(1, 0, theme.Default.BgToolPending.AnsiBgOnly)
 	s.content = components.NewText("", 0, 0, nil)
 	s.box.AddChild(s.content)
 
@@ -67,11 +67,11 @@ func (s *StatusBlock) applyState() {
 
 	switch s.state {
 	case StatusPending:
-		s.box.SetBgFn(theme.BgToolPending)
+		s.box.SetBgFn(theme.Default.BgToolPending.AnsiBgOnly)
 	case StatusError:
-		s.box.SetBgFn(theme.BgToolError)
+		s.box.SetBgFn(theme.Default.BgToolError.AnsiBgOnly)
 	default:
-		s.box.SetBgFn(theme.BgToolSuccess)
+		s.box.SetBgFn(theme.Default.BgToolSuccess.AnsiBgOnly)
 	}
 }
 

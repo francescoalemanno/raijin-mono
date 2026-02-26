@@ -45,7 +45,7 @@ func NewToolExecution(toolName string, args json.RawMessage, tool llm.Tool, ui c
 		toolName: toolName,
 		args:     args,
 		tool:     tool,
-		status:   NewStatusBlock(ui, theme.ColorAccent, theme.ColorMuted, "running…"),
+		status:   NewStatusBlock(ui, theme.Default.Accent.Ansi24, theme.Default.Muted.Ansi24, "running…"),
 	}
 	t.updateContent()
 	return t
@@ -147,7 +147,7 @@ func (t *ToolExecutionComponent) buildContent() string {
 			icon = "✓"
 		}
 	}
-	header := fmt.Sprintf("%s %s", icon, theme.ColorToolTitle(title))
+	header := fmt.Sprintf("%s %s", icon, theme.Default.ToolTitle.AnsiBold(title))
 
 	if body != "" {
 		return header + "\n" + t.truncateContent(body)
@@ -240,7 +240,7 @@ func (t *ToolExecutionComponent) truncateContent(content string) string {
 
 	preview := strings.Join(lines[:toolPreviewLines], "\n")
 	remaining := len(lines) - toolPreviewLines
-	hint := theme.ColorMuted(fmt.Sprintf("… (%d more lines, press 'ctrl+o' to expand)", remaining))
+	hint := theme.Default.Muted.Ansi24(fmt.Sprintf("… (%d more lines, press 'ctrl+o' to expand)", remaining))
 	return preview + "\n" + hint
 }
 

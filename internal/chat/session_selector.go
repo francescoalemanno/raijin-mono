@@ -51,7 +51,7 @@ func NewSessionSelector(
 		searchInput:   components.NewInput(),
 		listContainer: &tui.Container{},
 		hintText:      components.NewText("", 0, 0, nil),
-		titleText:     components.NewText(theme.ColorAccent("SESSIONS"), 0, 0, nil),
+		titleText:     components.NewText(theme.Default.Accent.Ansi24("SESSIONS"), 0, 0, nil),
 		borderTop:     &borderLine{},
 		borderBottom:  &borderLine{},
 		allCandidates: append([]sessionCandidate(nil), candidates...),
@@ -98,13 +98,13 @@ func (m *SessionSelectorComponent) updateList() {
 
 	// Update hint text based on pending-delete state.
 	if m.pendingDelete != "" {
-		m.hintText.SetText(theme.ColorDanger("Press ctrl+x again to confirm deletion · Esc to cancel"))
+		m.hintText.SetText(theme.Default.Danger.Ansi24("Press ctrl+x again to confirm deletion · Esc to cancel"))
 	} else {
-		m.hintText.SetText(theme.ColorMuted("Type to filter · Enter to switch · ctrl+x delete · Esc to cancel"))
+		m.hintText.SetText(theme.Default.Muted.Ansi24("Type to filter · Enter to switch · ctrl+x delete · Esc to cancel"))
 	}
 
 	if len(m.filtered) == 0 {
-		m.listContainer.AddChild(components.NewText(theme.ColorMuted("  No matching sessions"), 0, 0, nil))
+		m.listContainer.AddChild(components.NewText(theme.Default.Muted.Ansi24("  No matching sessions"), 0, 0, nil))
 		return
 	}
 
@@ -118,7 +118,7 @@ func (m *SessionSelectorComponent) updateList() {
 	}
 
 	if startIndex > 0 || endIndex < len(m.filtered) {
-		scrollInfo := theme.ColorMuted(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
+		scrollInfo := theme.Default.Muted.Ansi24(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
 		m.listContainer.AddChild(components.NewText(scrollInfo, 0, 0, nil))
 	}
 }
@@ -132,12 +132,12 @@ func (m *SessionSelectorComponent) renderLine(item sessionCandidate, selected bo
 	awaitingDelete := m.pendingDelete == item.ID
 	if selected {
 		if awaitingDelete {
-			return theme.ColorDanger("→ ") + theme.ColorDanger(label)
+			return theme.Default.Danger.Ansi24("→ ") + theme.Default.Danger.Ansi24(label)
 		}
-		return theme.ColorAccent("→ ") + theme.ColorAccent(label)
+		return theme.Default.Accent.Ansi24("→ ") + theme.Default.Accent.Ansi24(label)
 	}
 	if awaitingDelete {
-		return theme.ColorDanger("  " + label)
+		return theme.Default.Danger.Ansi24("  " + label)
 	}
 	return "  " + label
 }
@@ -263,7 +263,7 @@ var (
 
 func (app *ChatApp) showSessionSelector() {
 	if app.state == stateRunning {
-		app.appendMessage("cannot switch sessions while a response is running; interrupt first", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+		app.appendMessage("cannot switch sessions while a response is running; interrupt first", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		app.ui.RequestRender()
 		return
 	}
@@ -274,14 +274,14 @@ func (app *ChatApp) showSessionSelector() {
 
 	store := app.session.PersistStore()
 	if store == nil {
-		app.appendMessage("session persistence is not available", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+		app.appendMessage("session persistence is not available", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		app.ui.RequestRender()
 		return
 	}
 
 	summaries := store.ListSessionSummaries()
 	if len(summaries) == 0 {
-		app.appendMessage("no previous sessions found", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+		app.appendMessage("no previous sessions found", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		app.ui.RequestRender()
 		return
 	}
@@ -303,7 +303,7 @@ func (app *ChatApp) showSessionSelector() {
 				go func() {
 					if err := app.applySessionSwitch(context.Background(), candidate.ID); err != nil {
 						app.dispatchSync(func(_ tui.UIToken) {
-							app.appendMessage("/sessions: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+							app.appendMessage("/sessions: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 						})
 						app.ui.RequestRender()
 					}
@@ -313,7 +313,7 @@ func (app *ChatApp) showSessionSelector() {
 				go func() {
 					if err := store.RemoveSession(candidate.ID); err != nil {
 						app.dispatchSync(func(_ tui.UIToken) {
-							app.appendMessage("/sessions delete: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+							app.appendMessage("/sessions delete: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 						})
 						app.ui.RequestRender()
 						return
@@ -325,7 +325,7 @@ func (app *ChatApp) showSessionSelector() {
 						})
 						if err := app.reloadFromScratch(""); err != nil {
 							app.dispatchSync(func(_ tui.UIToken) {
-								app.appendMessage("failed to reset session: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+								app.appendMessage("failed to reset session: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 							})
 							app.ui.RequestRender()
 						}

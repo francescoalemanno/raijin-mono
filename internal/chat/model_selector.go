@@ -62,8 +62,8 @@ func NewModelSelector(
 	m := &ModelSelectorComponent{
 		searchInput:   components.NewInput(),
 		listContainer: &tui.Container{},
-		hintText:      components.NewText(theme.ColorMuted("Type to filter · Enter to select · ctrl+x delete · Esc to cancel"), 0, 0, nil),
-		titleText:     components.NewText(theme.ColorAccent(title), 0, 0, nil),
+		hintText:      components.NewText(theme.Default.Muted.Ansi24("Type to filter · Enter to select · ctrl+x delete · Esc to cancel"), 0, 0, nil),
+		titleText:     components.NewText(theme.Default.Accent.Ansi24(title), 0, 0, nil),
 		borderTop:     &borderLine{},
 		borderBottom:  &borderLine{},
 		currentModel:  currentModel,
@@ -142,13 +142,13 @@ func (m *ModelSelectorComponent) updateList() {
 
 	// Update hint text based on pending-delete state.
 	if m.pendingDelete != "" {
-		m.hintText.SetText(theme.ColorDanger("Press ctrl+x again to confirm deletion · Esc to cancel"))
+		m.hintText.SetText(theme.Default.Danger.Ansi24("Press ctrl+x again to confirm deletion · Esc to cancel"))
 	} else {
-		m.hintText.SetText(theme.ColorMuted("Type to filter · Enter to select · ctrl+x delete · Esc to cancel"))
+		m.hintText.SetText(theme.Default.Muted.Ansi24("Type to filter · Enter to select · ctrl+x delete · Esc to cancel"))
 	}
 
 	if len(m.filtered) == 0 {
-		m.listContainer.AddChild(components.NewText(theme.ColorMuted("  No matching models"), 0, 0, nil))
+		m.listContainer.AddChild(components.NewText(theme.Default.Muted.Ansi24("  No matching models"), 0, 0, nil))
 		return
 	}
 
@@ -163,7 +163,7 @@ func (m *ModelSelectorComponent) updateList() {
 	}
 
 	if startIndex > 0 || endIndex < len(m.filtered) {
-		scrollInfo := theme.ColorMuted(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
+		scrollInfo := theme.Default.Muted.Ansi24(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
 		m.listContainer.AddChild(components.NewText(scrollInfo, 0, 0, nil))
 	}
 }
@@ -172,19 +172,19 @@ func (m *ModelSelectorComponent) renderModelLine(item modelItem, selected bool) 
 	isCurrent := item.name == m.currentModel
 	checkmark := ""
 	if isCurrent {
-		checkmark = theme.ColorSuccess(" ✓")
+		checkmark = theme.Default.Success.Ansi24(" ✓")
 	}
-	providerBadge := theme.ColorMuted(fmt.Sprintf(" [%s]", item.provider))
+	providerBadge := theme.Default.Muted.Ansi24(fmt.Sprintf(" [%s]", item.provider))
 
 	awaitingDelete := m.pendingDelete == item.name
 	if selected {
 		if awaitingDelete {
-			return theme.ColorDanger("→ "+item.name) + providerBadge + checkmark
+			return theme.Default.Danger.Ansi24("→ "+item.name) + providerBadge + checkmark
 		}
-		return theme.ColorAccent("→ "+item.name) + providerBadge + checkmark
+		return theme.Default.Accent.Ansi24("→ "+item.name) + providerBadge + checkmark
 	}
 	if awaitingDelete {
-		return theme.ColorDanger("  "+item.name) + providerBadge + checkmark
+		return theme.Default.Danger.Ansi24("  "+item.name) + providerBadge + checkmark
 	}
 	return "  " + item.name + providerBadge + checkmark
 }
@@ -330,7 +330,7 @@ func (b *borderLine) Render(width int) []string {
 	if width < 1 {
 		return []string{""}
 	}
-	return []string{theme.ColorMuted(strings.Repeat("─", width))}
+	return []string{theme.Default.Muted.Ansi24(strings.Repeat("─", width))}
 }
 
 func (b *borderLine) HandleInput(string) {}

@@ -4,34 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
 	tuiutils "github.com/francescoalemanno/raijin-mono/libtui/pkg/utils"
 )
-
-var (
-	homeDir     string
-	homeDirOnce sync.Once
-	cwd         string
-	cwdOnce     sync.Once
-)
-
-// getHomeDir returns the user's home directory, cached.
-func getHomeDir() string {
-	homeDirOnce.Do(func() {
-		homeDir, _ = os.UserHomeDir()
-	})
-	return homeDir
-}
-
-// getCwd returns the current working directory, cached.
-func getCwd() string {
-	cwdOnce.Do(func() {
-		cwd, _ = os.Getwd()
-	})
-	return cwd
-}
 
 // RenderPath formats a path for display:
 // - Paths in cwd are shown as relative to ./
@@ -45,7 +21,7 @@ func RenderPath(path string) string {
 	normalized := filepath.ToSlash(path)
 
 	// Try to make path relative to cwd first (higher priority)
-	if cwd := getCwd(); cwd != "" {
+	if cwd, err := os.Getwd(); err == nil {
 		cwdNormalized := filepath.ToSlash(cwd)
 		cwdNormalized = strings.TrimSuffix(cwdNormalized, "/")
 		if strings.HasPrefix(normalized, cwdNormalized+"/") {
@@ -56,7 +32,7 @@ func RenderPath(path string) string {
 	}
 
 	// If not under cwd, try home directory
-	if home := getHomeDir(); home != "" {
+	if home, err := os.UserHomeDir(); err == nil {
 		homeNormalized := filepath.ToSlash(home)
 		homeNormalized = strings.TrimSuffix(homeNormalized, "/")
 		if strings.HasPrefix(normalized, homeNormalized+"/") {
@@ -87,11 +63,11 @@ func renderDiffPreview(path, oldStr, newStr string) string {
 	for _, line := range strings.Split(details.Diff, "\n") {
 		switch {
 		case strings.HasPrefix(line, "+"):
-			b.WriteString(theme.ColorDiffAdded(line))
+			b.WriteString(theme.Default.DiffAdded.Ansi24(line))
 		case strings.HasPrefix(line, "-"):
-			b.WriteString(theme.ColorDiffRemoved(line))
+			b.WriteString(theme.Default.DiffRemoved.Ansi24(line))
 		default:
-			b.WriteString(theme.ColorMuted(line))
+			b.WriteString(theme.Default.Muted.Ansi24(line))
 		}
 		b.WriteByte('\n')
 	}

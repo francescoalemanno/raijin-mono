@@ -42,8 +42,8 @@ func NewForkSelector(candidates []forkCandidate, onSelect func(candidate forkCan
 	m := &ForkSelectorComponent{
 		searchInput:   components.NewInput(),
 		listContainer: &tui.Container{},
-		hintText:      components.NewText(theme.ColorMuted("Type to filter · Enter to fork · Esc to cancel"), 0, 0, nil),
-		titleText:     components.NewText(theme.ColorAccent("FORK FROM USER MESSAGE"), 0, 0, nil),
+		hintText:      components.NewText(theme.Default.Muted.Ansi24("Type to filter · Enter to fork · Esc to cancel"), 0, 0, nil),
+		titleText:     components.NewText(theme.Default.Accent.Ansi24("FORK FROM USER MESSAGE"), 0, 0, nil),
 		borderTop:     &borderLine{},
 		borderBottom:  &borderLine{},
 		allCandidates: append([]forkCandidate(nil), candidates...),
@@ -88,7 +88,7 @@ func (m *ForkSelectorComponent) filter(query string) {
 func (m *ForkSelectorComponent) updateList() {
 	m.listContainer.Clear()
 	if len(m.filtered) == 0 {
-		m.listContainer.AddChild(components.NewText(theme.ColorMuted("  No matching user messages"), 0, 0, nil))
+		m.listContainer.AddChild(components.NewText(theme.Default.Muted.Ansi24("  No matching user messages"), 0, 0, nil))
 		return
 	}
 
@@ -103,7 +103,7 @@ func (m *ForkSelectorComponent) updateList() {
 	}
 
 	if startIndex > 0 || endIndex < len(m.filtered) {
-		scrollInfo := theme.ColorMuted(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
+		scrollInfo := theme.Default.Muted.Ansi24(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
 		m.listContainer.AddChild(components.NewText(scrollInfo, 0, 0, nil))
 	}
 }
@@ -111,7 +111,7 @@ func (m *ForkSelectorComponent) updateList() {
 func (m *ForkSelectorComponent) renderLine(item forkCandidate, selected bool) string {
 	label := fmt.Sprintf("#%d %s", item.Ordinal, item.Preview)
 	if selected {
-		return theme.ColorAccent("→ ") + theme.ColorAccent(label)
+		return theme.Default.Accent.Ansi24("→ ") + theme.Default.Accent.Ansi24(label)
 	}
 	return "  " + label
 }

@@ -91,7 +91,7 @@ func applyInlineStyle(txt string, style inlineStyle) string {
 	case styleItalic:
 		return thinkingMutedItalic(txt)
 	default:
-		return theme.ColorMuted(txt)
+		return theme.Default.Muted.Ansi24(txt)
 	}
 }
 
@@ -104,7 +104,7 @@ type ThinkingComponent struct {
 
 func NewThinking(ui components.UILike) *ThinkingComponent {
 	t := &ThinkingComponent{
-		status: NewStatusBlock(ui, theme.ColorMuted, theme.ColorAccent, ""),
+		status: NewStatusBlock(ui, theme.Default.Muted.Ansi24, theme.Default.Accent.Ansi24, ""),
 	}
 	t.updateContent()
 	return t
@@ -134,9 +134,9 @@ func (t *ThinkingComponent) updateContent() {
 }
 
 func (t *ThinkingComponent) buildContent() string {
-	header := "⟳ " + theme.ColorToolTitle("Thinking…")
+	header := "⟳ " + theme.Default.ToolTitle.AnsiBold("Thinking…")
 	if t.done {
-		header = "✓ " + theme.ColorToolTitle("Thinking")
+		header = "✓ " + theme.Default.ToolTitle.AnsiBold("Thinking")
 	}
 
 	body := strings.TrimSpace(t.text)
@@ -156,7 +156,7 @@ func (t *ThinkingComponent) truncate(content string) string {
 	}
 	preview := strings.Join(lines[:thinkingPreviewLines], "\n")
 	remaining := len(lines) - thinkingPreviewLines
-	hint := theme.ColorMuted(fmt.Sprintf("… (%d more lines, press 'ctrl+o' to expand)", remaining))
+	hint := theme.Default.Muted.Ansi24(fmt.Sprintf("… (%d more lines, press 'ctrl+o' to expand)", remaining))
 	return preview + "\n" + hint
 }
 

@@ -206,8 +206,8 @@ func (app *ChatApp) compactConversation(customInstructions string) error {
 		app.appendMessage(
 			fmt.Sprintf("context compacted: summarized %d messages, kept %d", len(toSummarize), len(kept)),
 			theme.BorderThin,
-			theme.ColorMuted,
-			theme.ColorForeground,
+			theme.Default.Muted.Ansi24,
+			theme.Default.Foreground.Ansi24,
 			false,
 		)
 	})
@@ -233,7 +233,7 @@ func (app *ChatApp) maybeAutoCompact() bool {
 	}
 	if err := app.compactConversation(""); err != nil {
 		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("auto-compaction failed: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage("auto-compaction failed: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		})
 	}
 	return true

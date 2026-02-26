@@ -89,8 +89,8 @@ func NewModelAdd(
 		searchInput:   components.NewInput(),
 		apiKeyInput:   components.NewInput(),
 		listContainer: &tui.Container{},
-		hintText:      components.NewText(theme.ColorMuted("Type to filter · Enter to select · Esc to cancel"), 0, 0, nil),
-		titleText:     components.NewText(theme.ColorAccent("SELECT MODEL"), 0, 0, nil),
+		hintText:      components.NewText(theme.Default.Muted.Ansi24("Type to filter · Enter to select · Esc to cancel"), 0, 0, nil),
+		titleText:     components.NewText(theme.Default.Accent.Ansi24("SELECT MODEL"), 0, 0, nil),
 		borderTop:     &borderLine{},
 		borderBottom:  &borderLine{},
 		providerKeys:  providerKeys,
@@ -173,7 +173,7 @@ func (m *ModelAddComponent) updateList() {
 	m.listContainer.Clear()
 
 	if len(m.filtered) == 0 {
-		m.listContainer.AddChild(components.NewText(theme.ColorMuted("  No matching models"), 0, 0, nil))
+		m.listContainer.AddChild(components.NewText(theme.Default.Muted.Ansi24("  No matching models"), 0, 0, nil))
 		return
 	}
 
@@ -188,10 +188,10 @@ func (m *ModelAddComponent) updateList() {
 		if item.providerID != currentProvider {
 			currentProvider = item.providerID
 			providerDisplay := item.providerName
-			style := theme.ColorAccent
+			style := theme.Default.Accent.Ansi24
 			if m.providerKeys[item.providerID] != "" {
 				providerDisplay += " ✓"
-				style = theme.ColorSuccess
+				style = theme.Default.Success.Ansi24
 			}
 			m.listContainer.AddChild(components.NewText(style(providerDisplay), 0, 0, nil))
 		}
@@ -200,14 +200,14 @@ func (m *ModelAddComponent) updateList() {
 	}
 
 	if startIndex > 0 || endIndex < len(m.filtered) {
-		scrollInfo := theme.ColorMuted(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
+		scrollInfo := theme.Default.Muted.Ansi24(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
 		m.listContainer.AddChild(components.NewText(scrollInfo, 0, 0, nil))
 	}
 }
 
 func (m *ModelAddComponent) renderCatalogLine(item catalogItem, selected bool) string {
 	if selected {
-		return theme.ColorAccent("→ " + item.modelName)
+		return theme.Default.Accent.Ansi24("→ " + item.modelName)
 	}
 	return "  " + item.modelName
 }
@@ -249,8 +249,8 @@ func (m *ModelAddComponent) confirmModelSelection() {
 		m.apiKeyInput.SetValue("")
 	}
 
-	m.titleText.SetText(theme.ColorAccent(fmt.Sprintf("API KEY FOR %s", strings.ToUpper(item.providerName))))
-	m.hintText.SetText(theme.ColorMuted("Enter to confirm · Leave blank to skip · Esc to go back"))
+	m.titleText.SetText(theme.Default.Accent.Ansi24(fmt.Sprintf("API KEY FOR %s", strings.ToUpper(item.providerName))))
+	m.hintText.SetText(theme.Default.Muted.Ansi24("Enter to confirm · Leave blank to skip · Esc to go back"))
 }
 
 func (m *ModelAddComponent) confirmAPIKey() {
@@ -278,8 +278,8 @@ func (m *ModelAddComponent) goBackToModelList() {
 	m.step = stepSelectModel
 	m.pendingItem = nil
 	m.apiKeyInput.SetValue("")
-	m.titleText.SetText(theme.ColorAccent("SELECT MODEL"))
-	m.hintText.SetText(theme.ColorMuted("Type to filter · Enter to select · Esc to cancel"))
+	m.titleText.SetText(theme.Default.Accent.Ansi24("SELECT MODEL"))
+	m.hintText.SetText(theme.Default.Muted.Ansi24("Type to filter · Enter to select · Esc to cancel"))
 }
 
 // --- Component interface ---

@@ -129,36 +129,7 @@ var Default = Theme{
 	ThinkingMuted: Color{0xA8, 0x99, 0x84}, // #A89984 (same as Muted)
 }
 
-// Convenience variables for backward compatibility and easier access
-var (
-	// Foreground colors
-	ColorForeground = Default.Foreground.Ansi24
-	ColorMuted      = Default.Muted.Ansi24
-	ColorAccent     = Default.Accent.Ansi24
-	ColorAccentAlt  = Default.AccentAlt.Ansi24
-	ColorSuccess    = Default.Success.Ansi24
-	ColorDanger     = Default.Danger.Ansi24
 
-	// Diff colors
-	ColorDiffAdded   = Default.DiffAdded.Ansi24
-	ColorDiffRemoved = Default.DiffRemoved.Ansi24
-
-	// Typography variants in the base foreground color
-	ColorForegroundBold       = Default.Foreground.AnsiBold
-	ColorForegroundUnderline  = Default.Foreground.AnsiUnderline
-	ColorForegroundItalic     = Default.Foreground.AnsiItalic
-	ColorForegroundBoldItalic = Default.Foreground.AnsiBoldItalic
-
-	ColorAccentAltBold = Default.AccentAlt.AnsiBold
-
-	// Background colors for tool execution states
-	BgToolPending = Default.BgToolPending.AnsiBgOnly
-	BgToolSuccess = Default.BgToolSuccess.AnsiBgOnly
-	BgToolError   = Default.BgToolError.AnsiBgOnly
-
-	// Tool title style
-	ColorToolTitle = Default.ToolTitle.AnsiBold
-)
 
 // RenderGradient applies a gradient color to text, interpolating between
 // GradientLight and GradientDark across the length of the string.

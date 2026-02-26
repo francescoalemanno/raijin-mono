@@ -145,14 +145,14 @@ func newChatApp(term terminal.Terminal, sess *chatsession.Session, cfg *bridgecf
 	app.ui.AddChild(app.history)
 
 	editorTheme := components.EditorTheme{
-		BorderColor:    theme.ColorAccent,
-		ShellLineColor: theme.ColorAccentAlt,
+		BorderColor:    theme.Default.Accent.Ansi24,
+		ShellLineColor: theme.Default.AccentAlt.Ansi24,
 		SelectList: components.SelectListTheme{
-			SelectedPrefix: theme.ColorAccent,
-			SelectedText:   theme.ColorAccent,
-			Description:    theme.ColorMuted,
-			ScrollInfo:     theme.ColorMuted,
-			NoMatch:        theme.ColorMuted,
+			SelectedPrefix: theme.Default.Accent.Ansi24,
+			SelectedText:   theme.Default.Accent.Ansi24,
+			Description:    theme.Default.Muted.Ansi24,
+			ScrollInfo:     theme.Default.Muted.Ansi24,
+			NoMatch:        theme.Default.Muted.Ansi24,
 		},
 	}
 	app.editor = components.NewEditor(app.ui, editorTheme, components.EditorOptions{
@@ -265,7 +265,7 @@ func (app *ChatApp) refreshHeader() {
 	}
 	if app.contextWindow > 0 {
 		pct := float64(app.totalTokens) / float64(app.contextWindow) * 100
-		leftParts = append(leftParts, theme.ColorMuted(fmt.Sprintf("%.1f%%/%s", pct, formatTokenCount(app.contextWindow))))
+		leftParts = append(leftParts, theme.Default.Muted.Ansi24(fmt.Sprintf("%.1f%%/%s", pct, formatTokenCount(app.contextWindow))))
 	}
 	left := strings.Join(leftParts, "  ")
 
@@ -274,7 +274,7 @@ func (app *ChatApp) refreshHeader() {
 	if ok {
 		modelName := sm.Model
 		thinking := string(llm.NormalizeThinkingLevel(sm.ThinkingLevel))
-		right = theme.ColorMuted(fmt.Sprintf("(%s) %s • %s", sm.Provider, modelName, thinking))
+		right = theme.Default.Muted.Ansi24(fmt.Sprintf("(%s) %s • %s", sm.Provider, modelName, thinking))
 	}
 
 	app.header.SetInfo(left, right)
@@ -314,7 +314,7 @@ func (app *ChatApp) showStatusLoader(message string) {
 		return
 	}
 	app.statusContainer.Clear()
-	loader := components.NewLoader(app.ui, theme.ColorAccent, theme.ColorAccentAlt, message)
+	loader := components.NewLoader(app.ui, theme.Default.Accent.Ansi24, theme.Default.AccentAlt.Ansi24, message)
 	app.statusLoader = loader
 	app.statusContainer.AddChild(loader)
 	go loader.Loop()
@@ -329,12 +329,12 @@ func (app *ChatApp) stopLoader() {
 }
 
 func (app *ChatApp) refreshFooter() {
-	shortcuts := theme.ColorAccentAltBold("esc") + " " + theme.ColorMuted("cancel") +
-		"  " + theme.ColorAccentAltBold("ctrl+t") + " " + theme.ColorMuted("thinking") +
-		"  " + theme.ColorAccentAltBold("ctrl+o") + " " + theme.ColorMuted("expand") +
-		"  " + theme.ColorAccentAltBold("ctrl+p") + " " + theme.ColorMuted("models") +
-		"  " + theme.ColorAccentAltBold("/") + " " + theme.ColorMuted("commands") +
-		"  " + theme.ColorAccentAltBold("ctrl+d") + " " + theme.ColorMuted("quit")
+	shortcuts := theme.Default.AccentAlt.AnsiBold("esc") + " " + theme.Default.Muted.Ansi24("cancel") +
+		"  " + theme.Default.AccentAlt.AnsiBold("ctrl+t") + " " + theme.Default.Muted.Ansi24("thinking") +
+		"  " + theme.Default.AccentAlt.AnsiBold("ctrl+o") + " " + theme.Default.Muted.Ansi24("expand") +
+		"  " + theme.Default.AccentAlt.AnsiBold("ctrl+p") + " " + theme.Default.Muted.Ansi24("models") +
+		"  " + theme.Default.AccentAlt.AnsiBold("/") + " " + theme.Default.Muted.Ansi24("commands") +
+		"  " + theme.Default.AccentAlt.AnsiBold("ctrl+d") + " " + theme.Default.Muted.Ansi24("quit")
 	app.footer.SetText(shortcuts)
 }
 
@@ -353,7 +353,7 @@ func (app *ChatApp) cycleThinkingLevel() {
 			if modelCfg, found := app.store.Get(defaultName); found {
 				modelCfg.ThinkingLevel = nextLevel
 				if err := app.store.Add(modelCfg); err != nil {
-					app.appendMessage("failed to persist thinking level: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+					app.appendMessage("failed to persist thinking level: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 					return
 				}
 			}
@@ -364,7 +364,7 @@ func (app *ChatApp) cycleThinkingLevel() {
 		app.thinkingLevelDirty = true
 	} else if app.session != nil {
 		if err := app.session.Reconfigure(app.cfg); err != nil {
-			app.appendMessage("failed to apply thinking level: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage("failed to apply thinking level: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			return
 		}
 	}
@@ -447,7 +447,7 @@ func (app *ChatApp) appendStoredMessage(msg message.Message) {
 		text := strings.TrimSpace(msg.Content().Text)
 		if text != "" {
 			app.appendSpacer()
-			app.appendMessage(text, theme.BorderThin, theme.ColorAccent, theme.ColorForeground, false)
+			app.appendMessage(text, theme.BorderThin, theme.Default.Accent.Ansi24, theme.Default.Foreground.Ansi24, false)
 		}
 		for _, att := range msg.BinaryContent() {
 			if !IsImageMIME(att.MIMEType) || len(att.Data) == 0 {
@@ -479,7 +479,7 @@ func (app *ChatApp) appendStoredMessage(msg message.Message) {
 		text := strings.TrimSpace(msg.Content().Text)
 		if text != "" {
 			app.appendSpacer()
-			app.appendMessage(text, theme.BorderThin, theme.ColorSuccess, theme.ColorForeground, true)
+			app.appendMessage(text, theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, true)
 		}
 	case message.Tool:
 		for _, result := range msg.ToolResults() {
@@ -545,7 +545,7 @@ func (app *ChatApp) appendImageComponent(base64Data, mimeType, filename string) 
 	if mimeType != "" {
 		label += ", " + mimeType
 	}
-	app.appendMessage(label, theme.BorderThin, theme.ColorMuted, theme.ColorMuted, false)
+	app.appendMessage(label, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
 }
 
 func (app *ChatApp) appendImageFromBytes(data []byte, mimeType, filename string) {
@@ -574,7 +574,7 @@ func (app *ChatApp) flushReply() {
 		app.replyComponent.SetContent(app.currentReply)
 	} else {
 		app.appendSpacer()
-		app.appendMessage(app.currentReply, theme.BorderThin, theme.ColorSuccess, theme.ColorForeground, true)
+		app.appendMessage(app.currentReply, theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, true)
 	}
 	app.currentReply = ""
 	app.replyComponent = nil
@@ -619,7 +619,7 @@ func (app *ChatApp) onTextDelta(event core.AgentEvent) {
 	app.currentReply += event.Text
 	if app.replyComponent == nil {
 		app.appendSpacer()
-		app.replyComponent = app.appendMessage("", theme.BorderThin, theme.ColorSuccess, theme.ColorForeground, true)
+		app.replyComponent = app.appendMessage("", theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, true)
 	}
 	app.replyComponent.SetContent(app.currentReply)
 }
@@ -696,7 +696,7 @@ func (app *ChatApp) handleSubmit(text string) {
 	})
 	if compacting {
 		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("compaction in progress; wait until it completes", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+			app.appendMessage("compaction in progress; wait until it completes", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		})
 		return
 	}
@@ -759,14 +759,14 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 			if userInput == "" {
 				userInput = "/" + current.Opts.TemplateName
 			}
-			app.appendMessage(userInput, theme.BorderThick, theme.ColorAccent, theme.ColorForeground, false)
+			app.appendMessage(userInput, theme.BorderThick, theme.Default.Accent.Ansi24, theme.Default.Foreground.Ansi24, false)
 			notice := "↪ /" + current.Opts.TemplateName + " template expanded"
 			if len(current.Opts.AllowedTools) > 0 {
 				notice += " (tools limited: " + strings.Join(current.Opts.AllowedTools, ", ") + ")"
 			}
-			app.appendMessage(notice, theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+			app.appendMessage(notice, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		} else {
-			app.appendMessage(current.Input, theme.BorderThick, theme.ColorAccent, theme.ColorForeground, false)
+			app.appendMessage(current.Input, theme.BorderThick, theme.Default.Accent.Ansi24, theme.Default.Foreground.Ansi24, false)
 		}
 		app.state = stateRunning
 		app.steeringInterruptIssued = false
@@ -783,7 +783,7 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 	})
 	if !sessionOK {
 		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("No model configured. Use /models add to set up.", theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage("No model configured. Use /models add to set up.", theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			app.state = stateIdle
 			app.steeringInterruptIssued = false
 			app.stopLoader()
@@ -796,7 +796,7 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 	text, files, skills, err := input.ParseAndLoadResources(current.Input)
 	if err != nil {
 		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage(err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			app.state = stateIdle
 			app.steeringInterruptIssued = false
 			app.stopLoader()
@@ -837,7 +837,7 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 	if len(skills) > 0 {
 		app.dispatchSync(func(_ tui.UIToken) {
 			for _, loaded := range skills {
-				app.appendMessage("↪ "+loaded.Name+" skill loaded", theme.BorderThin, theme.ColorMuted, theme.ColorMuted, false)
+				app.appendMessage("↪ "+loaded.Name+" skill loaded", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
 			}
 		})
 	}
@@ -868,7 +868,7 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 			app.dispatchSync(func(_ tui.UIToken) {
 				app.stopLoader()
 				app.state = stateIdle
-				app.appendMessage("Compaction failed, retry aborted: "+compactErr.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+				app.appendMessage("Compaction failed, retry aborted: "+compactErr.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 				app.refreshStatus()
 			})
 			return queuedPrompt{}, false
@@ -897,7 +897,7 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 		app.flushReply()
 		app.cancelPendingTools()
 		if err != nil && err != tools.ErrCancelled && !strings.Contains(err.Error(), "context canceled") {
-			app.appendMessage(err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		}
 		app.state = stateIdle
 		app.steeringInterruptIssued = false
@@ -911,7 +911,7 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 	if applyThinkingLevel && app.session != nil {
 		if reconfigureErr := app.session.Reconfigure(app.cfg); reconfigureErr != nil {
 			app.dispatchSync(func(_ tui.UIToken) {
-				app.appendMessage("failed to apply thinking level: "+reconfigureErr.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+				app.appendMessage("failed to apply thinking level: "+reconfigureErr.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			})
 		}
 	}
@@ -940,7 +940,7 @@ func (app *ChatApp) enqueueSteering(input string, opts promptRunOptions) {
 		preview = string(runes[:79]) + "…"
 	}
 
-	app.appendMessage("↪ steering queued: "+preview, theme.BorderThin, theme.ColorMuted, theme.ColorMuted, false)
+	app.appendMessage("↪ steering queued: "+preview, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
 }
 
 func (app *ChatApp) maybeIssueSteeringInterrupt() {
@@ -978,7 +978,7 @@ func (app *ChatApp) handleCommand(input string) {
 	})
 	if compacting {
 		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("compaction in progress; wait until it completes", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+			app.appendMessage("compaction in progress; wait until it completes", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		})
 		return
 	}
@@ -1000,7 +1000,7 @@ func (app *ChatApp) handleCommand(input string) {
 	case cmd == "new":
 		if err := app.reloadFromScratch(""); err != nil {
 			app.dispatchSync(func(_ tui.UIToken) {
-				app.appendMessage("failed to reset session: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+				app.appendMessage("failed to reset session: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			})
 		}
 	case cmd == "sessions":
@@ -1012,14 +1012,14 @@ func (app *ChatApp) handleCommand(input string) {
 		go func() {
 			if err := app.compactConversation(instructions); err != nil {
 				app.dispatchSync(func(_ tui.UIToken) {
-					app.appendMessage("/compact failed: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+					app.appendMessage("/compact failed: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 				})
 			}
 		}()
 	case cmd == "help":
 		app.dispatchSync(func(_ tui.UIToken) {
 			app.appendSpacer()
-			app.appendMessage(helpText(), theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+			app.appendMessage(helpText(), theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		})
 	case cmd == "templates":
 		app.dispatchSync(func(_ tui.UIToken) { app.showTemplates() })
@@ -1032,7 +1032,7 @@ func (app *ChatApp) handleCommand(input string) {
 			return
 		}
 		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("unknown command: "+cmd, theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage("unknown command: "+cmd, theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		})
 	}
 }
@@ -1062,7 +1062,7 @@ func (app *ChatApp) showTemplates() {
 	result := prompts.Load()
 	if len(result.Templates) == 0 {
 		app.appendSpacer()
-		app.appendMessage("no prompt templates loaded", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+		app.appendMessage("no prompt templates loaded", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 
@@ -1103,7 +1103,7 @@ func (app *ChatApp) showTemplates() {
 	}
 
 	app.appendSpacer()
-	app.appendMessage(strings.TrimSpace(b.String()), theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+	app.appendMessage(strings.TrimSpace(b.String()), theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 }
 
 func (app *ChatApp) tryRunTemplateCommand(name, argsString string) bool {
@@ -1115,14 +1115,14 @@ func (app *ChatApp) tryRunTemplateCommand(name, argsString string) bool {
 
 	if _, reserved := builtinSlashCommands()[tmpl.Name]; reserved {
 		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("template /"+tmpl.Name+" is reserved by a built-in command", theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage("template /"+tmpl.Name+" is reserved by a built-in command", theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		})
 		return true
 	}
 	argsString = strings.TrimSpace(argsString)
 	if argsString == "" && templateNeedsArguments(tmpl.Content) {
 		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("template /"+tmpl.Name+" requires arguments", theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage("template /"+tmpl.Name+" requires arguments", theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		})
 		return true
 	}
@@ -1141,8 +1141,8 @@ func (app *ChatApp) tryRunTemplateCommand(name, argsString string) bool {
 				app.appendMessage(
 					"template /"+tmpl.Name+" has unknown allowed-tools: "+strings.Join(unknown, ", "),
 					theme.BorderThin,
-					theme.ColorDanger,
-					theme.ColorForeground,
+					theme.Default.Danger.Ansi24,
+					theme.Default.Foreground.Ansi24,
 					false,
 				)
 			})
@@ -1190,12 +1190,12 @@ func unescapedToken(content, token string) bool {
 
 func (app *ChatApp) showForkSelector() {
 	if app.state == stateRunning {
-		app.appendMessage("cannot fork while a response is running; interrupt first", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+		app.appendMessage("cannot fork while a response is running; interrupt first", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 
 	if app.session == nil || app.session.Agent() == nil || app.session.ID() == "" {
-		app.appendMessage("no active conversation to fork", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+		app.appendMessage("no active conversation to fork", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 
@@ -1204,11 +1204,11 @@ func (app *ChatApp) showForkSelector() {
 		candidates, err := app.loadForkCandidates(context.Background())
 		app.dispatchSync(func(_ tui.UIToken) {
 			if err != nil {
-				app.appendMessage("failed to load messages for /fork: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+				app.appendMessage("failed to load messages for /fork: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 				return
 			}
 			if len(candidates) == 0 {
-				app.appendMessage("no previous user messages to fork", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+				app.appendMessage("no previous user messages to fork", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 				return
 			}
 			app.showSelector(func(done func()) tui.Component {
@@ -1218,7 +1218,7 @@ func (app *ChatApp) showForkSelector() {
 						go func() {
 							if err := app.applyForkCandidate(context.Background(), candidate); err != nil {
 								app.dispatchSync(func(_ tui.UIToken) {
-									app.appendMessage("/fork failed: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+									app.appendMessage("/fork failed: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 								})
 							}
 						}()
@@ -1349,7 +1349,7 @@ func (app *ChatApp) modelSwitchBlocked() bool {
 	if app.state != stateRunning {
 		return false
 	}
-	app.appendMessage("cannot switch models while a response is running; interrupt first", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+	app.appendMessage("cannot switch models while a response is running; interrupt first", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 	return true
 }
 
@@ -1358,11 +1358,11 @@ func (app *ChatApp) showModelSelector() {
 		return
 	}
 	if app.store == nil {
-		app.appendMessage("no model store available", theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+		app.appendMessage("no model store available", theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 	if len(app.store.List()) == 0 {
-		app.appendMessage("no models configured", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+		app.appendMessage("no models configured", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 
@@ -1375,10 +1375,10 @@ func (app *ChatApp) showModelSelector() {
 			},
 			func(name string) {
 				if err := app.store.Delete(name); err != nil {
-					app.appendMessage(err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+					app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 				} else {
 					app.appendSpacer()
-					app.appendMessage("deleted model: "+name, theme.BorderThin, theme.ColorSuccess, theme.ColorForeground, false)
+					app.appendMessage("deleted model: "+name, theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, false)
 					app.refreshHeader()
 				}
 			},
@@ -1398,22 +1398,22 @@ func (app *ChatApp) applyModelChoice(name string) {
 	}
 	modelCfg, ok := app.store.Get(name)
 	if !ok {
-		app.appendMessage("model not found: "+name, theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+		app.appendMessage("model not found: "+name, theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 	if err := app.store.SetDefault(name); err != nil {
-		app.appendMessage(err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+		app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 	applyModelConfig(app.cfg, modelCfg)
 	if app.session != nil {
 		if err := app.session.Reconfigure(app.cfg); err != nil {
-			app.appendMessage(err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			return
 		}
 	}
 	app.appendSpacer()
-	app.appendMessage("switched to "+name, theme.BorderThin, theme.ColorSuccess, theme.ColorForeground, false)
+	app.appendMessage("switched to "+name, theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, false)
 	app.refreshHeader()
 }
 
@@ -1457,20 +1457,20 @@ func (app *ChatApp) applyModelAdd(result ModelAddResult) {
 		return
 	}
 	if app.store == nil {
-		app.appendMessage("no model store available", theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+		app.appendMessage("no model store available", theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 
 	if strings.EqualFold(result.ProviderID, catalog.OpenAICodexProviderID) && strings.TrimSpace(result.APIKey) == "" {
 		app.appendSpacer()
-		app.appendMessage("starting OpenAI Codex OAuth login...", theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+		app.appendMessage("starting OpenAI Codex OAuth login...", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		if _, err := bridgecfg.EnsureOpenAICodexOAuth(context.Background(), func(msg string) {
-			app.appendMessage(msg, theme.BorderThin, theme.ColorMuted, theme.ColorForeground, false)
+			app.appendMessage(msg, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		}); err != nil {
-			app.appendMessage("openai-codex login failed: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage("openai-codex login failed: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			return
 		}
-		app.appendMessage("openai-codex login successful", theme.BorderThin, theme.ColorSuccess, theme.ColorForeground, false)
+		app.appendMessage("openai-codex login successful", theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, false)
 	}
 
 	maxTokens := int(result.MaxTokens)
@@ -1502,24 +1502,24 @@ func (app *ChatApp) applyModelAdd(result ModelAddResult) {
 	}
 
 	if err := app.store.Add(modelCfg); err != nil {
-		app.appendMessage(err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+		app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 	_ = app.store.SetDefault(modelCfg.Name)
 
 	applyModelConfig(app.cfg, modelCfg)
 	if err := app.cfg.ConfigureProviders(); err != nil {
-		app.appendMessage("failed to configure providers: "+err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+		app.appendMessage("failed to configure providers: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 	if app.session != nil {
 		if err := app.session.Reconfigure(app.cfg); err != nil {
-			app.appendMessage(err.Error(), theme.BorderThin, theme.ColorDanger, theme.ColorForeground, false)
+			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			return
 		}
 	}
 	app.appendSpacer()
-	app.appendMessage("model configured: "+result.ProviderID+"/"+result.ModelID, theme.BorderThin, theme.ColorSuccess, theme.ColorForeground, false)
+	app.appendMessage("model configured: "+result.ProviderID+"/"+result.ModelID, theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, false)
 	app.refreshHeader()
 }
 
@@ -1544,7 +1544,7 @@ func (app *ChatApp) interruptRun() {
 	app.cancelPendingTools()
 	app.steeringQueue.Clear()
 	app.steeringInterruptIssued = false
-	app.appendMessage("(interrupted)", theme.BorderThin, theme.ColorMuted, theme.ColorMuted, false)
+	app.appendMessage("(interrupted)", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
 	app.stopLoader()
 }
 
@@ -1561,13 +1561,11 @@ func (app *ChatApp) cancelPendingTools() {
 // ---------------------------------------------------------------------------
 
 func (app *ChatApp) toggleBlocksExpanded() {
+	type expandable interface{ SetExpanded(bool) }
 	app.blocksExpanded = !app.blocksExpanded
 	expanded := app.blocksExpanded
-	items := make([]historyEntry, len(app.items))
-	copy(items, app.items)
-	for _, entry := range items {
-		type expandable interface{ SetExpanded(bool) }
-		if e, ok := entry.component.(expandable); ok {
+	for i := range app.items {
+		if e, ok := app.items[i].component.(expandable); ok {
 			e.SetExpanded(expanded)
 		}
 	}

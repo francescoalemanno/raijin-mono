@@ -129,37 +129,37 @@ func (w *WelcomeComponent) Render(width int) []string {
 	logoLines := strings.Split(asciiArtLogo, "\n")
 	for _, line := range logoLines {
 		if strings.TrimSpace(line) != "" {
-			lines = append(lines, truncLine(w.centerLine(theme.ColorAccent(line), width)))
+			lines = append(lines, truncLine(w.centerLine(theme.Default.Accent.Ansi24(line), width)))
 		}
 	}
 
 	// Separator
-	lines = append(lines, truncLine(w.centerLine(theme.ColorMuted("─"+strings.Repeat("─", max(0, contentWidth-2))+"─"), width)))
+	lines = append(lines, truncLine(w.centerLine(theme.Default.Muted.Ansi24("─"+strings.Repeat("─", max(0, contentWidth-2))+"─"), width)))
 
 	// Version (centered below the logo)
 	if version.Version != "" {
-		lines = append(lines, truncLine(w.centerLine(theme.ColorMuted("v"+version.Version), width)))
+		lines = append(lines, truncLine(w.centerLine(theme.Default.Muted.Ansi24("v"+version.Version), width)))
 	}
 
 	// Random quote
 	quote := welcomeQuotes[rand.Intn(len(welcomeQuotes))]
-	quoteLines := utils.WrapTextWithAnsi(theme.ColorMuted("✦ ")+theme.ColorAccentAlt(quote), max(1, contentWidth-4))
+	quoteLines := utils.WrapTextWithAnsi(theme.Default.Muted.Ansi24("✦ ")+theme.Default.AccentAlt.Ansi24(quote), max(1, contentWidth-4))
 	for _, line := range quoteLines {
 		lines = append(lines, truncLine(w.padLine("  "+line, width)))
 	}
 
 	// Separator
-	lines = append(lines, truncLine(w.centerLine(theme.ColorMuted("─"+strings.Repeat("─", max(0, contentWidth-2))+"─"), width)))
+	lines = append(lines, truncLine(w.centerLine(theme.Default.Muted.Ansi24("─"+strings.Repeat("─", max(0, contentWidth-2))+"─"), width)))
 
 	// Quick Start section
-	lines = append(lines, truncLine(w.centerLine(theme.ColorAccentAltBold("QUICK START"), width)))
+	lines = append(lines, truncLine(w.centerLine(theme.Default.AccentAlt.AnsiBold("QUICK START"), width)))
 	lines = append(lines, "")
 
 	quickStart := []string{
-		"Type your message and press " + theme.ColorAccent("Enter") + " to chat",
-		"Press " + theme.ColorAccent("Ctrl+P") + " to switch models",
-		"Press " + theme.ColorAccent("Ctrl+O") + " to expand/collapse tool blocks",
-		"Type " + theme.ColorAccent("/help") + " for all commands",
+		"Type your message and press " + theme.Default.Accent.Ansi24("Enter") + " to chat",
+		"Press " + theme.Default.Accent.Ansi24("Ctrl+P") + " to switch models",
+		"Press " + theme.Default.Accent.Ansi24("Ctrl+O") + " to expand/collapse tool blocks",
+		"Type " + theme.Default.Accent.Ansi24("/help") + " for all commands",
 	}
 	for _, tip := range quickStart {
 		lines = append(lines, truncLine(w.padLine("  "+tip, width)))
@@ -167,17 +167,17 @@ func (w *WelcomeComponent) Render(width int) []string {
 
 	// Separator
 	lines = append(lines, "")
-	lines = append(lines, truncLine(w.centerLine(theme.ColorMuted("─"+strings.Repeat("─", max(0, contentWidth-2))+"─"), width)))
+	lines = append(lines, truncLine(w.centerLine(theme.Default.Muted.Ansi24("─"+strings.Repeat("─", max(0, contentWidth-2))+"─"), width)))
 
 	// Commands section
-	lines = append(lines, truncLine(w.centerLine(theme.ColorAccentAltBold("COMMANDS"), width)))
+	lines = append(lines, truncLine(w.centerLine(theme.Default.AccentAlt.AnsiBold("COMMANDS"), width)))
 	lines = append(lines, "")
 
 	commands := commandNamesDescs
 
 	for _, c := range commands {
-		cmdStr := theme.ColorAccent(c.Command)
-		descStr := theme.ColorMuted(c.Desc)
+		cmdStr := theme.Default.Accent.Ansi24(c.Command)
+		descStr := theme.Default.Muted.Ansi24(c.Desc)
 		fullLine := "  " + cmdStr + strings.Repeat(" ", 12-len(c.Command)) + descStr
 		lines = append(lines, truncLine(w.padLine(fullLine, width)))
 	}
@@ -185,13 +185,13 @@ func (w *WelcomeComponent) Render(width int) []string {
 	if len(w.tools) > 0 || len(w.skills) > 0 {
 		// Separator
 		lines = append(lines, "")
-		lines = append(lines, truncLine(w.centerLine(theme.ColorMuted("─"+strings.Repeat("─", max(0, contentWidth-2))+"─"), width)))
+		lines = append(lines, truncLine(w.centerLine(theme.Default.Muted.Ansi24("─"+strings.Repeat("─", max(0, contentWidth-2))+"─"), width)))
 
 		// Loaded runtime section
-		lines = append(lines, truncLine(w.centerLine(theme.ColorAccentAltBold("LOADED"), width)))
+		lines = append(lines, truncLine(w.centerLine(theme.Default.AccentAlt.AnsiBold("LOADED"), width)))
 		lines = append(lines, "")
 		if len(w.tools) > 0 {
-			lines = append(lines, truncLine(w.padLine("  "+theme.ColorAccent("Custom tools")+theme.ColorMuted(" ("+countLabel(len(w.tools))+")"), width)))
+			lines = append(lines, truncLine(w.padLine("  "+theme.Default.Accent.Ansi24("Custom tools")+theme.Default.Muted.Ansi24(" ("+countLabel(len(w.tools))+")"), width)))
 			for _, line := range w.renderNameList(w.tools, contentWidth-4) {
 				lines = append(lines, truncLine(w.padLine("    "+line, width)))
 			}
@@ -200,7 +200,7 @@ func (w *WelcomeComponent) Render(width int) []string {
 			lines = append(lines, "")
 		}
 		if len(w.skills) > 0 {
-			lines = append(lines, truncLine(w.padLine("  "+theme.ColorAccent("Custom skills")+theme.ColorMuted(" ("+countLabel(len(w.skills))+")"), width)))
+			lines = append(lines, truncLine(w.padLine("  "+theme.Default.Accent.Ansi24("Custom skills")+theme.Default.Muted.Ansi24(" ("+countLabel(len(w.skills))+")"), width)))
 			for _, line := range w.renderNameList(w.skills, contentWidth-4) {
 				lines = append(lines, truncLine(w.padLine("    "+line, width)))
 			}
@@ -235,7 +235,7 @@ func (w *WelcomeComponent) padLine(text string, width int) string {
 }
 
 func (w *WelcomeComponent) renderNameList(names []string, width int) []string {
-	return utils.WrapTextWithAnsi(strings.Join(names, theme.ColorMuted(", ")), max(1, width))
+	return utils.WrapTextWithAnsi(strings.Join(names, theme.Default.Muted.Ansi24(", ")), max(1, width))
 }
 
 func sanitizeNames(names []string) []string {

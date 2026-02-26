@@ -75,7 +75,7 @@ func TestRenderDiffPreviewNeutralLinesAreMuted(t *testing.T) {
 	if contextLine == "" {
 		t.Fatalf("expected context line in diff: %q", diff)
 	}
-	if !strings.Contains(contextLine, ansiPrefix(theme.ColorMuted)) {
+	if !strings.Contains(contextLine, ansiPrefix(theme.Default.Muted.Ansi24)) {
 		t.Fatalf("expected muted foreground in context line, got %q", contextLine)
 	}
 }
@@ -102,10 +102,10 @@ func TestRenderDiffPreviewColorsAddedAndRemovedWithForeground(t *testing.T) {
 			removedLine = line
 		}
 	}
-	if addedLine == "" || !strings.Contains(addedLine, ansiPrefix(theme.ColorDiffAdded)) {
+	if addedLine == "" || !strings.Contains(addedLine, ansiPrefix(theme.Default.DiffAdded.Ansi24)) {
 		t.Fatalf("expected added line with light green foreground, got %q", addedLine)
 	}
-	if removedLine == "" || !strings.Contains(removedLine, ansiPrefix(theme.ColorDiffRemoved)) {
+	if removedLine == "" || !strings.Contains(removedLine, ansiPrefix(theme.Default.DiffRemoved.Ansi24)) {
 		t.Fatalf("expected removed line with light red foreground, got %q", removedLine)
 	}
 	if strings.Contains(addedLine, "\x1b[48;2;") || strings.Contains(removedLine, "\x1b[48;2;") {
