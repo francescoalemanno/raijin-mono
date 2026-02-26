@@ -2,70 +2,99 @@
 
 ![Raijin](raijin.png)
 
-Raijin is an AI-powered command line assistant written in Go. A coding agent that does the bare minimum.
+Raijin is an AI coding assistant that lives in your terminal.
 
-## The Philosophy: Less Is More
+If you like fast iteration, direct control, and minimal ceremony, this is for you.
 
-Most coding agents are bloated. They come with MCP servers, a dozen integrations, permission dialogs, and safety rails that get in your way. We think that's unnecessary.
+## Why Raijin
 
-Raijin strips away the complexity. No MCP. No excessive tool bloat. No hidden sub-agents. Just a model, a terminal, and eight tools.
+Most coding agents add layers: external servers, extra approvals, complex setup, hidden workflows.
+Raijin keeps the loop short:
 
-## Why This Works
+- one terminal UI
+- one active model
+- a small toolset
+- explicit commands
 
-Models already understand how to code. They don't need elaborate system prompts or curated tool descriptions. Give them read, write, edit, and bash—and they'll figure out the rest.
+No MCP. No hidden sub-agents. No permission popups.
 
-The "agent" part doesn't need to be complex. It's just:
-1. Read the conversation
-2. Decide what to do
-3. Call a tool
-4. Repeat
-
-That's it.
-
-## The Toolset
-
-Raijin has exactly what you need to act on files:
+## Built-in tools
 
 | Tool | Purpose |
 |------|---------|
-| **read** | Inspect files |
-| **write** | Create or overwrite files |
-| **edit** | Surgical in-place edits |
-| **bash** | Execute commands |
-| **grep** | Search file contents |
-| **glob** | Find files by pattern |
-| **webfetch** | Fetch web pages, convert to clean Markdown |
-| **skill** | Load reusable workflows |
+| `read` | Inspect files |
+| `write` | Create or overwrite files |
+| `edit` | Surgical in-place edits |
+| `bash` | Execute shell commands |
+| `grep` | Search file contents |
+| `glob` | Find files by pattern |
+| `webfetch` | Fetch web pages as clean Markdown |
+| `skill` | Load reusable workflows |
 
-That's all. No MCP servers to configure. No external service dependencies. Just you, your terminal, and the model.
+## What you can do right away
 
-## Provider Support
+- Ask directly in the TUI
+- Start with one-shot CLI prompts
+- Attach files with `@path` (text and images)
+- Inject shell output with `~~ command` without copy-paste
+- Load skills inline with `$skill-name`
+- Use reusable prompt templates with `/template-name args` (for example `/amplify add a tool that checks Jira status`)
+- Fork a conversation from any previous user prompt with `/fork`
+- Resume old chats with `/sessions`
+- Compact long history with `/compact` (also auto-runs on context overflow)
 
-Raijin supports almost all providers from the Charmbracelet/Fantasy library, plus ChatGPT Codex Plan and OpenCodeZen. We also improve the synthetic provider by fetching models directly from their API.
+## Slash commands
 
-We haven't been able to test all providers personally (it takes API keys and money), but if you run into issues with a specific provider, we should be able to fix it soon enough.
+- `/help` - show command help
+- `/new` - start a fresh conversation
+- `/models` - switch model
+- `/models add` - add and configure models/providers
+- `/sessions` - browse and resume prior sessions
+- `/fork` - branch from a previous user prompt
+- `/compact [instructions]` - summarize old context, keep recent context
+- `/templates` - list prompt templates and source
+- `/exit` - quit
 
-## Features
+## Keyboard shortcuts
 
-- **`~~ expansion`** - Expand git/bash command output directly in your prompt to send to the LLM without copy-paste
-- **`/amplify`** - Generate custom tools, skills, or prompt templates for your own use -- e.g. Search Engine tool ;)
-- **Prompt templates** - Build reusable prompts for recurring tasks
-- **Skills** - Callable both by the LLM and manually by the user using the $SkillName syntax (works also within prompt templates)
-- **Session persistence** - Resume past sessions seamlessly
-- **Compaction** - Split session history to keep recent interactions intact while compressing earlier ones
-- **`/fork`** - Fork a session at any user prompt to branch from a good checkpoint
+- `Ctrl+P` - open model selector
+- `Ctrl+O` - expand/collapse tool output blocks
+- `Ctrl+T` or `Shift+Tab` - cycle thinking level
+- `Ctrl+C` or `Esc` - interrupt current run
+- `Ctrl+D` - quit
 
-## What You Don't Get
+## Prompt templates and skills
 
-- MCP tool support
-- Permission prompts or safety rails
-- Hidden sub-agents or black boxes
-- Complex configuration files
-- "Are you sure?" dialogs
+Raijin supports three template/skill layers with precedence:
 
-If you need safety, run Raijin in a container. That's what we do.
+1. Project
+2. User
+3. Embedded defaults
+
+You can:
+
+- invoke templates as slash commands
+- pass template args (`$@`, `$1`, `${@:2}`, `{{ARGUMENTS}}`)
+- restrict template tool access via `allowed-tools`
+- call skills from prompts via `$skill-name`
+
+Built-in templates include:
+
+- `/amplify` - generate or update Raijin extensions (skills, plugin tools, prompt templates)
+- `/plan` - produce a concrete implementation plan before coding
+- `/init` - generate or refresh an `AGENTS.md` for the current repository
+
+## Custom extensions
+
+You can extend Raijin without changing core code:
+
+- Plugin tools from `.agents/plugins` (project) or user plugin directory
+- Skills from `.agents/skills` (project) or user skill directory
+- Prompt templates from `.agents/prompts` (project) or user prompt directory
 
 ## Installation
+
+Build from source:
 
 ```bash
 go build -o raijin ./cmd/raijin
@@ -84,16 +113,19 @@ go build -o raijin ./cmd/raijin
 
 ```bash
 go test ./...
+go test -race ./...
 go build ./...
+go test ./vetting/...
 staticcheck ./...
 gofumpt -l -w .
 ```
 
-For cross-platform builds:
+Cross-platform release builds:
+
 ```bash
 ./build-all.sh
 ```
 
 ## Credits
 
-A special mention goes to Mario Zechner, creator of the Pi coding agent. He's built an awesome coding agent following the same philosophy, along with excellent libraries that helped bring this project forward. The libtui TUI rendering library was ported from his TypeScript implementation to Go.
+Special mention to Mario Zechner, creator of Pi. Raijin shares a similar philosophy, and the TUI foundation is ported from his TypeScript work.
