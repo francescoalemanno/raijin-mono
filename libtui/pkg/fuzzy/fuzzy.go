@@ -1,7 +1,6 @@
 package fuzzy
 
 import (
-	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -13,89 +12,172 @@ type FuzzyMatch struct {
 	Score   float64
 }
 
-// Match checks if query matches text using fuzzy matching
-// Characters must appear in order, not necessarily consecutively
-// Lower score = better match
+type scoreWeights struct {
+	scoreExactFull           float64
+	scoreExactStart          float64
+	scoreWordBoundaryHit     float64
+	scoreSubstringHit        float64
+	scoreWeakSubseqBase      float64
+	bonusSubseqFirstBoundary float64
+	penaltyLatePosFactor     float64
+	penaltyGapFactor         float64
+	penaltyPrefixTailFactor  float64
+	penaltySwappedToken      float64
+}
+
+var defaultScoreWeights = scoreWeights{
+	scoreExactFull:           -100.0,
+	scoreExactStart:          -60.0,
+	scoreWordBoundaryHit:     -40.0,
+	scoreSubstringHit:        -3.0,
+	scoreWeakSubseqBase:      -5.0,
+	bonusSubseqFirstBoundary: -8.0,
+	penaltyLatePosFactor:     1.0,
+	penaltyGapFactor:         2.0,
+	penaltyPrefixTailFactor:  0.5,
+	penaltySwappedToken:      15.0,
+}
+
+// Match checks if query matches text using additive heuristic weights.
+// Stronger evidence gets lower (better) scores, while later and gappier
+// matches incur penalties. Lower score = better match.
 func Match(query, text string) FuzzyMatch {
-	queryLower := strings.ToLower(query)
-	textLower := strings.ToLower(text)
+	return matchWithWeights(query, text, defaultScoreWeights)
+}
 
-	matchQuery := func(normalizedQuery string) FuzzyMatch {
-		if normalizedQuery == "" {
-			return FuzzyMatch{Matches: true, Score: 0}
-		}
-
-		if len(normalizedQuery) > len(textLower) {
-			return FuzzyMatch{Matches: false, Score: 0}
-		}
-
-		queryIndex := 0
-		score := 0.0
-		lastMatchIndex := -1
-		consecutiveMatches := 0
-
-		for i := 0; i < len(textLower) && queryIndex < len(normalizedQuery); i++ {
-			if textLower[i] == normalizedQuery[queryIndex] {
-				isWordBoundary := i == 0 || isWordBoundaryChar(rune(textLower[i-1]))
-
-				// Reward consecutive matches
-				if lastMatchIndex == i-1 {
-					consecutiveMatches++
-					score -= float64(consecutiveMatches * 5)
-				} else {
-					consecutiveMatches = 0
-					// Penalize gaps
-					if lastMatchIndex >= 0 {
-						score += float64((i - lastMatchIndex - 1) * 2)
-					}
-				}
-
-				// Reward word boundary matches
-				if isWordBoundary {
-					score -= 10
-				}
-
-				// Slight penalty for later matches
-				score += float64(i) * 0.1
-
-				lastMatchIndex = i
-				queryIndex++
-			}
-		}
-
-		if queryIndex < len(normalizedQuery) {
-			return FuzzyMatch{Matches: false, Score: 0}
-		}
-
-		return FuzzyMatch{Matches: true, Score: score}
+func matchWithWeights(query, text string, w scoreWeights) FuzzyMatch {
+	q := strings.ToLower(strings.TrimSpace(query))
+	t := strings.ToLower(text)
+	if q == "" {
+		return FuzzyMatch{Matches: true, Score: 0}
+	}
+	if t == "" {
+		return FuzzyMatch{Matches: false, Score: 0}
 	}
 
-	primaryMatch := matchQuery(queryLower)
-	if primaryMatch.Matches {
-		return primaryMatch
+	primary := matchCoreWithWeights(q, t, w)
+	if primary.Matches {
+		return primary
 	}
 
-	// Try swapping alphanumeric tokens (e.g., "codex52" -> "52codex")
-	swappedQuery := ""
-	alphaNumericRe := regexp.MustCompile(`^([a-z]+)([0-9]+)$`)
-	numericAlphaRe := regexp.MustCompile(`^([0-9]+)([a-z]+)$`)
-
-	if matches := alphaNumericRe.FindStringSubmatch(queryLower); matches != nil {
-		swappedQuery = matches[2] + matches[1]
-	} else if matches := numericAlphaRe.FindStringSubmatch(queryLower); matches != nil {
-		swappedQuery = matches[2] + matches[1]
+	// Try swapping alphanumeric tokens (e.g., "codex52" -> "52codex").
+	swapped, ok := swappedAlphaNumericToken(q)
+	if !ok {
+		return primary
 	}
-
-	if swappedQuery == "" {
-		return primaryMatch
-	}
-
-	swappedMatch := matchQuery(swappedQuery)
+	swappedMatch := matchCoreWithWeights(swapped, t, w)
 	if !swappedMatch.Matches {
-		return primaryMatch
+		return primary
+	}
+	// Swapped-token evidence is weaker than direct evidence.
+	return FuzzyMatch{Matches: true, Score: swappedMatch.Score + w.penaltySwappedToken}
+}
+
+func matchCoreWithWeights(q, t string, w scoreWeights) FuzzyMatch {
+	score := 0.0
+	matches := false
+
+	if t == q {
+		score += w.scoreExactFull
+		matches = true
 	}
 
-	return FuzzyMatch{Matches: true, Score: swappedMatch.Score + 5}
+	if strings.HasPrefix(t, q) {
+		tail := len(t) - len(q)
+		score += w.scoreExactStart + float64(tail)*w.penaltyPrefixTailFactor
+		matches = true
+	}
+
+	if idx := strings.Index(t, q); idx >= 0 {
+		if idx == 0 || isWordBoundaryChar(rune(t[idx-1])) {
+			score += w.scoreWordBoundaryHit + float64(idx)*w.penaltyLatePosFactor
+		} else {
+			score += w.scoreSubstringHit + float64(idx)*w.penaltyLatePosFactor
+		}
+		matches = true
+	}
+
+	// Weakest evidence: ordered subsequence match with penalties.
+	subseqMatch, firstPos, gaps, firstBoundary := subsequenceEvidence(q, t)
+	if subseqMatch {
+		score += w.scoreWeakSubseqBase + float64(firstPos)*w.penaltyLatePosFactor + float64(gaps)*w.penaltyGapFactor
+		if firstBoundary {
+			score += w.bonusSubseqFirstBoundary
+		}
+		matches = true
+	}
+
+	if !matches {
+		return FuzzyMatch{Matches: false, Score: 0}
+	}
+
+	return FuzzyMatch{Matches: true, Score: score}
+}
+
+func subsequenceEvidence(q, t string) (bool, int, int, bool) {
+	qi := 0
+	last := -1
+	gaps := 0
+	firstPos := -1
+	firstBoundary := false
+	for i := 0; i < len(t) && qi < len(q); i++ {
+		if t[i] != q[qi] {
+			continue
+		}
+		if firstPos < 0 {
+			firstPos = i
+			firstBoundary = i == 0 || isWordBoundaryChar(rune(t[i-1]))
+		}
+		if last >= 0 && i > last+1 {
+			gaps += i - last - 1
+		}
+		last = i
+		qi++
+	}
+	if qi < len(q) {
+		return false, -1, 0, false
+	}
+	return true, firstPos, gaps, firstBoundary
+}
+
+func swappedAlphaNumericToken(q string) (string, bool) {
+	if q == "" {
+		return "", false
+	}
+	isLetter := func(b byte) bool { return b >= 'a' && b <= 'z' }
+	isDigit := func(b byte) bool { return b >= '0' && b <= '9' }
+
+	// letters + digits
+	i := 0
+	for i < len(q) && isLetter(q[i]) {
+		i++
+	}
+	if i > 0 {
+		j := i
+		for j < len(q) && isDigit(q[j]) {
+			j++
+		}
+		if j == len(q) && i < len(q) {
+			return q[i:] + q[:i], true
+		}
+	}
+
+	// digits + letters
+	i = 0
+	for i < len(q) && isDigit(q[i]) {
+		i++
+	}
+	if i > 0 {
+		j := i
+		for j < len(q) && isLetter(q[j]) {
+			j++
+		}
+		if j == len(q) && i < len(q) {
+			return q[i:] + q[:i], true
+		}
+	}
+
+	return "", false
 }
 
 // isWordBoundaryChar checks if a character is a word boundary
