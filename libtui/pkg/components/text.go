@@ -23,11 +23,17 @@ type Text struct {
 	paddingX   int                 // Left/right padding
 	paddingY   int                 // Top/bottom padding
 	customBgFn func(string) string // Optional background function
+	fgColorFn  func(string) string // Optional foreground color for padding/margins
 
 	// Cache for rendered output
 	cachedText  string
 	cachedWidth int
 	cachedLines []string
+}
+
+// SetFgColorFn sets the foreground color function for padding/margins.
+func (t *Text) SetFgColorFn(fn func(string) string) {
+	t.fgColorFn = fn
 }
 
 // SetText changes the text content and invalidates cache.
@@ -89,6 +95,11 @@ func (t *Text) Render(width int) []string {
 	// Add margins and background to each line
 	leftMargin := strings.Repeat(" ", effectivePaddingX)
 	rightMargin := strings.Repeat(" ", effectivePaddingX)
+	// Apply foreground color to margins if specified
+	if t.fgColorFn != nil {
+		leftMargin = t.fgColorFn(leftMargin)
+		rightMargin = t.fgColorFn(rightMargin)
+	}
 	contentLines := []string{}
 
 	for _, line := range wrappedLines {
@@ -105,12 +116,19 @@ func (t *Text) Render(width int) []string {
 			if paddingNeeded < 0 {
 				paddingNeeded = 0
 			}
-			contentLines = append(contentLines, utils.TruncateToWidth(lineWithMargins+strings.Repeat(" ", paddingNeeded), width, ""))
+			padding := strings.Repeat(" ", paddingNeeded)
+			if t.fgColorFn != nil {
+				padding = t.fgColorFn(padding)
+			}
+			contentLines = append(contentLines, utils.TruncateToWidth(lineWithMargins+padding, width, ""))
 		}
 	}
 
 	// Add top/bottom padding (empty lines)
 	emptyLine := strings.Repeat(" ", width)
+	if t.fgColorFn != nil {
+		emptyLine = t.fgColorFn(emptyLine)
+	}
 	emptyLines := []string{}
 	for i := 0; i < t.paddingY; i++ {
 		var line string

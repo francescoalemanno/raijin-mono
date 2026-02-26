@@ -32,6 +32,9 @@ type Input struct {
 
 	// Undo support
 	undoStack *utils.UndoStack[InputState]
+
+	// Theme function for styling padding spaces
+	paddingColorFn func(string) string
 }
 
 // NewInput creates a new Input component.
@@ -41,6 +44,11 @@ func NewInput() *Input {
 		killRing:  utils.NewKillRing(),
 		focused:   false,
 	}
+}
+
+// SetPaddingColorFn sets the theme function for styling padding spaces.
+func (i *Input) SetPaddingColorFn(fn func(string) string) {
+	i.paddingColorFn = fn
 }
 
 // GetValue returns the current input value.
@@ -614,6 +622,10 @@ func (i *Input) Render(width int) []string {
 	padding := ""
 	if availableWidth-visualLength > 0 {
 		padding = strings.Repeat(" ", availableWidth-visualLength)
+	}
+	// Apply theme color to padding if provided
+	if i.paddingColorFn != nil && padding != "" {
+		padding = i.paddingColorFn(padding)
 	}
 	line := prompt + textWithCursor + padding
 

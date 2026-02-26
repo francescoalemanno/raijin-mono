@@ -18,9 +18,15 @@ func NewTruncatedText(text string, paddingX, paddingY int) *TruncatedText {
 
 // TruncatedText component that truncates text to fit viewport width.
 type TruncatedText struct {
-	text     string
-	paddingX int // Horizontal padding (left and right)
-	paddingY int // Vertical padding (top and bottom)
+	text      string
+	paddingX  int                 // Horizontal padding (left and right)
+	paddingY  int                 // Vertical padding (top and bottom)
+	fgColorFn func(string) string // Optional foreground color for padding
+}
+
+// SetFgColorFn sets the foreground color function for padding.
+func (t *TruncatedText) SetFgColorFn(fn func(string) string) {
+	t.fgColorFn = fn
 }
 
 // Invalidate clears cached state (no-op for TruncatedText).
@@ -43,6 +49,9 @@ func (t *TruncatedText) Render(width int) []string {
 
 	// Empty line padded to width
 	emptyLine := strings.Repeat(" ", width)
+	if t.fgColorFn != nil {
+		emptyLine = t.fgColorFn(emptyLine)
+	}
 
 	// Add vertical padding above
 	for i := 0; i < t.paddingY; i++ {
@@ -70,6 +79,11 @@ func (t *TruncatedText) Render(width int) []string {
 	// Add horizontal padding
 	leftPadding := strings.Repeat(" ", effectivePaddingX)
 	rightPadding := strings.Repeat(" ", effectivePaddingX)
+	// Apply foreground color to padding if specified
+	if t.fgColorFn != nil {
+		leftPadding = t.fgColorFn(leftPadding)
+		rightPadding = t.fgColorFn(rightPadding)
+	}
 	lineWithPadding := leftPadding + displayText + rightPadding
 
 	// Pad line to exactly width characters
@@ -79,7 +93,11 @@ func (t *TruncatedText) Render(width int) []string {
 	if paddingNeeded < 0 {
 		paddingNeeded = 0
 	}
-	finalLine = finalLine + strings.Repeat(" ", paddingNeeded)
+	padding := strings.Repeat(" ", paddingNeeded)
+	if t.fgColorFn != nil {
+		padding = t.fgColorFn(padding)
+	}
+	finalLine = finalLine + padding
 
 	result = append(result, finalLine)
 

@@ -18,6 +18,7 @@ type SelectItem struct {
 
 // SelectListTheme defines the theme for SelectList rendering.
 type SelectListTheme struct {
+	Prefix         func(string) string // For non-selected item prefix
 	SelectedPrefix func(string) string
 	SelectedText   func(string) string
 	Description    func(string) string
@@ -149,15 +150,21 @@ func (s *SelectList) renderItem(item SelectItem, isSelected bool, width int) []s
 		return []string{line}
 	} else {
 		prefix := "  "
+		if s.theme.Prefix != nil {
+			prefix = s.theme.Prefix(prefix)
+		}
 
 		if descriptionSingleLine != "" && width > 40 {
 			// Calculate how much space we have for value + description
-			maxValueWidth := min(30, width-len(prefix)-4)
+			maxValueWidth := min(30, width-len("  ")-4)
 			truncatedValue := utils.TruncateToWidth(displayValue, maxValueWidth, "")
 			spacing := strings.Repeat(" ", max(1, 32-len(truncatedValue)))
+			if s.theme.Prefix != nil {
+				spacing = s.theme.Prefix(spacing)
+			}
 
 			// Calculate remaining space for description
-			descriptionStart := len(prefix) + len(truncatedValue) + len(spacing)
+			descriptionStart := len("  ") + len(truncatedValue) + len(spacing)
 			remainingWidth := width - descriptionStart - 2 // -2 for safety
 
 			if remainingWidth > 10 {
@@ -169,7 +176,7 @@ func (s *SelectList) renderItem(item SelectItem, isSelected bool, width int) []s
 		}
 
 		// Not enough space for description
-		maxWidth := width - len(prefix) - 2
+		maxWidth := width - len("  ") - 2
 		line := prefix + utils.TruncateToWidth(displayValue, maxWidth, "")
 		return []string{line}
 	}

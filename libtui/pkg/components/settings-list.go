@@ -33,6 +33,7 @@ type SettingsListTheme struct {
 	Description func(text string) string
 	Cursor      string
 	Hint        func(text string) string
+	Prefix      func(text string) string // For non-selected item prefix
 }
 
 // SettingsListOptions provides configuration options for SettingsList.
@@ -206,16 +207,26 @@ func (s *SettingsList) renderItem(item SettingItem, isSelected bool, maxLabelWid
 	prefix := s.theme.Cursor
 	if !isSelected {
 		prefix = "  "
+		if s.theme.Prefix != nil {
+			prefix = s.theme.Prefix(prefix)
+		}
 	}
 	prefixWidth := utils.VisibleWidth(prefix)
 
 	// Pad label to align values
-	labelPadded := item.Label + strings.Repeat(" ", max(0, maxLabelWidth-utils.VisibleWidth(item.Label)))
+	labelPadding := strings.Repeat(" ", max(0, maxLabelWidth-utils.VisibleWidth(item.Label)))
+	if s.theme.Prefix != nil {
+		labelPadding = s.theme.Prefix(labelPadding)
+	}
+	labelPadded := item.Label + labelPadding
 	labelText := s.theme.Label(labelPadded, isSelected)
 
 	// Calculate space for value
 	separator := "  "
-	usedWidth := prefixWidth + maxLabelWidth + len(separator)
+	if s.theme.Prefix != nil {
+		separator = s.theme.Prefix(separator)
+	}
+	usedWidth := prefixWidth + maxLabelWidth + len("  ")
 	valueMaxWidth := width - usedWidth - 2
 
 	valueText := s.theme.Value(utils.TruncateToWidth(item.CurrentValue, valueMaxWidth, ""), isSelected)

@@ -210,6 +210,7 @@ type LayoutLine struct {
 // EditorTheme defines the visual theme for the editor
 type EditorTheme struct {
 	BorderColor    func(string) string
+	Foreground     func(string) string
 	ShellLineColor func(string) string
 	SelectList     SelectListTheme
 }
@@ -2009,6 +2010,11 @@ func (e *Editor) Render(width int) []string {
 		applyShellColor = func(s string) string { return s }
 	}
 
+	applyForeground := e.theme.Foreground
+	if applyForeground == nil {
+		applyForeground = func(s string) string { return s }
+	}
+
 	for _, layoutLine := range visibleLines {
 		text := layoutLine.Text
 		displayText := text
@@ -2036,7 +2042,7 @@ func (e *Editor) Render(width int) []string {
 				if layoutLine.IsShellLine {
 					displayText = applyShellColor(before) + marker + cursor + applyShellColor(restAfter)
 				} else {
-					displayText = before + marker + cursor + restAfter
+					displayText = applyForeground(before) + marker + cursor + applyForeground(restAfter)
 				}
 				// lineVisibleWidth stays the same — we're replacing, not adding
 			} else {
@@ -2045,7 +2051,7 @@ func (e *Editor) Render(width int) []string {
 				if layoutLine.IsShellLine {
 					displayText = applyShellColor(before) + marker + cursor
 				} else {
-					displayText = before + marker + cursor
+					displayText = applyForeground(before) + marker + cursor
 				}
 				lineVisibleWidth = lineVisibleWidth + 1
 				// If cursor overflows content width into the padding, flag it
@@ -2055,6 +2061,8 @@ func (e *Editor) Render(width int) []string {
 			}
 		} else if layoutLine.IsShellLine {
 			displayText = applyShellColor(text)
+		} else {
+			displayText = applyForeground(text)
 		}
 
 		padding := strings.Repeat(" ", max(0, contentWidth-lineVisibleWidth))

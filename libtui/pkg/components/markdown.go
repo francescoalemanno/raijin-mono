@@ -135,12 +135,17 @@ func (m *Markdown) Render(width int) []string {
 	emptyLine := strings.Repeat(" ", width)
 	emptyLines := make([]string, m.paddingY)
 	var bgFn func(string) string
+	var fgFn func(string) string
 	if m.defaultTextStyle != nil {
 		bgFn = m.defaultTextStyle.BgColor
+		fgFn = m.defaultTextStyle.Color
+	}
+	if fgFn != nil {
+		emptyLine = fgFn(emptyLine)
 	}
 	for i := range emptyLines {
 		if bgFn != nil {
-			emptyLines[i] = m.applyBackgroundToLine(emptyLine, width, bgFn)
+			emptyLines[i] = m.applyBackgroundToLine(strings.Repeat(" ", width), width, bgFn)
 		} else {
 			emptyLines[i] = emptyLine
 		}
@@ -633,8 +638,15 @@ func (m *Markdown) addPaddingAndBackground(lines []string, width int) []string {
 	leftMargin := strings.Repeat(" ", m.paddingX)
 	rightMargin := strings.Repeat(" ", m.paddingX)
 	var bgFn func(string) string
+	var fgFn func(string) string
 	if m.defaultTextStyle != nil {
 		bgFn = m.defaultTextStyle.BgColor
+		fgFn = m.defaultTextStyle.Color
+	}
+	// Apply foreground color to margins if available
+	if fgFn != nil {
+		leftMargin = fgFn(leftMargin)
+		rightMargin = fgFn(rightMargin)
 	}
 
 	result := make([]string, len(lines))
@@ -647,7 +659,11 @@ func (m *Markdown) addPaddingAndBackground(lines []string, width int) []string {
 			visibleLen := utils.VisibleWidth(lineWithMargins)
 			paddingNeeded := width - visibleLen
 			if paddingNeeded > 0 {
-				result[i] = lineWithMargins + strings.Repeat(" ", paddingNeeded)
+				padding := strings.Repeat(" ", paddingNeeded)
+				if fgFn != nil {
+					padding = fgFn(padding)
+				}
+				result[i] = lineWithMargins + padding
 			} else {
 				result[i] = lineWithMargins
 			}
@@ -655,6 +671,14 @@ func (m *Markdown) addPaddingAndBackground(lines []string, width int) []string {
 	}
 
 	return result
+}
+
+// getForegroundFunc returns the foreground color function if available
+func (m *Markdown) getForegroundFunc() func(string) string {
+	if m.defaultTextStyle != nil && m.defaultTextStyle.Color != nil {
+		return m.defaultTextStyle.Color
+	}
+	return nil
 }
 
 // applyBackgroundToLine applies background color to a full line
@@ -794,12 +818,19 @@ func (m *Markdown) renderTableNode(table ast.Node, availableWidth int, source []
 		}
 	}
 
+	// Get foreground color function for borders
+	fgFn := m.getForegroundFunc()
+
 	// Render top border
 	topBorderCells := make([]string, numCols)
 	for i, w := range columnWidths {
 		topBorderCells[i] = strings.Repeat("─", w)
 	}
-	lines = append(lines, fmt.Sprintf("┌─%s─┐", strings.Join(topBorderCells, "─┬─")))
+	topBorder := fmt.Sprintf("┌─%s─┐", strings.Join(topBorderCells, "─┬─"))
+	if fgFn != nil {
+		topBorder = fgFn(topBorder)
+	}
+	lines = append(lines, topBorder)
 
 	// Render header
 	headerCells := make([][]string, numCols)
@@ -824,10 +855,18 @@ func (m *Markdown) renderTableNode(table ast.Node, availableWidth int, source []
 			if lineIdx < len(headerCells[i]) {
 				t = headerCells[i][lineIdx]
 			}
-			padded := t + strings.Repeat(" ", max(0, columnWidths[i]-utils.VisibleWidth(t)))
+			padding := strings.Repeat(" ", max(0, columnWidths[i]-utils.VisibleWidth(t)))
+			if fgFn != nil {
+				padding = fgFn(padding)
+			}
+			padded := t + padding
 			rowParts[i] = m.theme.Bold(padded)
 		}
-		lines = append(lines, fmt.Sprintf("│ %s │", strings.Join(rowParts, " │ ")))
+		rowLine := fmt.Sprintf("│ %s │", strings.Join(rowParts, " │ "))
+		if fgFn != nil {
+			rowLine = fgFn(rowLine)
+		}
+		lines = append(lines, rowLine)
 	}
 
 	// Render separator
@@ -836,6 +875,9 @@ func (m *Markdown) renderTableNode(table ast.Node, availableWidth int, source []
 		sepCells[i] = strings.Repeat("─", w)
 	}
 	sepLine := fmt.Sprintf("├─%s─┤", strings.Join(sepCells, "─┼─"))
+	if fgFn != nil {
+		sepLine = fgFn(sepLine)
+	}
 	lines = append(lines, sepLine)
 
 	// Render rows
@@ -862,9 +904,17 @@ func (m *Markdown) renderTableNode(table ast.Node, availableWidth int, source []
 				if lineIdx < len(rowCells[i]) {
 					t = rowCells[i][lineIdx]
 				}
-				rowParts[i] = t + strings.Repeat(" ", max(0, columnWidths[i]-utils.VisibleWidth(t)))
+				padding := strings.Repeat(" ", max(0, columnWidths[i]-utils.VisibleWidth(t)))
+				if fgFn != nil {
+					padding = fgFn(padding)
+				}
+				rowParts[i] = t + padding
 			}
-			lines = append(lines, fmt.Sprintf("│ %s │", strings.Join(rowParts, " │ ")))
+			rowLine := fmt.Sprintf("│ %s │", strings.Join(rowParts, " │ "))
+			if fgFn != nil {
+				rowLine = fgFn(rowLine)
+			}
+			lines = append(lines, rowLine)
 		}
 
 		if rowIdx < len(dataRows)-1 {
@@ -877,7 +927,11 @@ func (m *Markdown) renderTableNode(table ast.Node, availableWidth int, source []
 	for i, w := range columnWidths {
 		bottomBorderCells[i] = strings.Repeat("─", w)
 	}
-	lines = append(lines, fmt.Sprintf("└─%s─┘", strings.Join(bottomBorderCells, "─┴─")))
+	bottomBorder := fmt.Sprintf("└─%s─┘", strings.Join(bottomBorderCells, "─┴─"))
+	if fgFn != nil {
+		bottomBorder = fgFn(bottomBorder)
+	}
+	lines = append(lines, bottomBorder)
 	lines = append(lines, "")
 
 	return lines
