@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
+	"github.com/francescoalemanno/raijin-mono/libtui/pkg/utils"
 	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
@@ -28,10 +29,10 @@ func TestToolExecutionRenderPartsShowsErrorOutputWhenRendererBodyIsEmpty(t *test
 	}
 
 	title, body := comp.renderParts(json.RawMessage(`{"path":"./file.txt"}`), "path is required", true)
-	if title != "read ./file.txt" {
+	if utils.StripAnsiCodes(title) != "read ./file.txt" {
 		t.Fatalf("unexpected title: %q", title)
 	}
-	if body != "path is required" {
+	if utils.StripAnsiCodes(body) != "path is required" {
 		t.Fatalf("expected fallback error body, got: %q", body)
 	}
 }
@@ -49,11 +50,12 @@ func TestToolExecutionRenderPartsIncludesArgsPreviewWithoutRenderer(t *testing.T
 	}
 
 	title, _ := comp.renderParts(json.RawMessage(`{"pattern":"foo","path":"."}`), "", false)
-	if !strings.HasPrefix(title, "grep ") {
-		t.Fatalf("expected title prefix with tool name, got: %q", title)
+	titlePlain := utils.StripAnsiCodes(title)
+	if !strings.HasPrefix(titlePlain, "grep ") {
+		t.Fatalf("expected title prefix with tool name, got: %q", titlePlain)
 	}
-	if !strings.Contains(title, `"pattern":"foo"`) {
-		t.Fatalf("expected args preview in title, got: %q", title)
+	if !strings.Contains(titlePlain, `"pattern":"foo"`) {
+		t.Fatalf("expected args preview in title, got: %q", titlePlain)
 	}
 }
 

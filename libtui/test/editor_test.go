@@ -23,6 +23,7 @@ func (m *MockTUIRenderer) RequestRender(force ...bool) {
 func defaultEditorTheme() components.EditorTheme {
 	return components.EditorTheme{
 		BorderColor: func(s string) string { return s },
+		Foreground:  func(s string) string { return s },
 		SelectList: components.SelectListTheme{
 			SelectedPrefix: func(s string) string { return s },
 			SelectedText:   func(s string) string { return s },

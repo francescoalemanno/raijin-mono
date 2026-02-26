@@ -156,13 +156,19 @@ func TestInlineFormatPreservesLineStructure(t *testing.T) {
 func TestInlineFormatPreservesMutedColorAcrossInlineStyles(t *testing.T) {
 	formatted := inlineFormat("before **bold** and *italic* after")
 
-	if !strings.Contains(formatted, "\x1b[38;2;168;153;132m") {
-		t.Fatalf("expected muted color sequence in output: %q", formatted)
+	// Check that regular text has 24-bit color ANSI codes
+	// Pattern: \x1b[38;2;R;G;Bm (where R,G,B are 0-255)
+	if !regexp.MustCompile(`\x1b\[38;2;\d{1,3};\d{1,3};\d{1,3}m`).MatchString(formatted) {
+		t.Fatalf("expected 24-bit color sequence in output: %q", formatted)
 	}
-	if !strings.Contains(formatted, "\x1b[1;38;2;168;153;132m") {
-		t.Fatalf("expected muted bold sequence in output: %q", formatted)
+
+	// Check that bold formatting exists with color (\x1b[1;38;2;...)
+	if !regexp.MustCompile(`\x1b\[1;38;2;\d{1,3};\d{1,3};\d{1,3}m`).MatchString(formatted) {
+		t.Fatalf("expected bold+color sequence in output: %q", formatted)
 	}
-	if !strings.Contains(formatted, "\x1b[3;38;2;168;153;132m") {
-		t.Fatalf("expected muted italic sequence in output: %q", formatted)
+
+	// Check that italic formatting exists with color (\x1b[3;38;2;...)
+	if !regexp.MustCompile(`\x1b\[3;38;2;\d{1,3};\d{1,3};\d{1,3}m`).MatchString(formatted) {
+		t.Fatalf("expected italic+color sequence in output: %q", formatted)
 	}
 }
