@@ -90,22 +90,6 @@ func TestSerializeConversationForCompaction(t *testing.T) {
 	}
 }
 
-func TestShouldAutoCompact(t *testing.T) {
-	t.Parallel()
-
-	msgs := []message.Message{
-		{Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: strings.Repeat("a", 5000)}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.TextContent{Text: strings.Repeat("b", 5000)}}},
-	}
-
-	if !shouldAutoCompact(msgs, 3000, 1000) {
-		t.Fatalf("expected auto compaction to trigger")
-	}
-	if shouldAutoCompact(msgs, 100000, 1000) {
-		t.Fatalf("did not expect auto compaction to trigger")
-	}
-}
-
 func TestCompactionKeepRecentTokens(t *testing.T) {
 	t.Parallel()
 

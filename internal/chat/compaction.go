@@ -214,31 +214,6 @@ func (app *ChatApp) compactConversation(customInstructions string) error {
 	return nil
 }
 
-// maybeAutoCompact runs compaction if context exceeds the threshold.
-// Returns true if compaction was attempted (regardless of success), false otherwise.
-func (app *ChatApp) maybeAutoCompact() bool {
-	if app.session == nil || app.session.Agent() == nil || app.session.ID() == "" {
-		return false
-	}
-	sessionID := app.session.ID()
-	msgSvc := app.session.Agent().Messages()
-	msgs, err := msgSvc.List(context.Background(), sessionID)
-	if err != nil {
-		return false
-	}
-	model := app.session.Agent().Model()
-	contextWindow := modelContextWindow(model)
-	if !shouldAutoCompact(msgs, contextWindow, defaultCompactionReserveTokens) {
-		return false
-	}
-	if err := app.compactConversation(""); err != nil {
-		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("auto-compaction failed: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
-		})
-	}
-	return true
-}
-
 func generateCompactionSummary(ctx context.Context, model bridgecfg.RuntimeModel, msgs []message.Message, customInstructions string) (string, error) {
 	conversation := serializeConversationForCompaction(msgs)
 	if strings.TrimSpace(conversation) == "" {
@@ -299,18 +274,6 @@ func restoreMessages(ctx context.Context, msgSvc message.Service, sessionID stri
 		}
 	}
 	return nil
-}
-
-func shouldAutoCompact(msgs []message.Message, contextWindow, reserveTokens int64) bool {
-	if contextWindow <= 0 {
-		return false
-	}
-	reserve := normalizeReserveTokens(contextWindow, reserveTokens)
-	if reserve <= 0 {
-		return false
-	}
-	contextTokens := estimateConversationTokens(msgs)
-	return contextTokens > contextWindow-reserve
 }
 
 func estimateConversationTokens(msgs []message.Message) int64 {

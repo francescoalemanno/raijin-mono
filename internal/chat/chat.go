@@ -263,7 +263,7 @@ func (app *ChatApp) refreshHeader() {
 
 	sm, _, ok := app.cfg.ActiveModel()
 
-	// Left side: cwd + context stats
+	// Left side: cwd + context stats + warnings
 	var leftParts []string
 	if cwd := renderWorkingDir(); cwd != "" {
 		leftParts = append(leftParts, cwd)
@@ -271,6 +271,12 @@ func (app *ChatApp) refreshHeader() {
 	if app.contextWindow > 0 {
 		pct := float64(app.totalTokens) / float64(app.contextWindow) * 100
 		leftParts = append(leftParts, theme.Default.Muted.Ansi24(fmt.Sprintf("%.1f%%/%s", pct, formatTokenCount(app.contextWindow))))
+		// Context usage warnings
+		if pct >= 80 {
+			leftParts = append(leftParts, theme.Default.Danger.AnsiBold("LLM about to fail for context exhaustion, run /compact"))
+		} else if pct >= 45 {
+			leftParts = append(leftParts, theme.Default.Accent.AnsiBold("LLM performance reduced, run /compact"))
+		}
 	}
 	left := strings.Join(leftParts, "  ")
 
@@ -919,9 +925,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 				app.appendMessage("failed to apply thinking level: "+reconfigureErr.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			})
 		}
-	}
-	if err == nil {
-		app.maybeAutoCompact()
 	}
 	return nextPrompt, hasNextPrompt
 }
