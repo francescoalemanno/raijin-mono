@@ -3,8 +3,10 @@ package chat
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/components"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/fuzzy"
@@ -16,9 +18,13 @@ import (
 const sessionSelectorMaxVisible = 10
 
 type sessionCandidate struct {
-	ID      string
-	ShortID string
-	Title   string
+	ID                  string
+	ShortID             string
+	Title               string
+	ParentSessionID     string
+	ForkedFromMessageID string
+	Depth               int
+	IsActiveLineage     bool
 }
 
 // SessionSelectorComponent lets the user pick a previous session.
@@ -84,12 +90,53 @@ func NewSessionSelector(
 
 func (m *SessionSelectorComponent) filter(query string) {
 	m.pendingDelete = "" // reset confirmation on any filter change
-	if strings.TrimSpace(query) == "" {
+	query = strings.TrimSpace(query)
+	if query == "" {
 		m.filtered = append([]sessionCandidate(nil), m.allCandidates...)
 	} else {
-		m.filtered = fuzzy.FuzzyFilter(m.allCandidates, query, func(item sessionCandidate) string {
+		ranked := fuzzy.FuzzyFilter(m.allCandidates, query, func(item sessionCandidate) string {
 			return item.ShortID + " " + item.Title
 		})
+
+		byID := make(map[string]sessionCandidate, len(m.allCandidates))
+		for _, c := range m.allCandidates {
+			byID[c.ID] = c
+		}
+
+		m.filtered = m.filtered[:0]
+		added := make(map[string]struct{}, len(ranked)*2)
+		addWithAncestors := func(id string) {
+			chain := make([]string, 0, 8)
+			seen := make(map[string]struct{}, 8)
+			for id != "" {
+				if _, ok := seen[id]; ok {
+					break
+				}
+				seen[id] = struct{}{}
+				node, ok := byID[id]
+				if !ok {
+					break
+				}
+				chain = append(chain, id)
+				id = node.ParentSessionID
+			}
+			for i := len(chain) - 1; i >= 0; i-- {
+				nodeID := chain[i]
+				if _, ok := added[nodeID]; ok {
+					continue
+				}
+				node, ok := byID[nodeID]
+				if !ok {
+					continue
+				}
+				added[nodeID] = struct{}{}
+				m.filtered = append(m.filtered, node)
+			}
+		}
+
+		for _, c := range ranked {
+			addWithAncestors(c.ID)
+		}
 	}
 	if m.selectedIndex >= len(m.filtered) {
 		m.selectedIndex = max(0, len(m.filtered)-1)
@@ -132,16 +179,23 @@ func (m *SessionSelectorComponent) renderLine(item sessionCandidate, selected bo
 	if title == "" {
 		title = "(untitled)"
 	}
-	label := fmt.Sprintf("#%s %s", item.ShortID, title)
+	indent := strings.Repeat("  ", max(0, item.Depth))
+	label := fmt.Sprintf("%s[%s] %s", indent, item.ShortID, title)
 	awaitingDelete := m.pendingDelete == item.ID
 	if selected {
 		if awaitingDelete {
-			return theme.Default.Danger.Ansi24("→ ") + theme.Default.Danger.Ansi24(label)
+			return theme.Default.Danger.Ansi24("->") + theme.Default.Danger.Ansi24(label)
 		}
-		return theme.Default.Accent.Ansi24("→ ") + theme.Default.Accent.Ansi24(label)
+		if item.IsActiveLineage {
+			return theme.Default.Success.Ansi24("->") + theme.Default.Success.Ansi24(label)
+		}
+		return theme.Default.Accent.Ansi24("->") + theme.Default.Accent.Ansi24(label)
 	}
 	if awaitingDelete {
 		return theme.Default.Danger.Ansi24("  " + label)
+	}
+	if item.IsActiveLineage {
+		return theme.Default.Success.Ansi24("  ") + theme.Default.Success.Ansi24(label)
 	}
 	return theme.Default.Foreground.Ansi24("  ") + label
 }
@@ -212,6 +266,12 @@ func (m *SessionSelectorComponent) handleDeleteKey() {
 	}
 	target := m.filtered[m.selectedIndex]
 
+	if target.IsActiveLineage {
+		m.pendingDelete = ""
+		m.hintText.SetText(theme.Default.Danger.Ansi24("session can be deleted only if inactive"))
+		return
+	}
+
 	if m.pendingDelete != target.ID {
 		// First press: arm the confirmation.
 		m.pendingDelete = target.ID
@@ -219,10 +279,10 @@ func (m *SessionSelectorComponent) handleDeleteKey() {
 		return
 	}
 
-	// Second press: confirmed — remove from both lists and notify.
+	// Second press: confirmed — remove target subtree and notify.
 	m.pendingDelete = ""
-	m.allCandidates = removeCandidateByID(m.allCandidates, target.ID)
-	m.filtered = removeCandidateByID(m.filtered, target.ID)
+	m.allCandidates = removeCandidateTreeByID(m.allCandidates, target.ID)
+	m.filtered = removeCandidateTreeByID(m.filtered, target.ID)
 	if m.selectedIndex >= len(m.filtered) {
 		m.selectedIndex = max(0, len(m.filtered)-1)
 	}
@@ -233,12 +293,32 @@ func (m *SessionSelectorComponent) handleDeleteKey() {
 	}
 }
 
-func removeCandidateByID(slice []sessionCandidate, id string) []sessionCandidate {
+func removeCandidateTreeByID(slice []sessionCandidate, rootID string) []sessionCandidate {
+	remove := map[string]struct{}{rootID: {}}
+	changed := true
+	for changed {
+		changed = false
+		for _, c := range slice {
+			if c.ParentSessionID == "" {
+				continue
+			}
+			if _, ok := remove[c.ParentSessionID]; !ok {
+				continue
+			}
+			if _, exists := remove[c.ID]; exists {
+				continue
+			}
+			remove[c.ID] = struct{}{}
+			changed = true
+		}
+	}
+
 	out := slice[:0:len(slice)]
 	for _, c := range slice {
-		if c.ID != id {
-			out = append(out, c)
+		if _, drop := remove[c.ID]; drop {
+			continue
 		}
+		out = append(out, c)
 	}
 	return out
 }
@@ -290,16 +370,25 @@ func (app *ChatApp) showSessionSelector() {
 		return
 	}
 
-	candidates := make([]sessionCandidate, len(summaries))
-	for i, s := range summaries {
+	ordered := orderSessionSummariesTree(summaries)
+	depthByID := sessionDepthByID(ordered)
+	currentID := app.session.ID()
+	activeLineage := activeLineageSet(currentID, ordered)
+	ordered = prioritizeActiveLineage(ordered, activeLineage)
+
+	candidates := make([]sessionCandidate, len(ordered))
+	for i, s := range ordered {
+		_, isActiveLineage := activeLineage[s.ID]
 		candidates[i] = sessionCandidate{
-			ID:      s.ID,
-			ShortID: s.ShortID,
-			Title:   s.Title,
+			ID:                  s.ID,
+			ShortID:             s.ShortID,
+			Title:               s.Title,
+			ParentSessionID:     s.ParentSessionID,
+			ForkedFromMessageID: s.ForkedFromMessageID,
+			Depth:               depthByID[s.ID],
+			IsActiveLineage:     isActiveLineage,
 		}
 	}
-
-	currentID := app.session.ID()
 	app.showSelector(func(done func()) tui.Component {
 		return NewSessionSelector(candidates,
 			func(candidate sessionCandidate) {
@@ -341,6 +430,160 @@ func (app *ChatApp) showSessionSelector() {
 			},
 		)
 	})
+}
+
+func activeLineageSet(currentID string, summaries []persist.SessionSummary) map[string]struct{} {
+	lineage := make(map[string]struct{}, 8)
+	if currentID == "" {
+		return lineage
+	}
+
+	byID := make(map[string]persist.SessionSummary, len(summaries))
+	for _, s := range summaries {
+		byID[s.ID] = s
+	}
+
+	seen := make(map[string]struct{}, 8)
+	id := currentID
+	for id != "" {
+		if _, ok := seen[id]; ok {
+			break
+		}
+		seen[id] = struct{}{}
+		lineage[id] = struct{}{}
+		s, ok := byID[id]
+		if !ok {
+			break
+		}
+		id = s.ParentSessionID
+	}
+	return lineage
+}
+
+func orderSessionSummariesTree(summaries []persist.SessionSummary) []persist.SessionSummary {
+	if len(summaries) == 0 {
+		return nil
+	}
+
+	byParent := make(map[string][]persist.SessionSummary)
+	for _, s := range summaries {
+		parent := s.ParentSessionID
+		byParent[parent] = append(byParent[parent], s)
+	}
+
+	sortGroup := func(items []persist.SessionSummary) {
+		sort.SliceStable(items, func(i, j int) bool {
+			if items[i].UpdatedAt == items[j].UpdatedAt {
+				return items[i].ID < items[j].ID
+			}
+			return items[i].UpdatedAt > items[j].UpdatedAt
+		})
+	}
+	for parent := range byParent {
+		sortGroup(byParent[parent])
+	}
+
+	roots := append([]persist.SessionSummary(nil), byParent[""]...)
+	sortGroup(roots)
+
+	ordered := make([]persist.SessionSummary, 0, len(summaries))
+	seen := make(map[string]struct{}, len(summaries))
+	var walk func(items []persist.SessionSummary)
+	walk = func(items []persist.SessionSummary) {
+		for _, s := range items {
+			if _, ok := seen[s.ID]; ok {
+				continue
+			}
+			seen[s.ID] = struct{}{}
+			ordered = append(ordered, s)
+			walk(byParent[s.ID])
+		}
+	}
+	walk(roots)
+
+	// Orphans or cycles: append remaining nodes by recency.
+	remaining := make([]persist.SessionSummary, 0)
+	for _, s := range summaries {
+		if _, ok := seen[s.ID]; !ok {
+			remaining = append(remaining, s)
+		}
+	}
+	sortGroup(remaining)
+	walk(remaining)
+
+	return ordered
+}
+
+func sessionDepthByID(summaries []persist.SessionSummary) map[string]int {
+	depth := make(map[string]int, len(summaries))
+	byID := make(map[string]persist.SessionSummary, len(summaries))
+	for _, s := range summaries {
+		byID[s.ID] = s
+	}
+
+	var resolve func(id string) int
+	resolve = func(id string) int {
+		if d, ok := depth[id]; ok {
+			return d
+		}
+		s, ok := byID[id]
+		if !ok || s.ParentSessionID == "" {
+			depth[id] = 0
+			return 0
+		}
+		d := resolve(s.ParentSessionID) + 1
+		depth[id] = d
+		return d
+	}
+
+	for _, s := range summaries {
+		resolve(s.ID)
+	}
+	return depth
+}
+
+func prioritizeActiveLineage(summaries []persist.SessionSummary, active map[string]struct{}) []persist.SessionSummary {
+	if len(summaries) == 0 || len(active) == 0 {
+		return summaries
+	}
+
+	byID := make(map[string]persist.SessionSummary, len(summaries))
+	for _, s := range summaries {
+		byID[s.ID] = s
+	}
+
+	isRelated := func(id string) bool {
+		seen := make(map[string]struct{}, 8)
+		for id != "" {
+			if _, ok := active[id]; ok {
+				return true
+			}
+			if _, ok := seen[id]; ok {
+				break
+			}
+			seen[id] = struct{}{}
+			n, ok := byID[id]
+			if !ok {
+				break
+			}
+			id = n.ParentSessionID
+		}
+		return false
+	}
+
+	out := make([]persist.SessionSummary, 0, len(summaries))
+	for _, s := range summaries {
+		if isRelated(s.ID) {
+			out = append(out, s)
+		}
+	}
+	for _, s := range summaries {
+		if isRelated(s.ID) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func (app *ChatApp) applySessionSwitch(ctx context.Context, sessionID string) error {
