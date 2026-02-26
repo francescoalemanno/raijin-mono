@@ -50,7 +50,7 @@ func renderCodePreview(path, content string) string {
 	if content == "" {
 		return ""
 	}
-	return tuiutils.HighlightCodeANSI(content, "", path)
+	return tuiutils.HighlightCodeANSI(content, "", path, theme.Default.ChromaStyle())
 }
 
 func renderDiffPreview(path, oldStr, newStr string) string {
