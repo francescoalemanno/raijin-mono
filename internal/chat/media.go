@@ -12,11 +12,6 @@ type Payload struct {
 	Source   string
 }
 
-// IsImageMIME reports whether mimeType is an image/* media type.
-func IsImageMIME(mimeType string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(mimeType)), "image/")
-}
-
 // IsSupportedImageMIME reports whether mimeType is one of the image types
 // currently supported by the read tool and terminal image renderer.
 func IsSupportedImageMIME(mimeType string) bool {

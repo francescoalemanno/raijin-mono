@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -460,13 +459,7 @@ func (app *ChatApp) appendStoredMessage(msg message.Message) {
 			app.appendSpacer()
 			app.appendMessage(text, theme.BorderThin, theme.Default.Accent.Ansi24, theme.Default.Foreground.Ansi24, false)
 		}
-		for _, att := range msg.BinaryContent() {
-			if !IsImageMIME(att.MIMEType) || len(att.Data) == 0 {
-				continue
-			}
-			app.appendSpacer()
-			app.appendImageFromBytes(att.Data, att.MIMEType, att.Path)
-		}
+
 	case message.Assistant:
 		reasoning := strings.TrimSpace(msg.ReasoningContent().Thinking)
 		if reasoning != "" {
@@ -545,25 +538,6 @@ func (app *ChatApp) appendSpacer() {
 	sp := components.NewSpacer(1)
 	app.history.AddChild(sp)
 	app.items = append(app.items, historyEntry{component: sp})
-}
-
-func (app *ChatApp) appendImageComponent(base64Data, mimeType, filename string) {
-	_ = base64Data
-	label := "↪ image attached"
-	if filename != "" {
-		label += ": " + filename
-	}
-	if mimeType != "" {
-		label += ", " + mimeType
-	}
-	app.appendMessage(label, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
-}
-
-func (app *ChatApp) appendImageFromBytes(data []byte, mimeType, filename string) {
-	if !IsImageMIME(mimeType) || len(data) == 0 {
-		return
-	}
-	app.appendImageComponent(base64.StdEncoding.EncodeToString(data), mimeType, filename)
 }
 
 func (app *ChatApp) flushThinking() {
@@ -825,17 +799,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 		})
 	}
 
-	if len(attachments) > 0 {
-		app.dispatchSync(func(_ tui.UIToken) {
-			for _, att := range attachments {
-				if !IsImageMIME(att.MIMEType) || len(att.Data) == 0 {
-					continue
-				}
-				app.appendImageFromBytes(att.Data, att.MIMEType, att.Path)
-			}
-		})
-	}
-
 	paths := app.session.Paths()
 	var skillAttachments []message.SkillContent
 	for _, loaded := range skills {
@@ -863,42 +826,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 		AllowedTools:    current.Opts.AllowedTools,
 		MaxOutputTokens: int64(app.cfg.MaxTokens()),
 	})
-
-	// Handle context overflow: run compaction and auto-retry
-	if isContextOverflow(err) {
-		app.dispatchSync(func(_ tui.UIToken) {
-			app.flushReply()
-			app.cancelPendingTools()
-			app.state = stateIdle
-			app.steeringInterruptIssued = false
-			app.refreshStatus()
-		})
-
-		compactErr := app.compactConversation("")
-		if compactErr != nil {
-			app.dispatchSync(func(_ tui.UIToken) {
-				app.stopLoader()
-				app.state = stateIdle
-				app.appendMessage("Compaction failed, retry aborted: "+compactErr.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
-				app.refreshStatus()
-			})
-			return queuedPrompt{}, false
-		}
-
-		// Compaction succeeded: set up for retry
-		app.dispatchSync(func(_ tui.UIToken) {
-			app.stopLoader()
-			app.refreshHeader()
-			// Reset state for retry
-			app.currentReply = ""
-			app.replyComponent = nil
-			app.currentThinking = ""
-			app.thinkingComponent = nil
-		})
-
-		// Return same prompt for retry
-		return current, true
-	}
 
 	// Finalize (on UI goroutine).
 	var nextPrompt queuedPrompt
