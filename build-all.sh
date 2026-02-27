@@ -41,7 +41,7 @@ build_target() {
         -ldflags "$LDFLAGS" \
         -trimpath \
         -o "$OUTPUT_DIR/$output_name" \
-        ./cmd/raijin
+        .
 
     if [ -f "$OUTPUT_DIR/$output_name" ]; then
         local size

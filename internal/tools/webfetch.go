@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 	"golang.org/x/net/html"
 )
 
@@ -29,44 +29,44 @@ const browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 var multipleNewlinesRe = regexp.MustCompile(`\n{3,}`)
 
 // NewWebFetchTool creates a webfetch tool for fetching web content.
-func NewWebFetchTool() llm.Tool {
-	handler := func(ctx context.Context, params webfetchParams, call llm.ToolCall) (llm.ToolResponse, error) {
+func NewWebFetchTool() libagent.Tool {
+	handler := func(ctx context.Context, params webfetchParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		if resp, blocked := toolExecutionGate(ctx, "webfetch"); blocked {
 			return resp, nil
 		}
 		if params.URL == "" {
-			return llm.NewTextErrorResponse("url is required"), nil
+			return libagent.NewTextErrorResponse("url is required"), nil
 		}
 
 		u, err := url.Parse(params.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			return llm.NewTextErrorResponse("only HTTP and HTTPS URLs are allowed"), nil
+			return libagent.NewTextErrorResponse("only HTTP and HTTPS URLs are allowed"), nil
 		}
 
 		content, err := fetchURLAndConvert(ctx, params.URL)
 		if err != nil {
 			if ctx.Err() != nil {
-				return llm.ToolResponse{}, ctx.Err()
+				return libagent.ToolResponse{}, ctx.Err()
 			}
-			return llm.NewTextErrorResponse(fmt.Sprintf("fetching URL: %s", err)), nil
+			return libagent.NewTextErrorResponse(fmt.Sprintf("fetching URL: %s", err)), nil
 		}
 
 		var result strings.Builder
 		result.WriteString(fmt.Sprintf("Fetched content from %s:\n\n", params.URL))
 		result.WriteString(content)
-		return llm.NewTextResponse(result.String()), nil
+		return libagent.NewTextResponse(result.String()), nil
 	}
 
 	renderFunc := func(input json.RawMessage, _ string, _ int) string {
 		var params webfetchParams
-		if err := llm.ParseJSONInput(input, &params); err != nil {
+		if err := libagent.ParseJSONInput(input, &params); err != nil {
 			return "webfetch (failed)"
 		}
 		return fmt.Sprintf("fetch %s", params.URL)
 	}
 
 	return WithRender(
-		llm.NewParallelAgentTool("webfetch", webfetchDescription, handler),
+		libagent.NewParallelTypedTool("webfetch", webfetchDescription, handler),
 		renderFunc,
 	)
 }

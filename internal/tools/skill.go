@@ -8,7 +8,7 @@ import (
 
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 const skillDescription = "Load/run a skill when the task at hand matches the skill description."
@@ -27,14 +27,14 @@ func RegisterSkillScriptsPath(paths *PathRegistry, scriptsDir string) {
 	paths.Add(scriptsDir)
 }
 
-func NewSkillTool(paths *PathRegistry) llm.Tool {
-	handler := func(ctx context.Context, params skillParams, call llm.ToolCall) (llm.ToolResponse, error) {
+func NewSkillTool(paths *PathRegistry) libagent.Tool {
+	handler := func(ctx context.Context, params skillParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		if resp, blocked := toolExecutionGate(ctx, "skill"); blocked {
 			return resp, nil
 		}
 		name := strings.ToLower(strings.TrimSpace(params.Name))
 		if name == "" {
-			return llm.NewTextErrorResponse("skill name is required"), nil
+			return libagent.NewTextErrorResponse("skill name is required"), nil
 		}
 
 		arguments := strings.TrimSpace(params.Arguments)
@@ -42,18 +42,18 @@ func NewSkillTool(paths *PathRegistry) llm.Tool {
 		rendered, skill, err := skills.RenderSkill(name, arguments)
 		if err != nil {
 			if ctx.Err() != nil {
-				return llm.ToolResponse{}, ctx.Err()
+				return libagent.ToolResponse{}, ctx.Err()
 			}
-			return llm.NewTextErrorResponse(fmt.Sprintf("skill error: %s", err)), nil
+			return libagent.NewTextErrorResponse(fmt.Sprintf("skill error: %s", err)), nil
 		}
 
 		RegisterSkillScriptsPath(paths, skill.ScriptsDir)
-		return llm.NewTextResponse(rendered), nil
+		return libagent.NewTextResponse(rendered), nil
 	}
 
 	renderFunc := func(input json.RawMessage, _ string, _ int) string {
 		var params skillParams
-		if err := llm.ParseJSONInput(input, &params); err != nil {
+		if err := libagent.ParseJSONInput(input, &params); err != nil {
 			return "skill (failed)"
 		}
 		if params.Arguments != "" {
@@ -63,7 +63,7 @@ func NewSkillTool(paths *PathRegistry) llm.Tool {
 	}
 
 	return WithRender(
-		llm.NewAgentTool("skill", skillDescription, handler),
+		libagent.NewTypedTool("skill", skillDescription, handler),
 		renderFunc,
 	)
 }

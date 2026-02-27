@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
 const (
@@ -32,13 +32,13 @@ type globToolDetails struct {
 }
 
 // NewGlobTool creates a glob tool for finding files by pattern.
-func NewGlobTool() llm.Tool {
-	handler := func(ctx context.Context, params globParams, _ llm.ToolCall) (llm.ToolResponse, error) {
+func NewGlobTool() libagent.Tool {
+	handler := func(ctx context.Context, params globParams, _ libagent.ToolCall) (libagent.ToolResponse, error) {
 		if resp, blocked := toolExecutionGate(ctx, "glob"); blocked {
 			return resp, nil
 		}
 		if params.Pattern == "" {
-			return llm.NewTextErrorResponse("pattern is required"), nil
+			return libagent.NewTextErrorResponse("pattern is required"), nil
 		}
 
 		searchPath := params.Path
@@ -47,31 +47,31 @@ func NewGlobTool() llm.Tool {
 		}
 		cwd, err := os.Getwd()
 		if err != nil {
-			return llm.NewTextErrorResponse(fmt.Sprintf("resolving cwd: %v", err)), nil
+			return libagent.NewTextErrorResponse(fmt.Sprintf("resolving cwd: %v", err)), nil
 		}
 		searchPath = fsutil.ResolveToCwd(searchPath, cwd)
 
 		info, err := os.Stat(searchPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return llm.NewTextErrorResponse(fmt.Sprintf("Path not found: %s", searchPath)), nil
+				return libagent.NewTextErrorResponse(fmt.Sprintf("Path not found: %s", searchPath)), nil
 			}
-			return llm.NewTextErrorResponse(fmt.Sprintf("accessing path: %s", err)), nil
+			return libagent.NewTextErrorResponse(fmt.Sprintf("accessing path: %s", err)), nil
 		}
 		if !info.IsDir() {
-			return llm.NewTextErrorResponse(fmt.Sprintf("Path is not a directory: %s", searchPath)), nil
+			return libagent.NewTextErrorResponse(fmt.Sprintf("Path is not a directory: %s", searchPath)), nil
 		}
 
 		files, err := globWithDoubleStar(ctx, params.Pattern, searchPath)
 		if err != nil {
 			if ctx.Err() != nil {
-				return llm.ToolResponse{}, ctx.Err()
+				return libagent.ToolResponse{}, ctx.Err()
 			}
-			return llm.NewTextErrorResponse(fmt.Sprintf("finding files: %s", err)), nil
+			return libagent.NewTextErrorResponse(fmt.Sprintf("finding files: %s", err)), nil
 		}
 
 		if len(files) == 0 {
-			return llm.NewTextResponse("No files found matching pattern"), nil
+			return libagent.NewTextResponse("No files found matching pattern"), nil
 		}
 
 		effectiveLimit := defaultGlobLimit
@@ -114,16 +114,16 @@ func NewGlobTool() llm.Tool {
 			output += "\n\n[" + strings.Join(notices, ". ") + "]"
 		}
 
-		resp := llm.NewTextResponse(output)
+		resp := libagent.NewTextResponse(output)
 		if details.ResultLimitReached != nil || details.Truncation != nil {
-			resp = llm.WithResponseMetadata(resp, details)
+			resp = libagent.WithResponseMetadata(resp, details)
 		}
 		return resp, nil
 	}
 
 	renderFunc := func(input json.RawMessage, output string, _ int) string {
 		var params globParams
-		if err := llm.ParseJSONInput(input, &params); err != nil {
+		if err := libagent.ParseJSONInput(input, &params); err != nil {
 			return "glob (failed)"
 		}
 
@@ -141,7 +141,7 @@ func NewGlobTool() llm.Tool {
 	}
 
 	return WithRender(
-		llm.NewParallelAgentTool("glob", globDescription, handler),
+		libagent.NewParallelTypedTool("glob", globDescription, handler),
 		renderFunc,
 	)
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func TestBashToolCancelStopsBackgroundChildrenQuickly(t *testing.T) {
@@ -21,14 +21,14 @@ func TestBashToolCancelStopsBackgroundChildrenQuickly(t *testing.T) {
 	defer cancel()
 
 	type result struct {
-		resp llm.ToolResponse
+		resp libagent.ToolResponse
 		err  error
 	}
 	resultCh := make(chan result, 1)
 	start := time.Now()
 
 	go func() {
-		resp, err := tool.Run(ctx, llm.ToolCall{Input: `{"command":"sleep 4 & wait"}`})
+		resp, err := tool.Run(ctx, libagent.ToolCall{Input: `{"command":"sleep 4 & wait"}`})
 		resultCh <- result{resp: resp, err: err}
 	}()
 

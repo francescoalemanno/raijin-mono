@@ -10,9 +10,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
 func writePluginScript(t *testing.T, dir, name, content string) string {
@@ -74,7 +74,7 @@ fi
 	}
 
 	// Test Run
-	resp, err := tool.Run(context.Background(), llm.ToolCall{
+	resp, err := tool.Run(context.Background(), libagent.ToolCall{
 		Input: `{"name":"World"}`,
 	})
 	if err != nil {
@@ -172,7 +172,7 @@ func TestRegisterDefaultToolsPrecedence_ProjectUserBuiltin(t *testing.T) {
 	if readTool == nil {
 		t.Fatalf("expected read tool")
 	}
-	resp, err := readTool.Run(context.Background(), llm.ToolCall{Input: `{}`})
+	resp, err := readTool.Run(context.Background(), libagent.ToolCall{Input: `{}`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

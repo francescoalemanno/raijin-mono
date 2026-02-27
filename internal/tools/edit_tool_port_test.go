@@ -9,16 +9,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-func runEdit(t *testing.T, tool llm.Tool, input map[string]any) (llm.ToolResponse, error) {
+func runEdit(t *testing.T, tool libagent.Tool, input map[string]any) (libagent.ToolResponse, error) {
 	t.Helper()
 	raw, err := json.Marshal(input)
 	if err != nil {
 		t.Fatalf("marshal input: %v", err)
 	}
-	return tool.Run(context.Background(), llm.ToolCall{Input: string(raw)})
+	return tool.Run(context.Background(), libagent.ToolCall{Input: string(raw)})
 }
 
 func mustWriteFile(t *testing.T, path, content string) {
@@ -522,7 +522,7 @@ func TestEditTool_RespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = tool.Run(ctx, llm.ToolCall{Input: string(raw)})
+	_, err = tool.Run(ctx, libagent.ToolCall{Input: string(raw)})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}

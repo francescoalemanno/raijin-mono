@@ -8,32 +8,32 @@ import (
 	"os"
 	"strings"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-// RenderableTool extends llm.Tool with UI rendering capability.
+// RenderableTool extends libagent.Tool with UI rendering capability.
 // Tools can optionally implement this interface for custom UI display.
 // The output parameter is the tool's result text (empty during tool call, populated on tool result).
 // The width parameter is the available rendering width (0 if unknown).
 type RenderableTool interface {
-	llm.Tool
+	libagent.Tool
 	Render(input json.RawMessage, output string, width int) string
 }
 
-// toolWithRender wraps a llm.Tool with a render function.
+// toolWithRender wraps a libagent.Tool with a render function.
 // It also applies unified output truncation on Run.
 type toolWithRender struct {
-	llm.Tool
+	libagent.Tool
 	render func(json.RawMessage, string, int) string
 }
 
-func (t toolWithRender) Run(ctx context.Context, params llm.ToolCall) (resp llm.ToolResponse, err error) {
+func (t toolWithRender) Run(ctx context.Context, params libagent.ToolCall) (resp libagent.ToolResponse, err error) {
 	toolName := t.Info().Name
 
 	defer func() {
 		if r := recover(); r != nil {
 			// Panic in a tool should never crash the run; surface context to the model/user.
-			resp = llm.NewTextErrorResponse(fmt.Sprintf(
+			resp = libagent.NewTextErrorResponse(fmt.Sprintf(
 				"tool %q panicked: %v\n\nInput:\n%s\n\nRetry with corrected arguments. If this persists, report this tool failure.",
 				toolName,
 				r,
@@ -46,20 +46,20 @@ func (t toolWithRender) Run(ctx context.Context, params llm.ToolCall) (resp llm.
 	resp, err = t.Tool.Run(ctx, params)
 	if err != nil {
 		if shouldPropagateToolError(ctx, err) {
-			return llm.ToolResponse{}, err
+			return libagent.ToolResponse{}, err
 		}
-		return llm.NewTextErrorResponse(
+		return libagent.NewTextErrorResponse(
 			fmt.Sprintf("tool %q failed: %s\n\nInput:\n%s", toolName, err.Error(), previewToolInput(params.Input)),
 		), nil
 	}
 
 	if resp.Type == "" {
-		return llm.NewTextErrorResponse(
+		return libagent.NewTextErrorResponse(
 			fmt.Sprintf("tool %q returned an empty response.\n\nInput:\n%s", toolName, previewToolInput(params.Input)),
 		), nil
 	}
 
-	if resp.Type != llm.ToolResponseTypeText {
+	if resp.Type != libagent.ToolResponseTypeText {
 		return resp, nil
 	}
 
@@ -105,7 +105,7 @@ func (t toolWithRender) Render(input json.RawMessage, output string, width int) 
 
 // WithRender wraps an AgentTool with a render function for UI display.
 // The returned tool also applies unified output truncation on Run.
-func WithRender(tool llm.Tool, render func(json.RawMessage, string, int) string) llm.Tool {
+func WithRender(tool libagent.Tool, render func(json.RawMessage, string, int) string) libagent.Tool {
 	return toolWithRender{Tool: tool, render: render}
 }
 
@@ -178,7 +178,7 @@ func buildTruncationNotice(result TruncationResult, tempPath string) string {
 
 // RenderTool attempts to render a tool call for UI display.
 // Returns the tool name if the tool doesn't implement RenderableTool.
-func RenderTool(tool llm.Tool, input json.RawMessage, output string, width int) string {
+func RenderTool(tool libagent.Tool, input json.RawMessage, output string, width int) string {
 	if rt, ok := tool.(RenderableTool); ok {
 		return rt.Render(input, output, width)
 	}
@@ -186,7 +186,7 @@ func RenderTool(tool llm.Tool, input json.RawMessage, output string, width int) 
 }
 
 // FindTool finds a tool by name in a slice of tools.
-func FindTool(tools []llm.Tool, name string) llm.Tool {
+func FindTool(tools []libagent.Tool, name string) libagent.Tool {
 	for _, t := range tools {
 		if t.Info().Name == name {
 			return t

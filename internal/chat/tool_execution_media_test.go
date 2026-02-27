@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 type noopUI struct{}
@@ -15,8 +15,8 @@ func (noopUI) RequestRender(...bool) {}
 func (noopUI) Dispatch(fn func())    { fn() }
 
 func TestToolExecutionUpdateResultWithMedia_PreservesMediaMetadataWithoutInlineImageRender(t *testing.T) {
-	tool := llm.NewAgentTool("read", "test", func(ctx context.Context, input map[string]any, call llm.ToolCall) (llm.ToolResponse, error) {
-		return llm.NewTextResponse("ok"), nil
+	tool := libagent.NewTypedTool("read", "test", func(ctx context.Context, input map[string]any, call libagent.ToolCall) (libagent.ToolResponse, error) {
+		return libagent.NewTextResponse("ok"), nil
 	})
 
 	comp := NewToolExecution("read", json.RawMessage(`{"path":"a.png"}`), tool, noopUI{})

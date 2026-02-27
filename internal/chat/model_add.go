@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -11,8 +10,9 @@ import (
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/keybindings"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/tui"
 
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
+
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/catalog"
 )
 
 const modelAddMaxVisible = 10
@@ -130,32 +130,7 @@ func NewModelAdd(
 }
 
 func (m *ModelAddComponent) loadCatalog() {
-	providers := knownProviders()
-	var items []catalogItem
-	for _, p := range providers {
-		providerName := p.Name
-		if providerName == "" {
-			providerName = string(p.ID)
-		}
-		for _, model := range p.Models {
-			modelName := model.Name
-			if modelName == "" {
-				modelName = model.ID
-			}
-			items = append(items, catalogItem{
-				providerID:     string(p.ID),
-				providerName:   providerName,
-				providerType:   string(p.Type),
-				providerAPIKey: p.APIKey,
-				baseURL:        p.APIEndpoint,
-				modelID:        model.ID,
-				modelName:      modelName,
-				maxTokens:      model.DefaultMaxTokens,
-				contextWindow:  model.ContextWindow,
-				canReason:      model.CanReason,
-			})
-		}
-	}
+	items := knownCatalogItems()
 	m.allItems = items
 	m.filtered = items
 }
@@ -398,14 +373,37 @@ var (
 // Provider catalog helpers
 // ---------------------------------------------------------------------------
 
-func knownProviders() []catalog.Provider {
-	source := catalog.NewRaijinSource()
+// knownCatalogItems returns all model entries from the embedded catalog.
+func knownCatalogItems() []catalogItem {
+	cat := libagent.DefaultCatalog()
+	var items []catalogItem
 
-	result, err := source.ListProviders(context.Background())
-	if err != nil {
-		return nil
+	// Unified providers list (catwalk + custom providers).
+	for _, p := range cat.ListProviders() {
+		providerName := p.Name
+		if providerName == "" {
+			providerName = string(p.ID)
+		}
+		for _, model := range p.Models {
+			modelName := model.Name
+			if modelName == "" {
+				modelName = model.ID
+			}
+			items = append(items, catalogItem{
+				providerID:    string(p.ID),
+				providerName:  providerName,
+				providerType:  string(p.Type),
+				baseURL:       p.APIEndpoint,
+				modelID:       model.ID,
+				modelName:     modelName,
+				maxTokens:     model.DefaultMaxTokens,
+				contextWindow: model.ContextWindow,
+				canReason:     model.CanReason,
+			})
+		}
 	}
-	return result
+
+	return items
 }
 
 func resolveCatalogProviderAPIKey(providerID, raw string) string {
@@ -431,7 +429,7 @@ func resolveCatalogProviderAPIKey(providerID, raw string) string {
 }
 
 func shouldSkipAPIKeyPrompt(providerID string) bool {
-	return strings.EqualFold(strings.TrimSpace(providerID), catalog.OpenAICodexProviderID)
+	return strings.EqualFold(strings.TrimSpace(providerID), libagent.CodexProviderID)
 }
 
 func fallbackProviderAPIKeyEnvVars(providerID string) []string {

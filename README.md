@@ -97,7 +97,7 @@ You can extend Raijin without changing core code:
 Build from source:
 
 ```bash
-go build -o raijin ./cmd/raijin
+go build -o raijin .
 ```
 
 ## Usage

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func TestReadToolLimitNoticeWithNonZeroOffset(t *testing.T) {
@@ -17,7 +17,7 @@ func TestReadToolLimitNoticeWithNonZeroOffset(t *testing.T) {
 	path := writeTempLinesFile(t, 60)
 	tool := NewReadTool()
 
-	resp, err := tool.Run(context.Background(), llm.ToolCall{
+	resp, err := tool.Run(context.Background(), libagent.ToolCall{
 		Input: fmt.Sprintf(`{"path":%q,"offset":21,"limit":10}`, path),
 	})
 	if err != nil {
@@ -40,7 +40,7 @@ func TestReadToolOffsetBeyondEnd(t *testing.T) {
 	path := writeTempLinesFile(t, 3)
 	tool := NewReadTool()
 
-	resp, err := tool.Run(context.Background(), llm.ToolCall{
+	resp, err := tool.Run(context.Background(), libagent.ToolCall{
 		Input: fmt.Sprintf(`{"path":%q,"offset":10}`, path),
 	})
 	if err != nil {
@@ -60,7 +60,7 @@ func TestReadToolDefaultTruncationIncludesContinuationHint(t *testing.T) {
 	path := writeTempLinesFile(t, DefaultMaxLines+25)
 	tool := NewReadTool()
 
-	resp, err := tool.Run(context.Background(), llm.ToolCall{
+	resp, err := tool.Run(context.Background(), libagent.ToolCall{
 		Input: fmt.Sprintf(`{"path":%q}`, path),
 	})
 	if err != nil {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 const toolTemporarilyDisabledMsg = "`%s` is temporarily disabled for this user request only; it will be automatically re-enabled immediately after this request is completed."
@@ -32,11 +32,11 @@ func WithAllowedTools(ctx context.Context, allowed []string) context.Context {
 	return context.WithValue(ctx, allowedToolsContextKey{}, allow)
 }
 
-func toolExecutionGate(ctx context.Context, toolName string) (llm.ToolResponse, bool) {
+func toolExecutionGate(ctx context.Context, toolName string) (libagent.ToolResponse, bool) {
 	if isToolAllowed(ctx, toolName) {
-		return llm.ToolResponse{}, false
+		return libagent.ToolResponse{}, false
 	}
-	return llm.NewTextErrorResponse(fmt.Sprintf(toolTemporarilyDisabledMsg, toolName)), true
+	return libagent.NewTextErrorResponse(fmt.Sprintf(toolTemporarilyDisabledMsg, toolName)), true
 }
 
 func isToolAllowed(ctx context.Context, toolName string) bool {

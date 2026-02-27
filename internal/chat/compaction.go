@@ -6,11 +6,10 @@ import (
 	"math"
 	"strings"
 
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/tui"
-	bridgecfg "github.com/francescoalemanno/raijin-mono/llmbridge/pkg/config"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
 const (
@@ -31,12 +30,8 @@ func normalizeReserveTokens(contextWindow, reserveTokens int64) int64 {
 	return reserveTokens
 }
 
-func modelContextWindow(model bridgecfg.RuntimeModel) int64 {
-	contextWindow := model.Metadata.ContextWindow
-	if contextWindow <= 0 {
-		contextWindow = int64(model.ModelCfg.ContextWindow)
-	}
-	return contextWindow
+func modelContextWindow(model libagent.RuntimeModel) int64 {
+	return model.EffectiveContextWindow()
 }
 
 func compactionKeepRecentTokens(contextWindow, reserveTokens int64) int64 {
@@ -186,7 +181,7 @@ func (app *ChatApp) compactConversation(customInstructions string) error {
 	return nil
 }
 
-func generateCompactionSummary(ctx context.Context, model bridgecfg.RuntimeModel, msgs []message.Message, customInstructions string) (string, error) {
+func generateCompactionSummary(ctx context.Context, model libagent.RuntimeModel, msgs []message.Message, customInstructions string) (string, error) {
 	conversation := serializeConversationForCompaction(msgs)
 	if strings.TrimSpace(conversation) == "" {
 		return "", fmt.Errorf("no content to summarize")
@@ -199,8 +194,8 @@ func generateCompactionSummary(ctx context.Context, model bridgecfg.RuntimeModel
 	}
 
 	reserve := defaultCompactionReserveTokens
-	if model.Metadata.ContextWindow > 0 {
-		reserve = min(reserve, model.Metadata.ContextWindow/2)
+	if cw := model.EffectiveContextWindow(); cw > 0 {
+		reserve = min(reserve, cw/2)
 	}
 	maxOut := int64(math.Floor(float64(reserve) * 0.8))
 	if maxOut < 256 {
@@ -208,16 +203,8 @@ func generateCompactionSummary(ctx context.Context, model bridgecfg.RuntimeModel
 	}
 
 	var sb strings.Builder
-	_, err := model.Runtime.Stream(ctx, llm.StreamRequest{
-		SystemPrompt:    compactionSystemPrompt,
-		Prompt:          prompt,
-		MaxOutputTokens: &maxOut,
-		Callbacks: llm.StreamCallbacks{
-			OnTextDelta: func(_ string, delta string) error {
-				sb.WriteString(delta)
-				return nil
-			},
-		},
+	err := libagent.StreamText(ctx, model.Model, compactionSystemPrompt, prompt, maxOut, func(delta string) {
+		sb.WriteString(delta)
 	})
 	if err != nil {
 		return "", fmt.Errorf("compaction summarization failed: %w", err)
@@ -246,14 +233,6 @@ func restoreMessages(ctx context.Context, msgSvc message.Service, sessionID stri
 		}
 	}
 	return nil
-}
-
-func estimateConversationTokens(msgs []message.Message) int64 {
-	var total int64
-	for _, msg := range msgs {
-		total += estimateMessageTokens(msg)
-	}
-	return total
 }
 
 func findCompactionCutIndex(msgs []message.Message, keepRecentTokens int64) int {

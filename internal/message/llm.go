@@ -2,13 +2,31 @@ package message
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
+	"time" //nolint:depguard // used only inside this package via unixMilliToTime
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-// UserRequest is a user input payload ready for llm.StreamRequest preparation.
+func cloneProviderMetadata(metadata map[string]json.RawMessage) map[string]json.RawMessage {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(metadata))
+	for key, value := range metadata {
+		out[key] = append(json.RawMessage(nil), value...)
+	}
+	return out
+}
+
+func unixMilliToTime(ms int64) time.Time {
+	if ms == 0 {
+		return time.Now()
+	}
+	return time.UnixMilli(ms)
+}
+
+// UserRequest is a user input payload for agent preparation.
 type UserRequest struct {
 	Prompt       string
 	Attachments  []BinaryContent
@@ -16,10 +34,10 @@ type UserRequest struct {
 	AllowedTools []string
 }
 
-// PreparedUserRequest is the normalized request payload for llm.StreamRequest.
+// PreparedUserRequest is the normalized request payload for the agent.
 type PreparedUserRequest struct {
 	Prompt string
-	Files  []llm.FilePart
+	Files  []libagent.FilePart
 }
 
 // PrepareUserRequest builds a prompt and file attachments from message input.
@@ -32,121 +50,109 @@ func PrepareUserRequest(req UserRequest) PreparedUserRequest {
 	}
 }
 
-// ToLLMMessages converts one persisted message into llm messages.
-func ToLLMMessages(msg Message) []llm.Message {
+// ToAgentMessages converts one persisted message into libagent.Message slice.
+func ToAgentMessages(msg Message) []libagent.Message {
 	switch msg.Role {
 	case User:
-		return toUserMessages(msg)
+		return toUserAgentMessages(msg)
 	case Assistant:
-		return toAssistantMessages(msg)
+		return toAssistantAgentMessages(msg)
 	case Tool:
-		return toToolMessages(msg)
+		return toToolAgentMessages(msg)
 	default:
 		return nil
 	}
 }
 
-func toUserMessages(msg Message) []llm.Message {
-	parts := make([]llm.Part, 0, 1+len(msg.BinaryContent()))
+func toUserAgentMessages(msg Message) []libagent.Message {
 	text := strings.TrimSpace(msg.Content().Text)
 	text = PromptWithUserAttachments(text, msg.BinaryContent(), msg.SkillContent())
-	if text != "" {
-		parts = append(parts, llm.TextPart{Text: text})
-	}
+	files := make([]libagent.FilePart, 0, len(msg.BinaryContent()))
 	for _, file := range msg.BinaryContent() {
 		if strings.HasPrefix(file.MIMEType, "text/") {
 			continue
 		}
-		parts = append(parts, llm.FilePart{
+		files = append(files, libagent.FilePart{
 			Filename:  file.Path,
 			MediaType: file.MIMEType,
 			Data:      file.Data,
 		})
 	}
-	return []llm.Message{{Role: llm.RoleUser, Content: parts}}
+	return []libagent.Message{&libagent.UserMessage{
+		Role:      "user",
+		Content:   text,
+		Files:     files,
+		Timestamp: unixMilliToTime(msg.CreatedAt),
+	}}
 }
 
-func toAssistantMessages(msg Message) []llm.Message {
-	parts := make([]llm.Part, 0, 1+len(msg.ToolCalls()))
+func toAssistantAgentMessages(msg Message) []libagent.Message {
 	text := strings.TrimSpace(msg.Content().Text)
-	if text != "" {
-		parts = append(parts, llm.TextPart{Text: text})
-	}
 	reasoning := msg.ReasoningContent()
-	if reasoning.Thinking != "" {
-		parts = append(parts, llm.ReasoningPart{
-			Text:             reasoning.Thinking,
-			ProviderMetadata: cloneProviderMetadata(reasoning.ProviderMetadata),
-		})
-	}
+	toolCalls := make([]libagent.ToolCallItem, 0, len(msg.ToolCalls()))
 	for _, call := range msg.ToolCalls() {
-		parts = append(parts, llm.ToolCallPart{
-			ToolCallID:       call.ID,
-			ToolName:         call.Name,
-			InputJSON:        call.Input,
+		toolCalls = append(toolCalls, libagent.ToolCallItem{
+			ID:               call.ID,
+			Name:             call.Name,
+			Input:            call.Input,
 			ProviderExecuted: call.ProviderExecuted,
 		})
 	}
-	return []llm.Message{{Role: llm.RoleAssistant, Content: parts}}
+	ts := unixMilliToTime(msg.CreatedAt)
+	am := libagent.NewAssistantMessage(text, reasoning.Thinking, toolCalls, ts)
+	if len(am.Content) == 0 {
+		return nil
+	}
+	return []libagent.Message{am}
 }
 
-func toToolMessages(msg Message) []llm.Message {
-	parts := make([]llm.Part, 0, len(msg.ToolResults()))
+func toToolAgentMessages(msg Message) []libagent.Message {
+	var out []libagent.Message
+	ts := unixMilliToTime(msg.CreatedAt)
 	for _, result := range msg.ToolResults() {
-		output := llm.ToolResultOutput{Type: llm.ToolResultOutputText, Text: result.Content}
-		if result.IsError {
-			output = llm.ToolResultOutput{
-				Type:      llm.ToolResultOutputError,
-				ErrorText: result.Content,
-			}
-		} else if result.Data != "" {
-			output = llm.ToolResultOutput{
-				Type:      llm.ToolResultOutputMedia,
-				Text:      result.Content,
-				Data:      result.Data,
-				MediaType: result.MIMEType,
-			}
-		}
-		parts = append(parts, llm.ToolResultPart{
+		tr := libagent.ToolResult{
 			ToolCallID: result.ToolCallID,
-			Output:     output,
+			Name:       result.Name,
+			Content:    result.Content,
+			IsError:    result.IsError,
 			Metadata:   result.Metadata,
-		})
+		}
+		if result.Data != "" {
+			tr.Data = []byte(result.Data)
+			tr.MIMEType = result.MIMEType
+		}
+		out = append(out, libagent.NewToolResultMessage(tr, ts))
 	}
-	return []llm.Message{{Role: llm.RoleTool, Content: parts}}
+	return out
 }
 
-// FromLLMToolResult converts an llm tool-result part into a persisted message part.
-func FromLLMToolResult(toolName string, part llm.ToolResultPart) ToolResult {
+// FromAgentToolResult converts a libagent ToolResultMessage into a persisted ToolResult.
+func FromAgentToolResult(msg *libagent.ToolResultMessage) ToolResult {
 	result := ToolResult{
-		ToolCallID: part.ToolCallID,
-		Name:       toolName,
-		Metadata:   part.Metadata,
+		ToolCallID: msg.ToolCallID,
+		Name:       msg.ToolName,
+		Metadata:   msg.Metadata,
 	}
-	switch part.Output.Type {
-	case llm.ToolResultOutputError:
-		result.Content = part.Output.ErrorText
+	if msg.IsError {
+		result.Content = msg.Content
 		result.IsError = true
-	case llm.ToolResultOutputMedia:
-		result.Content = part.Output.Text
-		if result.Content == "" {
-			result.Content = fmt.Sprintf("Loaded %s content", part.Output.MediaType)
-		}
-		result.Data = part.Output.Data
-		result.MIMEType = part.Output.MediaType
-	default:
-		result.Content = part.Output.Text
+	} else if len(msg.Data) > 0 {
+		result.Content = msg.Content
+		result.Data = string(msg.Data)
+		result.MIMEType = msg.MIMEType
+	} else {
+		result.Content = msg.Content
 	}
 	return result
 }
 
-func nonTextFiles(attachments []BinaryContent) []llm.FilePart {
-	files := make([]llm.FilePart, 0, len(attachments))
+func nonTextFiles(attachments []BinaryContent) []libagent.FilePart {
+	files := make([]libagent.FilePart, 0, len(attachments))
 	for _, attachment := range attachments {
 		if strings.HasPrefix(attachment.MIMEType, "text/") {
 			continue
 		}
-		files = append(files, llm.FilePart{
+		files = append(files, libagent.FilePart{
 			Filename:  attachment.Path,
 			Data:      attachment.Data,
 			MediaType: attachment.MIMEType,
@@ -155,28 +161,12 @@ func nonTextFiles(attachments []BinaryContent) []llm.FilePart {
 	return files
 }
 
-func withAllowedToolsNotice(prompt string, allowedTools []string) string {
-	if len(allowedTools) == 0 {
-		return prompt
-	}
-	var b strings.Builder
-	b.WriteString(prompt)
-	if strings.TrimSpace(prompt) != "" {
-		b.WriteString("\n")
-	}
-	b.WriteString("<system_info>For this specific user request the only tools that are allowed are: ")
-	b.WriteString(strings.Join(allowedTools, ", "))
-	b.WriteString(".</system_info>\n")
-	return b.String()
-}
-
 // PromptWithUserAttachments injects structured attachment context in a user prompt.
 func PromptWithUserAttachments(prompt string, attachments []BinaryContent, skills []SkillContent) string {
 	var sb strings.Builder
 	sb.WriteString(prompt)
 
-	hasAttachments := len(attachments) > 0
-	if hasAttachments {
+	if len(attachments) > 0 {
 		sb.WriteString("\n<system_info>Resolved @path attachments are already loaded. Use them directly; do not re-read the same files unless the user asks. If the user says \"this\", \"that\", \"these\", or \"attachment(s)\", assume all attachments unless narrowed. Text attachments are inlined in <file> blocks.</system_info>\n")
 		sb.WriteString("<attached_files>\n")
 		for _, content := range attachments {
@@ -219,22 +209,21 @@ func PromptWithUserAttachments(prompt string, attachments []BinaryContent, skill
 			sb.WriteString(kind)
 			sb.WriteString("\" />\n")
 		}
-	}
-
-	for _, content := range attachments {
-		if !strings.HasPrefix(content.MIMEType, "text/") {
-			continue
+		for _, content := range attachments {
+			if !strings.HasPrefix(content.MIMEType, "text/") {
+				continue
+			}
+			if content.Path != "" {
+				sb.WriteString("<file path=\"")
+				sb.WriteString(content.Path)
+				sb.WriteString("\">\n")
+			} else {
+				sb.WriteString("<file>\n")
+			}
+			sb.WriteString("\n")
+			sb.Write(content.Data)
+			sb.WriteString("\n</file>\n")
 		}
-		if content.Path != "" {
-			sb.WriteString("<file path=\"")
-			sb.WriteString(content.Path)
-			sb.WriteString("\">\n")
-		} else {
-			sb.WriteString("<file>\n")
-		}
-		sb.WriteString("\n")
-		sb.Write(content.Data)
-		sb.WriteString("\n</file>\n")
 	}
 
 	addedSkillHeader := false
@@ -257,13 +246,17 @@ func PromptWithUserAttachments(prompt string, attachments []BinaryContent, skill
 	return sb.String()
 }
 
-func cloneProviderMetadata(metadata map[string]json.RawMessage) map[string]json.RawMessage {
-	if len(metadata) == 0 {
-		return nil
+func withAllowedToolsNotice(prompt string, allowedTools []string) string {
+	if len(allowedTools) == 0 {
+		return prompt
 	}
-	out := make(map[string]json.RawMessage, len(metadata))
-	for key, value := range metadata {
-		out[key] = append(json.RawMessage(nil), value...)
+	var b strings.Builder
+	b.WriteString(prompt)
+	if strings.TrimSpace(prompt) != "" {
+		b.WriteString("\n")
 	}
-	return out
+	b.WriteString("<system_info>For this specific user request the only tools that are allowed are: ")
+	b.WriteString(strings.Join(allowedTools, ", "))
+	b.WriteString(".</system_info>\n")
+	return b.String()
 }

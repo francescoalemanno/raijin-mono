@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func TestToolExecutionGate_DisablesNonAllowedTool(t *testing.T) {
@@ -13,7 +13,7 @@ func TestToolExecutionGate_DisablesNonAllowedTool(t *testing.T) {
 
 	tool := NewGlobTool()
 	ctx := WithAllowedTools(context.Background(), []string{"read"})
-	resp, err := tool.Run(ctx, llm.ToolCall{Input: `{"pattern":"*.go"}`})
+	resp, err := tool.Run(ctx, libagent.ToolCall{Input: `{"pattern":"*.go"}`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestToolExecutionGate_AllowsListedTool(t *testing.T) {
 
 	tool := NewReadTool()
 	ctx := WithAllowedTools(context.Background(), []string{"read"})
-	resp, err := tool.Run(ctx, llm.ToolCall{Input: `{}`})
+	resp, err := tool.Run(ctx, libagent.ToolCall{Input: `{}`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

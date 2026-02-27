@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
 const grepDescription = "Search file contents for a pattern. Returns matching lines with file paths and line numbers."
@@ -85,13 +85,13 @@ type grepMatch struct {
 }
 
 // NewGrepTool creates a grep tool for searching file contents.
-func NewGrepTool() llm.Tool {
-	handler := func(ctx context.Context, params grepParams, call llm.ToolCall) (llm.ToolResponse, error) {
+func NewGrepTool() libagent.Tool {
+	handler := func(ctx context.Context, params grepParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		if resp, blocked := toolExecutionGate(ctx, "grep"); blocked {
 			return resp, nil
 		}
 		if params.Pattern == "" {
-			return llm.NewTextErrorResponse("pattern is required"), nil
+			return libagent.NewTextErrorResponse("pattern is required"), nil
 		}
 
 		searchPattern := params.Pattern
@@ -108,9 +108,9 @@ func NewGrepTool() llm.Tool {
 		matches, err := searchFiles(ctx, searchPattern, searchPath, params.Include)
 		if err != nil {
 			if ctx.Err() != nil {
-				return llm.ToolResponse{}, ctx.Err()
+				return libagent.ToolResponse{}, ctx.Err()
 			}
-			return llm.NewTextErrorResponse(fmt.Sprintf("searching files: %s", err)), nil
+			return libagent.NewTextErrorResponse(fmt.Sprintf("searching files: %s", err)), nil
 		}
 
 		var output strings.Builder
@@ -142,12 +142,12 @@ func NewGrepTool() llm.Tool {
 
 		}
 
-		return llm.NewTextResponse(output.String()), nil
+		return libagent.NewTextResponse(output.String()), nil
 	}
 
 	renderFunc := func(input json.RawMessage, output string, _ int) string {
 		var params grepParams
-		if err := llm.ParseJSONInput(input, &params); err != nil {
+		if err := libagent.ParseJSONInput(input, &params); err != nil {
 			return "grep (failed)"
 		}
 		var parts []string
@@ -167,7 +167,7 @@ func NewGrepTool() llm.Tool {
 	}
 
 	return WithRender(
-		llm.NewParallelAgentTool("grep", grepDescription, handler),
+		libagent.NewParallelTypedTool("grep", grepDescription, handler),
 		renderFunc,
 	)
 }

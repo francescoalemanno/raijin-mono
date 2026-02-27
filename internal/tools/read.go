@@ -12,9 +12,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
 	"github.com/francescoalemanno/raijin-mono/internal/input"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -38,18 +38,18 @@ type readToolDetails struct {
 	Truncation *TruncationResult `json:"truncation,omitempty"`
 }
 
-func readToolNudge(content string) llm.ToolResponse {
-	return llm.NewTextErrorResponse("An error during the call of the read tool happened: " + content + "\n\nFix the tool call and retry, provide a `path` parameter, if path is wrong use `glob` tool to find paths.")
+func readToolNudge(content string) libagent.ToolResponse {
+	return libagent.NewTextErrorResponse("An error during the call of the read tool happened: " + content + "\n\nFix the tool call and retry, provide a `path` parameter, if path is wrong use `glob` tool to find paths.")
 }
 
 // NewReadTool creates a read tool for reading files and directories.
-func NewReadTool() llm.Tool {
+func NewReadTool() libagent.Tool {
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
 	}
 
-	handler := func(ctx context.Context, params readParams, call llm.ToolCall) (llm.ToolResponse, error) {
+	handler := func(ctx context.Context, params readParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		if resp, blocked := toolExecutionGate(ctx, "read"); blocked {
 			return resp, nil
 		}
@@ -70,13 +70,13 @@ func NewReadTool() llm.Tool {
 			result, details, err := readDirectory(ctx, resolvedPath, params)
 			if err != nil {
 				if ctx.Err() != nil {
-					return llm.ToolResponse{}, ctx.Err()
+					return libagent.ToolResponse{}, ctx.Err()
 				}
-				return llm.NewTextErrorResponse(err.Error()), nil
+				return libagent.NewTextErrorResponse(err.Error()), nil
 			}
-			resp := llm.NewTextResponse(result)
+			resp := libagent.NewTextResponse(result)
 			if details != nil {
-				resp = llm.WithResponseMetadata(resp, details)
+				resp = libagent.WithResponseMetadata(resp, details)
 			}
 			return resp, nil
 		}
@@ -91,27 +91,27 @@ func NewReadTool() llm.Tool {
 				return readToolNudge(fmt.Sprintf("reading image: %s", err)), nil
 			}
 			encoded := base64.StdEncoding.EncodeToString(data)
-			return llm.NewMediaResponse([]byte(encoded), mediaType), nil
+			return libagent.NewMediaResponse([]byte(encoded), mediaType), nil
 		}
 
 		result, details, err := readText(ctx, resolvedPath, params)
 		if err != nil {
 			if ctx.Err() != nil {
-				return llm.ToolResponse{}, ctx.Err()
+				return libagent.ToolResponse{}, ctx.Err()
 			}
-			return llm.NewTextErrorResponse(err.Error()), nil
+			return libagent.NewTextErrorResponse(err.Error()), nil
 		}
 
-		resp := llm.NewTextResponse(result)
+		resp := libagent.NewTextResponse(result)
 		if details != nil {
-			resp = llm.WithResponseMetadata(resp, details)
+			resp = libagent.WithResponseMetadata(resp, details)
 		}
 		return resp, nil
 	}
 
 	renderFunc := func(input json.RawMessage, output string, _ int) string {
 		var params readParams
-		if err := llm.ParseJSONInput(input, &params); err != nil {
+		if err := libagent.ParseJSONInput(input, &params); err != nil {
 			return "read (failed)"
 		}
 
@@ -137,7 +137,7 @@ func NewReadTool() llm.Tool {
 	}
 
 	return WithRender(
-		llm.NewParallelAgentTool("read", readDescription, handler),
+		libagent.NewParallelTypedTool("read", readDescription, handler),
 		renderFunc,
 	)
 }

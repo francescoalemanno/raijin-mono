@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
 	shellrun "github.com/francescoalemanno/raijin-mono/internal/shell"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
 const (
@@ -22,10 +22,10 @@ const (
 
 // pluginMeta is the JSON structure returned by a plugin's --info flag.
 type pluginMeta struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]*llm.Schema `json:"parameters,omitempty"`
-	Required    []string               `json:"required,omitempty"`
+	Name        string                      `json:"name"`
+	Description string                      `json:"description"`
+	Parameters  map[string]*libagent.Schema `json:"parameters,omitempty"`
+	Required    []string                    `json:"required,omitempty"`
 }
 
 type pluginArtifact struct {
@@ -60,23 +60,22 @@ func loadPluginArtifacts() ([]artifacts.Item, error) {
 	return items, errors.Join(allErrs...)
 }
 
-// pluginTool implements llm.Tool for an external plugin script.
+// pluginTool implements libagent.Tool for an external plugin script.
 type pluginTool struct {
-	meta            pluginMeta
-	scriptPath      string
-	providerOptions llm.ProviderOptions
+	meta       pluginMeta
+	scriptPath string
 }
 
-func (t *pluginTool) Info() llm.ToolInfo {
+func (t *pluginTool) Info() libagent.ToolInfo {
 	params := make(map[string]any)
 	for name, propSchema := range t.meta.Parameters {
-		params[name] = llm.SchemaToMap(*propSchema)
+		params[name] = map[string]any(*propSchema)
 	}
 	required := t.meta.Required
 	if required == nil {
 		required = []string{}
 	}
-	return llm.ToolInfo{
+	return libagent.ToolInfo{
 		Name:        t.meta.Name,
 		Description: t.meta.Description,
 		Parameters:  params,
@@ -84,7 +83,7 @@ func (t *pluginTool) Info() llm.ToolInfo {
 	}
 }
 
-func (t *pluginTool) Run(ctx context.Context, params llm.ToolCall) (llm.ToolResponse, error) {
+func (t *pluginTool) Run(ctx context.Context, params libagent.ToolCall) (libagent.ToolResponse, error) {
 	if resp, blocked := toolExecutionGate(ctx, t.meta.Name); blocked {
 		return resp, nil
 	}
@@ -99,22 +98,14 @@ func (t *pluginTool) Run(ctx context.Context, params llm.ToolCall) (llm.ToolResp
 		if errMsg == "" {
 			errMsg = err.Error()
 		}
-		return llm.NewTextErrorResponse(fmt.Sprintf("plugin %q failed: %s", t.meta.Name, errMsg)), nil
+		return libagent.NewTextErrorResponse(fmt.Sprintf("plugin %q failed: %s", t.meta.Name, errMsg)), nil
 	}
 
 	output := strings.TrimSpace(stdout.String())
 	if output == "" {
 		output = "(no output)"
 	}
-	return llm.NewTextResponse(output), nil
-}
-
-func (t *pluginTool) ProviderOptions() llm.ProviderOptions {
-	return t.providerOptions
-}
-
-func (t *pluginTool) SetProviderOptions(opts llm.ProviderOptions) {
-	t.providerOptions = opts
+	return libagent.NewTextResponse(output), nil
 }
 
 func discoverPluginArtifacts(dir string) ([]pluginArtifact, []error) {
@@ -153,7 +144,7 @@ func discoverPluginArtifacts(dir string) ([]pluginArtifact, []error) {
 	return plugins, errs
 }
 
-func newPluginTool(meta pluginMeta, scriptPath string) llm.Tool {
+func newPluginTool(meta pluginMeta, scriptPath string) libagent.Tool {
 	renderFunc := func(input json.RawMessage, output string, _ int) string {
 		header := fmt.Sprintf("plugin:%s", meta.Name)
 		if params := renderPluginParamsPreview(input); params != "" {
@@ -191,9 +182,9 @@ func renderPluginParamsPreview(input json.RawMessage) string {
 }
 
 // LoadPluginTools returns plugin tools from the centralized artifact cache.
-func LoadPluginTools() []llm.Tool {
+func LoadPluginTools() []libagent.Tool {
 	cachedPlugins := artifacts.GetAllTyped[pluginArtifact](artifacts.KindTools)
-	loaded := make([]llm.Tool, 0, len(cachedPlugins))
+	loaded := make([]libagent.Tool, 0, len(cachedPlugins))
 	for _, plugin := range cachedPlugins {
 		loaded = append(loaded, newPluginTool(plugin.meta, plugin.scriptPath))
 	}

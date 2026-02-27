@@ -2,13 +2,14 @@ package chat
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/components"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/keys"
@@ -26,8 +27,6 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/substitution"
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/catalog"
-	bridgecfg "github.com/francescoalemanno/raijin-mono/llmbridge/pkg/config"
 )
 
 type chatState int
@@ -37,12 +36,11 @@ const (
 	stateRunning
 )
 
-var thinkingLevelCycleOrder = []llm.ThinkingLevel{
-	llm.ThinkingLevelOff,
-	llm.ThinkingLevelLow,
-	llm.ThinkingLevelMedium,
-	llm.ThinkingLevelHigh,
-	llm.ThinkingLevelMax,
+var thinkingLevelCycleOrder = []libagent.ThinkingLevel{
+	libagent.ThinkingLevelLow,
+	libagent.ThinkingLevelMedium,
+	libagent.ThinkingLevelHigh,
+	libagent.ThinkingLevelMax,
 }
 
 // historyEntry tracks a component in the history container.
@@ -51,10 +49,11 @@ type historyEntry struct {
 }
 
 type ChatApp struct {
-	ui      *tui.TUI
-	session *chatsession.Session
-	cfg     *bridgecfg.Config
-	store   *modelconfig.ModelStore
+	ui           *tui.TUI
+	session      *chatsession.Session
+	runtimeModel libagent.RuntimeModel
+	modelCfg     libagent.ModelConfig
+	store        *modelconfig.ModelStore
 
 	// Components
 	logo            *components.Text
@@ -68,43 +67,42 @@ type ChatApp struct {
 	footer          *components.Text
 
 	// State (managed on UI goroutine via Dispatch)
-	state                   chatState
-	compacting              bool
-	currentThinking         string
-	thinkingComponent       *ThinkingComponent
-	currentReply            string
-	replyComponent          *MessageComponent
-	items                   []historyEntry
-	pendingTools            map[string]*ToolExecutionComponent // tool call ID -> component
-	steeringQueue promptDeliveryQueue
-	blocksExpanded          bool
-	totalTokens             int64
-	contextWindow           int64
-	thinkingLevelDirty      bool
-	suppressTextEvents      bool
-	activeModalDone         func()
-	activeModalID           uint64
-	nextModalID             uint64
+	state              chatState
+	compacting         bool
+	currentThinking    string
+	thinkingComponent  *ThinkingComponent
+	currentReply       string
+	replyComponent     *MessageComponent
+	items              []historyEntry
+	pendingTools       map[string]*ToolExecutionComponent // tool call ID -> component
+	blocksExpanded     bool
+	totalTokens        int64
+	contextWindow      int64
+	thinkingLevelDirty bool
+	suppressTextEvents bool
+	activeModalDone    func()
+	activeModalID      uint64
+	nextModalID        uint64
 
 	// Shutdown
 	done chan struct{}
 }
 
-func RunChat(cfg *bridgecfg.Config) error {
-	return RunChatWithPrompt(cfg, "")
+func RunChat(runtimeModel libagent.RuntimeModel, modelCfg libagent.ModelConfig) error {
+	return RunChatWithPrompt(runtimeModel, modelCfg, "")
 }
 
-func RunChatWithPrompt(cfg *bridgecfg.Config, initialPrompt string) error {
-	sess, err := chatsession.New(cfg)
+func RunChatWithPrompt(runtimeModel libagent.RuntimeModel, modelCfg libagent.ModelConfig, initialPrompt string) error {
+	sess, err := chatsession.New(runtimeModel)
 	if err != nil && sess == nil {
 		return err
 	}
 	store, _ := modelconfig.LoadModelStore()
 
 	term := terminal.NewProcessTerminal()
-	app := newChatApp(term, sess, cfg, store)
+	app := newChatApp(term, sess, runtimeModel, modelCfg, store)
 
-	app.session.SetEventCallback(func(event core.AgentEvent) {
+	app.session.SetEventCallback(func(event libagent.AgentEvent) {
 		app.handleEvent(event)
 	})
 
@@ -122,14 +120,14 @@ func (app *ChatApp) submitInitialPrompt(prompt string) {
 	go app.handleSubmit(prompt)
 }
 
-func newChatApp(term terminal.Terminal, sess *chatsession.Session, cfg *bridgecfg.Config, store *modelconfig.ModelStore) *ChatApp {
+func newChatApp(term terminal.Terminal, sess *chatsession.Session, runtimeModel libagent.RuntimeModel, modelCfg libagent.ModelConfig, store *modelconfig.ModelStore) *ChatApp {
 	app := &ChatApp{
-		session:       sess,
-		cfg:           cfg,
-		store:         store,
-		pendingTools:  make(map[string]*ToolExecutionComponent),
-		steeringQueue: newPromptDeliveryQueue(),
-		done:          make(chan struct{}),
+		session:      sess,
+		runtimeModel: runtimeModel,
+		modelCfg:     modelCfg,
+		store:        store,
+		pendingTools: make(map[string]*ToolExecutionComponent),
+		done:         make(chan struct{}),
 	}
 
 	app.ui = tui.NewTUI(term)
@@ -259,8 +257,6 @@ func (app *ChatApp) refreshHeader() {
 	// Logo
 	app.logo.SetText(theme.Default.RenderGradient("//////// RAIJIN ////////"))
 
-	sm, _, ok := app.cfg.ActiveModel()
-
 	// Left side: cwd + context stats + warnings
 	var leftParts []string
 	if cwd := renderWorkingDir(); cwd != "" {
@@ -269,7 +265,6 @@ func (app *ChatApp) refreshHeader() {
 	if app.contextWindow > 0 {
 		pct := float64(app.totalTokens) / float64(app.contextWindow) * 100
 		leftParts = append(leftParts, theme.Default.Muted.Ansi24(fmt.Sprintf("%.1f%%/%s", pct, formatTokenCount(app.contextWindow))))
-		// Context usage warnings
 		if pct >= 80 {
 			leftParts = append(leftParts, theme.Default.Danger.AnsiBold("LLM about to fail for context exhaustion, run /compact"))
 		} else if pct >= 45 {
@@ -280,10 +275,9 @@ func (app *ChatApp) refreshHeader() {
 
 	// Right side: (provider) model • thinking
 	var right string
-	if ok {
-		modelName := sm.Model
-		thinking := string(llm.NormalizeThinkingLevel(sm.ThinkingLevel))
-		right = theme.Default.Muted.Ansi24(fmt.Sprintf("(%s) %s • %s", sm.Provider, modelName, thinking))
+	if app.modelCfg.Provider != "" {
+		thinking := string(libagent.NormalizeThinkingLevel(app.modelCfg.ThinkingLevel))
+		right = theme.Default.Muted.Ansi24(fmt.Sprintf("(%s) %s • %s", app.modelCfg.Provider, app.modelCfg.Model, thinking))
 	}
 
 	app.header.SetInfo(left, right)
@@ -348,14 +342,12 @@ func (app *ChatApp) refreshFooter() {
 }
 
 func (app *ChatApp) cycleThinkingLevel() {
-	sm, _, ok := app.cfg.ActiveModel()
-	if !ok {
+	if app.modelCfg.Provider == "" {
 		return
 	}
 
-	nextLevel := nextThinkingLevel(sm.ThinkingLevel)
-	sm.ThinkingLevel = nextLevel
-	app.cfg.Model = sm
+	nextLevel := nextThinkingLevel(app.modelCfg.ThinkingLevel)
+	app.modelCfg.ThinkingLevel = nextLevel
 
 	if app.store != nil {
 		if defaultName := app.store.DefaultName(); defaultName != "" {
@@ -372,7 +364,13 @@ func (app *ChatApp) cycleThinkingLevel() {
 	if app.state == stateRunning {
 		app.thinkingLevelDirty = true
 	} else if app.session != nil {
-		if err := app.session.Reconfigure(app.cfg); err != nil {
+		newModel, err := rebuildRuntimeModel(app.modelCfg)
+		if err != nil {
+			app.appendMessage("failed to apply thinking level: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
+			return
+		}
+		app.runtimeModel = newModel
+		if err := app.session.Reconfigure(app.runtimeModel); err != nil {
 			app.appendMessage("failed to apply thinking level: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			return
 		}
@@ -381,8 +379,8 @@ func (app *ChatApp) cycleThinkingLevel() {
 	app.refreshHeader()
 }
 
-func nextThinkingLevel(current llm.ThinkingLevel) llm.ThinkingLevel {
-	normalized := llm.NormalizeThinkingLevel(current)
+func nextThinkingLevel(current libagent.ThinkingLevel) libagent.ThinkingLevel {
+	normalized := libagent.NormalizeThinkingLevel(current)
 	for i, level := range thinkingLevelCycleOrder {
 		if level == normalized {
 			return thinkingLevelCycleOrder[(i+1)%len(thinkingLevelCycleOrder)]
@@ -399,7 +397,6 @@ func (app *ChatApp) resetConversationView(showWelcome bool) {
 	app.replyComponent = nil
 	app.currentThinking = ""
 	app.thinkingComponent = nil
-	app.steeringQueue = newPromptDeliveryQueue()
 	app.activeModalDone = nil
 	app.activeModalID = 0
 	app.totalTokens = 0
@@ -513,7 +510,7 @@ func (app *ChatApp) appendMessage(content string, borderChar string, borderColor
 
 // appendToolExecution appends a tool-execution component to the conversation history.
 func (app *ChatApp) appendToolExecution(toolID, toolName string, args json.RawMessage) *ToolExecutionComponent {
-	var tool llm.Tool
+	var tool libagent.Tool
 	if app.session != nil {
 		tool = tools.FindTool(app.session.Tools(), toolName)
 		if tool == nil && app.session.Agent() != nil {
@@ -567,39 +564,72 @@ func (app *ChatApp) flushReply() {
 // Agent event handling (called from agent goroutine)
 // ---------------------------------------------------------------------------
 
-func (app *ChatApp) handleEvent(event core.AgentEvent) {
+func (app *ChatApp) handleEvent(event libagent.AgentEvent) {
 	app.ui.Dispatch(func() {
 		if app.suppressTextEvents {
-			switch event.Kind {
-			case core.EventTextDelta, core.EventThinking:
-				return
+			if event.Type == libagent.AgentEventTypeMessageUpdate && event.Delta != nil {
+				switch event.Delta.Type {
+				case "text_delta", "reasoning_delta":
+					return
+				}
 			}
 		}
-		switch event.Kind {
-		case core.EventTextDelta:
-			app.onTextDelta(event)
-		case core.EventThinking:
-			app.onThinkingDelta(event)
-		case core.EventToolCall:
-			app.onToolCall(event)
-		case core.EventToolInputDelta:
-			app.onToolInputDelta(event)
-		case core.EventToolResult:
-			app.onToolResult(event)
-		case core.EventStreaming:
+		switch event.Type {
+		case libagent.AgentEventTypeAgentStart:
 			app.onStreaming()
-		case core.EventTotalTokens:
-			app.onTotalTokens(event)
+		case libagent.AgentEventTypeMessageUpdate:
+			app.onMessageUpdate(event)
+		case libagent.AgentEventTypeToolExecutionStart:
+			app.onToolExecutionStart(event)
+		case libagent.AgentEventTypeMessageEnd:
+			app.onMessageEnd(event)
 		}
 		app.refreshStatus()
 		app.refreshHeader()
 	})
 }
 
+func (app *ChatApp) onMessageUpdate(event libagent.AgentEvent) {
+	delta := event.Delta
+	if delta == nil {
+		return
+	}
+	switch delta.Type {
+	case "text_delta":
+		app.onTextDelta(delta.Delta)
+	case "reasoning_delta":
+		app.onThinkingDelta(delta.Delta)
+	case "tool_input_start":
+		app.onToolCall(delta.ID, delta.ToolName, "")
+	case "tool_input_delta":
+		app.onToolInputDelta(delta.ID, delta.Delta)
+	}
+}
+
+func (app *ChatApp) onMessageEnd(event libagent.AgentEvent) {
+	switch m := event.Message.(type) {
+	case *libagent.ToolResultMessage:
+		mediaData := ""
+		if len(m.Data) > 0 {
+			mediaData = base64.StdEncoding.EncodeToString(m.Data)
+		}
+		app.onToolResult(m.ToolCallID, m.Content, m.IsError, m.MIMEType, mediaData)
+	case *libagent.AssistantMessage:
+		app.totalTokens = m.Usage.InputTokens + m.Usage.CacheReadTokens + m.Usage.OutputTokens
+		if cw := app.runtimeModel.EffectiveContextWindow(); cw > 0 {
+			app.contextWindow = cw
+		}
+	}
+}
+
+func (app *ChatApp) onToolExecutionStart(event libagent.AgentEvent) {
+	app.onToolCall(event.ToolCallID, event.ToolName, event.ToolArgs)
+}
+
 // onTextDelta handles an incremental text chunk from the assistant.
-func (app *ChatApp) onTextDelta(event core.AgentEvent) {
+func (app *ChatApp) onTextDelta(text string) {
 	app.flushThinking()
-	app.currentReply += event.Text
+	app.currentReply += text
 	if app.replyComponent == nil {
 		app.appendSpacer()
 		app.replyComponent = app.appendMessage("", theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, true)
@@ -608,8 +638,8 @@ func (app *ChatApp) onTextDelta(event core.AgentEvent) {
 }
 
 // onThinkingDelta handles an incremental thinking/reasoning chunk.
-func (app *ChatApp) onThinkingDelta(event core.AgentEvent) {
-	app.currentThinking += event.Text
+func (app *ChatApp) onThinkingDelta(text string) {
+	app.currentThinking += text
 	if app.thinkingComponent == nil {
 		app.appendSpacer()
 		comp := NewThinking(app.ui)
@@ -621,29 +651,29 @@ func (app *ChatApp) onThinkingDelta(event core.AgentEvent) {
 }
 
 // onToolCall handles a tool-call event (new tool or args update for existing one).
-func (app *ChatApp) onToolCall(event core.AgentEvent) {
+func (app *ChatApp) onToolCall(id, name, input string) {
 	app.flushReply()
-	if comp, ok := app.pendingTools[event.ID]; ok {
-		if event.Input != "" {
-			comp.UpdateArgs(json.RawMessage(event.Input))
+	if comp, ok := app.pendingTools[id]; ok {
+		if input != "" {
+			comp.UpdateArgs(json.RawMessage(input))
 		}
 	} else {
-		app.appendToolExecution(event.ID, event.Name, json.RawMessage(event.Input))
+		app.appendToolExecution(id, name, json.RawMessage(input))
 	}
 }
 
 // onToolInputDelta handles an incremental input delta for a pending tool call.
-func (app *ChatApp) onToolInputDelta(event core.AgentEvent) {
-	if comp, ok := app.pendingTools[event.ID]; ok {
-		comp.AppendInputDelta(event.Input)
+func (app *ChatApp) onToolInputDelta(id, input string) {
+	if comp, ok := app.pendingTools[id]; ok {
+		comp.AppendInputDelta(input)
 	}
 }
 
 // onToolResult handles the result of a completed tool call.
-func (app *ChatApp) onToolResult(event core.AgentEvent) {
-	if comp, ok := app.pendingTools[event.ID]; ok {
-		comp.UpdateResultWithMedia(event.Output, event.IsError, event.MediaType, event.MediaDataBase64)
-		delete(app.pendingTools, event.ID)
+func (app *ChatApp) onToolResult(id, output string, isError bool, mediaType, mediaDataBase64 string) {
+	if comp, ok := app.pendingTools[id]; ok {
+		comp.UpdateResultWithMedia(output, isError, mediaType, mediaDataBase64)
+		delete(app.pendingTools, id)
 	}
 }
 
@@ -651,14 +681,6 @@ func (app *ChatApp) onToolResult(event core.AgentEvent) {
 func (app *ChatApp) onStreaming() {
 	app.flushReply()
 	app.state = stateRunning
-}
-
-// onTotalTokens handles a token-count update.
-func (app *ChatApp) onTotalTokens(event core.AgentEvent) {
-	app.totalTokens = event.TotalTokens
-	if event.ContextWindow > 0 {
-		app.contextWindow = event.ContextWindow
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -703,39 +725,27 @@ type queuedPrompt struct {
 	Opts  promptRunOptions
 }
 
+type preparedPromptInput struct {
+	text         string
+	attachments  []message.BinaryContent
+	skills       []message.SkillContent
+	loadedSkills []string
+}
+
 func (app *ChatApp) dispatchSync(fn func(tui.UIToken)) bool {
 	return app.ui.DispatchSync(context.WithoutCancel(context.Background()), fn)
 }
 
 func (app *ChatApp) runPromptWithOptions(input string, opts promptRunOptions) {
 	current := queuedPrompt{Input: strings.TrimSpace(input), Opts: opts}
-	for {
-		var enqueued bool
-		app.dispatchSync(func(_ tui.UIToken) {
-			if app.state == stateRunning {
-						app.enqueueSteering(current.Input, current.Opts)
-				// Issue steering interrupt immediately after first enqueue.
-				if app.steeringQueue.Len() == 1 {
-					app.session.Agent().RequestStop(app.session.ID())
-				}
-				app.refreshStatus()
-				enqueued = true
-			}
-		})
-		if enqueued {
-			return
-		}
-		next, hasNext := app.runOnce(current)
-		if !hasNext {
-			return
-		}
-		current = next
+	if app.trySteer(current) {
+		return
 	}
+	app.runOnce(current)
 }
 
-// runOnce executes a single prompt turn: renders the user message, calls the
-// agent, then finalises the UI and returns any queued follow-up prompt.
-func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bool) {
+// runOnce executes a single prompt turn: renders the user message, calls the agent, then finalises the UI.
+func (app *ChatApp) runOnce(current queuedPrompt) {
 	// Render user message and transition to running state (on UI goroutine).
 	app.dispatchSync(func(_ tui.UIToken) {
 		app.appendSpacer()
@@ -772,11 +782,10 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 			app.stopLoader()
 			app.refreshStatus()
 		})
-		return queuedPrompt{}, false
+		return
 	}
 
-	// Parse resources (can happen off UI goroutine).
-	text, files, skills, err := input.ParseAndLoadResources(current.Input)
+	prepared, err := app.preparePromptInput(current.Input)
 	if err != nil {
 		app.dispatchSync(func(_ tui.UIToken) {
 			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
@@ -784,49 +793,26 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 			app.stopLoader()
 			app.refreshStatus()
 		})
-		return queuedPrompt{}, false
+		return
 	}
-
-	var attachments []message.BinaryContent
-	for _, f := range files {
-		attachments = append(attachments, message.BinaryContent{
-			Path:     f.Path,
-			MIMEType: f.MediaType,
-			Data:     f.Data,
-		})
-	}
-
-	paths := app.session.Paths()
-	var skillAttachments []message.SkillContent
-	for _, loaded := range skills {
-		skillAttachments = append(skillAttachments, message.SkillContent{
-			Name:    loaded.Name,
-			Content: loaded.Content,
-		})
-		tools.RegisterSkillScriptsPath(paths, loaded.ScriptsDir)
-	}
-	if len(skills) > 0 {
-		app.dispatchSync(func(_ tui.UIToken) {
-			for _, loaded := range skills {
-				app.appendMessage("↪ "+loaded.Name+" skill loaded", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
-			}
-		})
-	}
+	app.showLoadedSkills(prepared.loadedSkills)
 
 	// Run agent (blocking, off UI goroutine).
 	sessionID := app.session.ID()
-	_, err = app.session.Agent().Run(context.Background(), agent.SessionAgentCall{
+	maxTokens := app.modelCfg.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = libagent.DefaultMaxTokens
+	}
+	err = app.session.Agent().Run(context.Background(), agent.SessionAgentCall{
 		SessionID:       sessionID,
-		Prompt:          text,
-		Attachments:     attachments,
-		Skills:          skillAttachments,
+		Prompt:          prepared.text,
+		Attachments:     prepared.attachments,
+		Skills:          prepared.skills,
 		AllowedTools:    current.Opts.AllowedTools,
-		MaxOutputTokens: int64(app.cfg.MaxTokens()),
+		MaxOutputTokens: maxTokens,
 	})
 
 	// Finalize (on UI goroutine).
-	var nextPrompt queuedPrompt
-	var hasNextPrompt bool
 	var applyThinkingLevel bool
 	app.dispatchSync(func(_ tui.UIToken) {
 		app.flushReply()
@@ -837,28 +823,69 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 		app.state = stateIdle
 		applyThinkingLevel = app.thinkingLevelDirty
 		app.thinkingLevelDirty = false
-		nextPrompt, hasNextPrompt = app.dequeueSteering()
 		app.stopLoader()
 		app.refreshStatus()
 		app.refreshHeader()
 	})
 	if applyThinkingLevel && app.session != nil {
-		if reconfigureErr := app.session.Reconfigure(app.cfg); reconfigureErr != nil {
-			app.dispatchSync(func(_ tui.UIToken) {
-				app.appendMessage("failed to apply thinking level: "+reconfigureErr.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
-			})
+		newModel, rebuildErr := rebuildRuntimeModel(app.modelCfg)
+		if rebuildErr == nil {
+			app.runtimeModel = newModel
+			if reconfigureErr := app.session.Reconfigure(app.runtimeModel); reconfigureErr != nil {
+				app.dispatchSync(func(_ tui.UIToken) {
+					app.appendMessage("failed to apply thinking level: "+reconfigureErr.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
+				})
+			}
 		}
 	}
-	return nextPrompt, hasNextPrompt
 }
 
-func (app *ChatApp) enqueueSteering(input string, opts promptRunOptions) {
-	app.steeringQueue.Enqueue(queuedPrompt{Input: input, Opts: opts})
+func (app *ChatApp) trySteer(current queuedPrompt) bool {
+	var running bool
+	var sessionID string
+	var sessionOK bool
+	app.dispatchSync(func(_ tui.UIToken) {
+		running = app.state == stateRunning
+		sessionOK = app.session != nil && app.session.Agent() != nil && app.session.ID() != ""
+		if sessionOK {
+			sessionID = app.session.ID()
+		}
+	})
+	if !running {
+		return false
+	}
+	if !sessionOK {
+		app.dispatchSync(func(_ tui.UIToken) {
+			app.appendMessage("cannot steer: no active session", theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
+		})
+		return true
+	}
 
-	preview := input
-	if opts.TemplateName != "" {
+	prepared, err := app.preparePromptInput(current.Input)
+	if err != nil {
+		app.dispatchSync(func(_ tui.UIToken) {
+			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
+		})
+		return true
+	}
+	app.showLoadedSkills(prepared.loadedSkills)
+
+	if err := app.session.Agent().Steer(context.Background(), agent.SessionAgentCall{
+		SessionID:   sessionID,
+		Prompt:      prepared.text,
+		Attachments: prepared.attachments,
+		Skills:      prepared.skills,
+	}); err != nil {
+		app.dispatchSync(func(_ tui.UIToken) {
+			app.appendMessage("failed to queue steering: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
+		})
+		return true
+	}
+
+	preview := current.Input
+	if current.Opts.TemplateName != "" {
 		if preview == "" {
-			preview = "/" + opts.TemplateName
+			preview = "/" + current.Opts.TemplateName
 		}
 		preview += " (template)"
 	}
@@ -870,12 +897,53 @@ func (app *ChatApp) enqueueSteering(input string, opts promptRunOptions) {
 	if len(runes) > 80 {
 		preview = string(runes[:79]) + "…"
 	}
-
-	app.appendMessage("↪ steering queued: "+preview, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
+	app.dispatchSync(func(_ tui.UIToken) {
+		app.appendMessage("↪ steering queued: "+preview, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
+	})
+	return true
 }
 
-func (app *ChatApp) dequeueSteering() (queuedPrompt, bool) {
-	return app.steeringQueue.DequeueAll()
+func (app *ChatApp) preparePromptInput(raw string) (preparedPromptInput, error) {
+	text, files, loadedSkills, err := input.ParseAndLoadResources(raw)
+	if err != nil {
+		return preparedPromptInput{}, err
+	}
+
+	out := preparedPromptInput{
+		text:         text,
+		attachments:  make([]message.BinaryContent, 0, len(files)),
+		skills:       make([]message.SkillContent, 0, len(loadedSkills)),
+		loadedSkills: make([]string, 0, len(loadedSkills)),
+	}
+	for _, f := range files {
+		out.attachments = append(out.attachments, message.BinaryContent{
+			Path:     f.Path,
+			MIMEType: f.MediaType,
+			Data:     f.Data,
+		})
+	}
+
+	paths := app.session.Paths()
+	for _, loaded := range loadedSkills {
+		out.skills = append(out.skills, message.SkillContent{
+			Name:    loaded.Name,
+			Content: loaded.Content,
+		})
+		out.loadedSkills = append(out.loadedSkills, loaded.Name)
+		tools.RegisterSkillScriptsPath(paths, loaded.ScriptsDir)
+	}
+	return out, nil
+}
+
+func (app *ChatApp) showLoadedSkills(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	app.dispatchSync(func(_ tui.UIToken) {
+		for _, name := range names {
+			app.appendMessage("↪ "+name+" skill loaded", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
+		}
+	})
 }
 
 func (app *ChatApp) handleCommand(input string) {
@@ -1041,7 +1109,7 @@ func (app *ChatApp) tryRunTemplateCommand(name, argsString string) bool {
 
 	allowedTools := core.DedupeSorted(tmpl.AllowedTools)
 	if len(allowedTools) > 0 {
-		var sessionTools []llm.Tool
+		var sessionTools []libagent.Tool
 		app.dispatchSync(func(_ tui.UIToken) {
 			if app.session != nil {
 				sessionTools = app.session.Tools()
@@ -1340,7 +1408,7 @@ func (app *ChatApp) applyModelChoice(name string) {
 	if app.modelSwitchBlocked() {
 		return
 	}
-	if app.store == nil || app.cfg == nil {
+	if app.store == nil {
 		return
 	}
 	modelCfg, ok := app.store.Get(name)
@@ -1352,9 +1420,15 @@ func (app *ChatApp) applyModelChoice(name string) {
 		app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
-	applyModelConfig(app.cfg, modelCfg)
+	newModel, err := rebuildRuntimeModel(modelCfg)
+	if err != nil {
+		app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
+		return
+	}
+	app.runtimeModel = newModel
+	app.modelCfg = modelCfg
 	if app.session != nil {
-		if err := app.session.Reconfigure(app.cfg); err != nil {
+		if err := app.session.Reconfigure(app.runtimeModel); err != nil {
 			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			return
 		}
@@ -1369,13 +1443,6 @@ func (app *ChatApp) showModelAdd() {
 		return
 	}
 	providerKeys := make(map[string]string)
-	if app.cfg != nil && app.cfg.Providers != nil {
-		for id, pc := range app.cfg.Providers {
-			if pc.APIKey != "" {
-				providerKeys[id] = pc.APIKey
-			}
-		}
-	}
 	if app.store != nil {
 		for _, name := range app.store.List() {
 			if mc, ok := app.store.Get(name); ok && mc.APIKey != "" {
@@ -1408,39 +1475,43 @@ func (app *ChatApp) applyModelAdd(result ModelAddResult) {
 		return
 	}
 
-	if strings.EqualFold(result.ProviderID, catalog.OpenAICodexProviderID) && strings.TrimSpace(result.APIKey) == "" {
+	if strings.EqualFold(result.ProviderID, libagent.CodexProviderID) && strings.TrimSpace(result.APIKey) == "" {
 		app.appendSpacer()
 		app.appendMessage("starting OpenAI Codex OAuth login...", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
-		if _, err := bridgecfg.EnsureOpenAICodexOAuth(context.Background(), func(msg string) {
+		cat := libagent.DefaultCatalog()
+		cat.SetLoginCallbacks(libagent.LoginCallbacksWithPrinter(func(msg string) {
 			app.appendMessage(msg, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
-		}); err != nil {
+		}))
+		loginModelID := strings.TrimSpace(result.ModelID)
+		if loginModelID == "" {
+			loginModelID = "gpt-5.3-codex"
+		}
+		_, err := cat.NewModel(context.Background(), libagent.CodexProviderID, loginModelID, "")
+		if err != nil {
 			app.appendMessage("openai-codex login failed: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			return
 		}
 		app.appendMessage("openai-codex login successful", theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, false)
 	}
 
-	maxTokens := int(result.MaxTokens)
-	if maxTokens == 0 {
-		maxTokens = bridgecfg.DefaultMaxTokens
+	maxTokens := result.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = libagent.DefaultMaxTokens
 	}
-	if result.ContextWindow > 0 && int64(maxTokens) >= result.ContextWindow {
-		maxTokens = int(result.ContextWindow / 2)
+	if result.ContextWindow > 0 && maxTokens >= result.ContextWindow {
+		maxTokens = result.ContextWindow / 2
 		if maxTokens < 1 {
 			maxTokens = 1
 		}
 	}
 
-	thinkingLevel := llm.ThinkingLevelOff
-	if result.CanReason {
-		thinkingLevel = llm.ThinkingLevelMedium
-	}
-	modelCfg := bridgecfg.SelectedModel{
+	thinkingLevel := libagent.ThinkingLevelMedium
+	modelCfg := libagent.ModelConfig{
 		Name:          result.ProviderID + "/" + result.ModelID,
 		Provider:      result.ProviderID,
 		Model:         result.ModelID,
 		APIKey:        result.APIKey,
-		MaxTokens:     int64(maxTokens),
+		MaxTokens:     maxTokens,
 		ContextWindow: result.ContextWindow,
 		ThinkingLevel: thinkingLevel,
 	}
@@ -1454,13 +1525,15 @@ func (app *ChatApp) applyModelAdd(result ModelAddResult) {
 	}
 	_ = app.store.SetDefault(modelCfg.Name)
 
-	applyModelConfig(app.cfg, modelCfg)
-	if err := app.cfg.ConfigureProviders(); err != nil {
-		app.appendMessage("failed to configure providers: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
+	newModel, err := rebuildRuntimeModel(modelCfg)
+	if err != nil {
+		app.appendMessage("failed to configure model: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
+	app.runtimeModel = newModel
+	app.modelCfg = modelCfg
 	if app.session != nil {
-		if err := app.session.Reconfigure(app.cfg); err != nil {
+		if err := app.session.Reconfigure(app.runtimeModel); err != nil {
 			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			return
 		}
@@ -1470,10 +1543,27 @@ func (app *ChatApp) applyModelAdd(result ModelAddResult) {
 	app.refreshHeader()
 }
 
-func applyModelConfig(current *bridgecfg.Config, modelCfg bridgecfg.SelectedModel) {
-	providerCfg := modelCfg.ToProviderConfig()
-	current.Providers[providerCfg.ID] = providerCfg
-	current.Model = modelCfg.Normalize()
+// rebuildRuntimeModel creates a new RuntimeModel from a ModelConfig using the catalog.
+func rebuildRuntimeModel(cfg libagent.ModelConfig) (libagent.RuntimeModel, error) {
+	cfg = cfg.Normalize()
+	cat := libagent.DefaultCatalog()
+	apiKey := cfg.APIKey
+	if strings.HasPrefix(apiKey, "$") {
+		apiKey = os.Getenv(strings.TrimPrefix(apiKey, "$"))
+	}
+	model, err := cat.NewModel(context.Background(), cfg.Provider, cfg.Model, apiKey)
+	if err != nil {
+		return libagent.RuntimeModel{}, fmt.Errorf("building model %s/%s: %w", cfg.Provider, cfg.Model, err)
+	}
+	info, _, _ := cat.FindModel(cfg.Provider, cfg.Model)
+	providerType, catalogOpts := cat.FindModelOptions(cfg.Provider, cfg.Model)
+	return libagent.RuntimeModel{
+		Model:                  model,
+		ModelInfo:              info,
+		ModelCfg:               cfg,
+		ProviderType:           providerType,
+		CatalogProviderOptions: catalogOpts,
+	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1489,7 +1579,6 @@ func (app *ChatApp) interruptRun() {
 	}
 	app.flushReply()
 	app.cancelPendingTools()
-	app.steeringQueue.Clear()
 	app.appendMessage("(interrupted)", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
 	app.stopLoader()
 }

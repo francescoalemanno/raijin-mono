@@ -1,12 +1,12 @@
 package tools
 
 import (
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 // RegisterDefaultTools registers all default tools.
-func RegisterDefaultTools(paths *PathRegistry) []llm.Tool {
-	builtin := []llm.Tool{
+func RegisterDefaultTools(paths *PathRegistry) []libagent.Tool {
+	builtin := []libagent.Tool{
 		NewReadTool(),
 		NewGlobTool(),
 		NewGrepTool(),

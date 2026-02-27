@@ -8,15 +8,15 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
-	bridgecfg "github.com/francescoalemanno/raijin-mono/llmbridge/pkg/config"
 )
 
 const modelsDirPerm = 0o755
 
 type modelsFile struct {
-	Default string                             `toml:"default"`
-	Models  map[string]bridgecfg.SelectedModel `toml:"models"`
+	Default string                          `toml:"default"`
+	Models  map[string]libagent.ModelConfig `toml:"models"`
 }
 
 type ModelStore struct {
@@ -29,13 +29,13 @@ func LoadModelStore() (*ModelStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &ModelStore{path: path, data: modelsFile{Models: map[string]bridgecfg.SelectedModel{}}}
+	store := &ModelStore{path: path, data: modelsFile{Models: map[string]libagent.ModelConfig{}}}
 	if _, err := os.Stat(path); err == nil {
 		if _, err := toml.DecodeFile(path, &store.data); err != nil {
 			return nil, err
 		}
 		if store.data.Models == nil {
-			store.data.Models = map[string]bridgecfg.SelectedModel{}
+			store.data.Models = map[string]libagent.ModelConfig{}
 		}
 	}
 	return store, nil
@@ -54,25 +54,25 @@ func (s *ModelStore) DefaultName() string {
 	return s.data.Default
 }
 
-func (s *ModelStore) Get(name string) (bridgecfg.SelectedModel, bool) {
+func (s *ModelStore) Get(name string) (libagent.ModelConfig, bool) {
 	model, ok := s.data.Models[name]
 	return model, ok
 }
 
-func (s *ModelStore) GetDefault() (bridgecfg.SelectedModel, bool) {
+func (s *ModelStore) GetDefault() (libagent.ModelConfig, bool) {
 	if s.data.Default == "" {
-		return bridgecfg.SelectedModel{}, false
+		return libagent.ModelConfig{}, false
 	}
 	model, ok := s.data.Models[s.data.Default]
 	return model, ok
 }
 
-func (s *ModelStore) Add(model bridgecfg.SelectedModel) error {
+func (s *ModelStore) Add(model libagent.ModelConfig) error {
 	if strings.TrimSpace(model.Name) == "" {
 		return fmt.Errorf("model name cannot be empty")
 	}
 	if s.data.Models == nil {
-		s.data.Models = map[string]bridgecfg.SelectedModel{}
+		s.data.Models = map[string]libagent.ModelConfig{}
 	}
 	s.data.Models[model.Name] = model
 	return s.save()

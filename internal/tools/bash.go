@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/francescoalemanno/raijin-mono/libagent"
 	shellrun "github.com/francescoalemanno/raijin-mono/internal/shell"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
 type bashParams struct {
@@ -26,13 +26,13 @@ type bashToolDetails struct {
 }
 
 // NewBashTool creates a bash tool with optional path registry for extra PATH directories.
-func NewBashTool(paths *PathRegistry) llm.Tool {
-	handler := func(ctx context.Context, params bashParams, call llm.ToolCall) (llm.ToolResponse, error) {
+func NewBashTool(paths *PathRegistry) libagent.Tool {
+	handler := func(ctx context.Context, params bashParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		if resp, blocked := toolExecutionGate(ctx, "bash"); blocked {
 			return resp, nil
 		}
 		if strings.TrimSpace(params.Command) == "" {
-			return llm.NewTextErrorResponse("command is required"), nil
+			return libagent.NewTextErrorResponse("command is required"), nil
 		}
 
 		commandCtx := ctx
@@ -112,9 +112,9 @@ func NewBashTool(paths *PathRegistry) llm.Tool {
 				outputText += "\n\n"
 			}
 			outputText += "Command aborted"
-			resp := llm.NewTextErrorResponse(outputText)
+			resp := libagent.NewTextErrorResponse(outputText)
 			if details != nil {
-				resp = llm.WithResponseMetadata(resp, details)
+				resp = libagent.WithResponseMetadata(resp, details)
 			}
 			return resp, nil
 		}
@@ -124,9 +124,9 @@ func NewBashTool(paths *PathRegistry) llm.Tool {
 				outputText += "\n\n"
 			}
 			outputText += fmt.Sprintf("Command timed out after %d seconds", params.Timeout)
-			resp := llm.NewTextErrorResponse(outputText)
+			resp := libagent.NewTextErrorResponse(outputText)
 			if details != nil {
-				resp = llm.WithResponseMetadata(resp, details)
+				resp = libagent.WithResponseMetadata(resp, details)
 			}
 			return resp, nil
 		}
@@ -136,25 +136,25 @@ func NewBashTool(paths *PathRegistry) llm.Tool {
 			if errors.As(err, &exitErr) {
 				exitCode := exitErr.ExitCode()
 				outputText += fmt.Sprintf("\n\nCommand exited with code %d", exitCode)
-				resp := llm.NewTextErrorResponse(outputText)
+				resp := libagent.NewTextErrorResponse(outputText)
 				if details != nil {
-					resp = llm.WithResponseMetadata(resp, details)
+					resp = libagent.WithResponseMetadata(resp, details)
 				}
 				return resp, nil
 			}
-			return llm.NewTextErrorResponse(err.Error()), nil
+			return libagent.NewTextErrorResponse(err.Error()), nil
 		}
 
-		resp := llm.NewTextResponse(outputText)
+		resp := libagent.NewTextResponse(outputText)
 		if details != nil {
-			resp = llm.WithResponseMetadata(resp, details)
+			resp = libagent.WithResponseMetadata(resp, details)
 		}
 		return resp, nil
 	}
 
 	renderFunc := func(input json.RawMessage, output string, _ int) string {
 		var params bashParams
-		if err := llm.ParseJSONInput(input, &params); err != nil {
+		if err := libagent.ParseJSONInput(input, &params); err != nil {
 			return "bash (failed)"
 		}
 		header := fmt.Sprintf("$ %s", params.Command)
@@ -165,7 +165,7 @@ func NewBashTool(paths *PathRegistry) llm.Tool {
 	}
 
 	return WithRender(
-		llm.NewAgentTool("bash", fmt.Sprintf(
+		libagent.NewTypedTool("bash", fmt.Sprintf(
 			"Execute bash scripts in the current working directory. Returns stdout and stderr. Output is truncated to last %d lines or %dKB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
 			DefaultMaxLines,
 			DefaultMaxBytes/1024,

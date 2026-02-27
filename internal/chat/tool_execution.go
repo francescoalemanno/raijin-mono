@@ -13,7 +13,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 const toolPreviewLines = 10
@@ -27,7 +27,7 @@ type ToolExecutionComponent struct {
 	result   *toolResult
 
 	// The registered tool definition (for Render calls).
-	tool llm.Tool
+	tool libagent.Tool
 
 	status *StatusBlock
 }
@@ -40,7 +40,7 @@ type toolResult struct {
 
 // NewToolExecution creates a new tool execution component.
 // It starts in "pending" state with a spinner.
-func NewToolExecution(toolName string, args json.RawMessage, tool llm.Tool, ui components.UILike) *ToolExecutionComponent {
+func NewToolExecution(toolName string, args json.RawMessage, tool libagent.Tool, ui components.UILike) *ToolExecutionComponent {
 	t := &ToolExecutionComponent{
 		toolName: toolName,
 		args:     args,

@@ -12,7 +12,7 @@ import (
 const modulePath = "github.com/francescoalemanno/raijin-mono"
 
 // topLevelDir returns the top-level directory of a repo-relative file path
-// (e.g. "llmbridge" for "llmbridge/pkg/llm/runtime.go").
+// (e.g. "libagent" for "libagent/catalog.go").
 func topLevelDir(repoRelPath string) string {
 	return strings.SplitN(repoRelPath, string(os.PathSeparator), 2)[0]
 }
@@ -93,13 +93,13 @@ func TestImportPolicy(t *testing.T) {
 		for _, imp := range f.Imports {
 			impPath := strings.Trim(imp.Path.Value, `"`)
 
-			// Rule 1: only llmbridge may import charm libraries.
-			if isCharmImport(impPath) && dir != "llmbridge" {
+			// Rule 1: only libagent may import charm libraries.
+			if isCharmImport(impPath) && dir != "libagent" {
 				violations = append(violations, violation{
 					file:    relPath,
 					imp:     impPath,
 					ruleNum: 1,
-					reason:  "only llmbridge/ may import charm.land/charmbracelet libraries",
+					reason:  "only libagent/ may import charm.land/charmbracelet libraries",
 				})
 			}
 

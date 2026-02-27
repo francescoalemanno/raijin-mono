@@ -1,8 +1,8 @@
 package tools
 
 import (
+	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/core"
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
 )
 
 // mergeByPrecedence merges slices left-to-right, with later entries overriding
@@ -27,8 +27,8 @@ func mergeByPrecedence[T any](name func(T) string, levels ...[]T) []T {
 	return merged
 }
 
-func mergeToolsByPrecedence(levels ...[]llm.Tool) []llm.Tool {
-	return mergeByPrecedence(func(t llm.Tool) string { return t.Info().Name }, levels...)
+func mergeToolsByPrecedence(levels ...[]libagent.Tool) []libagent.Tool {
+	return mergeByPrecedence(func(t libagent.Tool) string { return t.Info().Name }, levels...)
 }
 
 func mergePluginArtifactsByPrecedence(levels ...[]pluginArtifact) []pluginArtifact {

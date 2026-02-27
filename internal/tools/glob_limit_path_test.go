@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 type globToolDetailsJSON struct {
@@ -50,7 +50,7 @@ func TestGlobToolLimitAndAtPathExpansion(t *testing.T) {
 	}
 
 	tool := NewGlobTool()
-	resp, err := tool.Run(context.Background(), llm.ToolCall{Input: `{"pattern":"*.go","path":"@sub","limit":1}`})
+	resp, err := tool.Run(context.Background(), libagent.ToolCall{Input: `{"pattern":"*.go","path":"@sub","limit":1}`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestGlobToolPathNotFoundSoftError(t *testing.T) {
 
 	tool := NewGlobTool()
 	missing := fmt.Sprintf("~/definitely-missing-%d", time.Now().UnixNano())
-	resp, err := tool.Run(context.Background(), llm.ToolCall{Input: fmt.Sprintf(`{"pattern":"*.go","path":%q}`, missing)})
+	resp, err := tool.Run(context.Background(), libagent.ToolCall{Input: fmt.Sprintf(`{"pattern":"*.go","path":%q}`, missing)})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestGlobToolInvalidPatternSoftError(t *testing.T) {
 	t.Parallel()
 
 	tool := NewGlobTool()
-	resp, err := tool.Run(context.Background(), llm.ToolCall{Input: `{"pattern":"["}`})
+	resp, err := tool.Run(context.Background(), libagent.ToolCall{Input: `{"pattern":"["}`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestGlobToolPathMustBeDirectory(t *testing.T) {
 	}
 
 	tool := NewGlobTool()
-	resp, err := tool.Run(context.Background(), llm.ToolCall{Input: fmt.Sprintf(`{"pattern":"*.go","path":%q}`, filePath)})
+	resp, err := tool.Run(context.Background(), libagent.ToolCall{Input: fmt.Sprintf(`{"pattern":"*.go","path":%q}`, filePath)})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

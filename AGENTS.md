@@ -17,10 +17,10 @@ gofumpt -l -w .
 ```
 
 # Code Organization
-- **cmd/raijin/**: Main entry point
+- **main.go**: Main entry point
 - **internal/**: Internal packages
 - **libtui/**: TUI rendering library
-- **llmbridge/**: Bridge between API providers and raijin chat
+- **libagent/**: Bridge between API providers and raijin chat
 
 # Naming Conventions
 - Follow Go standard naming: PascalCase for exported, camelCase for unexported

@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/francescoalemanno/raijin-mono/llmbridge/pkg/llm"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 // Normalize trims and lowercases a tool name.
@@ -45,7 +45,7 @@ func DedupeSorted(names []string) []string {
 
 // FilterUnknown returns the elements of allowed whose normalized name does not
 // match any tool in available. The result is sorted for deterministic output.
-func FilterUnknown(allowed []string, available []llm.Tool) []string {
+func FilterUnknown(allowed []string, available []libagent.Tool) []string {
 	if len(allowed) == 0 || len(available) == 0 {
 		return nil
 	}
