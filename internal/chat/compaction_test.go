@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -115,70 +114,5 @@ func TestEstimateConversationTokens(t *testing.T) {
 	got := estimateConversationTokens(msgs)
 	if got <= 0 {
 		t.Fatalf("expected positive token estimate, got %d", got)
-	}
-}
-
-func TestIsContextOverflow(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{
-			name: "nil error",
-			err:  nil,
-			want: false,
-		},
-		{
-			name: "context_length_exceeded",
-			err:  errors.New("context_length_exceeded"),
-			want: true,
-		},
-		{
-			name: "context length exceeded",
-			err:  errors.New("request failed: context length exceeded"),
-			want: true,
-		},
-		{
-			name: "context window",
-			err:  errors.New("the context window is too small"),
-			want: true,
-		},
-		{
-			name: "too long",
-			err:  errors.New("input is too long"),
-			want: true,
-		},
-		{
-			name: "maximum context",
-			err:  errors.New("maximum context length exceeded"),
-			want: true,
-		},
-		{
-			name: "context full",
-			err:  errors.New("context full"),
-			want: true,
-		},
-		{
-			name: "random error",
-			err:  errors.New("some other error"),
-			want: false,
-		},
-		{
-			name: "API rate limit",
-			err:  errors.New("rate limit exceeded"),
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isContextOverflow(tt.err)
-			if got != tt.want {
-				t.Fatalf("isContextOverflow(%v) = %v, want %v", tt.err, got, tt.want)
-			}
-		})
 	}
 }

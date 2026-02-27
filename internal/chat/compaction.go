@@ -93,34 +93,6 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`
 
-// isContextOverflow checks if an error indicates context overflow.
-// It matches common patterns returned by LLM providers when the input
-// exceeds the context window size. These include:
-// - "context_length_exceeded" (common error code)
-// - "context length exceeded" (verbose message)
-// - "context window", "too long", "maximum context", "context full"
-//
-// Returns true for overflow errors, false for other errors including nil.
-func isContextOverflow(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := strings.ToLower(err.Error())
-	for _, pattern := range []string{
-		"context_length_exceeded",
-		"context length exceeded",
-		"context window",
-		"too long",
-		"maximum context",
-		"context full",
-	} {
-		if strings.Contains(errStr, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
 // compactConversation rewrites the current session history to:
 // 1) a summary message
 // 2) the most recent kept tail
