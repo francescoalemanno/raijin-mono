@@ -76,8 +76,7 @@ type ChatApp struct {
 	replyComponent          *MessageComponent
 	items                   []historyEntry
 	pendingTools            map[string]*ToolExecutionComponent // tool call ID -> component
-	steeringQueue           promptDeliveryQueue
-	steeringInterruptIssued bool
+	steeringQueue promptDeliveryQueue
 	blocksExpanded          bool
 	totalTokens             int64
 	contextWindow           int64
@@ -401,7 +400,6 @@ func (app *ChatApp) resetConversationView(showWelcome bool) {
 	app.currentThinking = ""
 	app.thinkingComponent = nil
 	app.steeringQueue = newPromptDeliveryQueue()
-	app.steeringInterruptIssued = false
 	app.activeModalDone = nil
 	app.activeModalID = 0
 	app.totalTokens = 0
@@ -647,7 +645,6 @@ func (app *ChatApp) onToolResult(event core.AgentEvent) {
 		comp.UpdateResultWithMedia(event.Output, event.IsError, event.MediaType, event.MediaDataBase64)
 		delete(app.pendingTools, event.ID)
 	}
-	app.maybeIssueSteeringInterrupt()
 }
 
 // onStreaming handles the start of a new streaming response.
@@ -716,8 +713,11 @@ func (app *ChatApp) runPromptWithOptions(input string, opts promptRunOptions) {
 		var enqueued bool
 		app.dispatchSync(func(_ tui.UIToken) {
 			if app.state == stateRunning {
-				app.enqueueSteering(current.Input, current.Opts)
-				app.maybeIssueSteeringInterrupt()
+						app.enqueueSteering(current.Input, current.Opts)
+				// Issue steering interrupt immediately after first enqueue.
+				if app.steeringQueue.Len() == 1 {
+					app.session.Agent().RequestStop(app.session.ID())
+				}
 				app.refreshStatus()
 				enqueued = true
 			}
@@ -754,7 +754,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 			app.appendMessage(current.Input, theme.BorderThick, theme.Default.Accent.Ansi24, theme.Default.Foreground.Ansi24, false)
 		}
 		app.state = stateRunning
-		app.steeringInterruptIssued = false
 		app.currentReply = ""
 		app.replyComponent = nil
 		app.refreshStatus()
@@ -770,7 +769,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 		app.dispatchSync(func(_ tui.UIToken) {
 			app.appendMessage("No model configured. Use /models add to set up.", theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			app.state = stateIdle
-			app.steeringInterruptIssued = false
 			app.stopLoader()
 			app.refreshStatus()
 		})
@@ -783,7 +781,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 		app.dispatchSync(func(_ tui.UIToken) {
 			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			app.state = stateIdle
-			app.steeringInterruptIssued = false
 			app.stopLoader()
 			app.refreshStatus()
 		})
@@ -838,7 +835,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) (next queuedPrompt, hasNext bo
 			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		}
 		app.state = stateIdle
-		app.steeringInterruptIssued = false
 		applyThinkingLevel = app.thinkingLevelDirty
 		app.thinkingLevelDirty = false
 		nextPrompt, hasNextPrompt = app.dequeueSteering()
@@ -878,27 +874,8 @@ func (app *ChatApp) enqueueSteering(input string, opts promptRunOptions) {
 	app.appendMessage("↪ steering queued: "+preview, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
 }
 
-func (app *ChatApp) maybeIssueSteeringInterrupt() {
-	if app.state != stateRunning || app.steeringInterruptIssued || app.steeringQueue.Len() == 0 {
-		return
-	}
-
-	ag := app.session
-	if ag == nil || ag.Agent() == nil || ag.ID() == "" {
-		app.steeringInterruptIssued = true
-		return
-	}
-
-	if len(app.pendingTools) > 0 {
-		ag.Agent().RequestStop(ag.ID())
-	} else {
-		ag.Agent().Cancel(ag.ID())
-	}
-	app.steeringInterruptIssued = true
-}
-
 func (app *ChatApp) dequeueSteering() (queuedPrompt, bool) {
-	return app.steeringQueue.Dequeue()
+	return app.steeringQueue.DequeueAll()
 }
 
 func (app *ChatApp) handleCommand(input string) {
@@ -1513,7 +1490,6 @@ func (app *ChatApp) interruptRun() {
 	app.flushReply()
 	app.cancelPendingTools()
 	app.steeringQueue.Clear()
-	app.steeringInterruptIssued = false
 	app.appendMessage("(interrupted)", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
 	app.stopLoader()
 }
