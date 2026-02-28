@@ -262,9 +262,25 @@ func (app *ChatApp) refreshHeader() {
 	if cwd := renderWorkingDir(); cwd != "" {
 		leftParts = append(leftParts, cwd)
 	}
-	if app.contextWindow > 0 {
-		pct := float64(app.totalTokens) / float64(app.contextWindow) * 100
-		leftParts = append(leftParts, theme.Default.Muted.Ansi24(fmt.Sprintf("%.1f%%/%s", pct, formatTokenCount(app.contextWindow))))
+
+	// Compute estimated tokens from message content
+	estimatedTokens := int64(2400) // base estimate for the reply; TODO: evaluate base on system prompt and model
+	if app.session != nil {
+		if msgs, err := app.session.ListMessages(context.Background()); err == nil {
+			for _, msg := range msgs {
+				estimatedTokens += estimateMessageTokens(msg)
+			}
+		}
+	}
+
+	contextWindow := app.contextWindow
+	if contextWindow == 0 {
+		contextWindow = app.runtimeModel.EffectiveContextWindow()
+	}
+	if contextWindow > 0 {
+		tokens := max(float64(estimatedTokens), float64(app.totalTokens))
+		pct := float64(tokens) / float64(contextWindow) * 100
+		leftParts = append(leftParts, theme.Default.Muted.Ansi24(fmt.Sprintf("%.1f%%/%s", pct, formatTokenCount(contextWindow))))
 		if pct >= 80 {
 			leftParts = append(leftParts, theme.Default.Danger.AnsiBold("LLM about to fail for context exhaustion, run /compact"))
 		} else if pct >= 45 {
