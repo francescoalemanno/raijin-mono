@@ -3,7 +3,9 @@ package libagent
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"charm.land/fantasy"
 )
@@ -45,10 +47,11 @@ func DefaultConvertToLLM(_ context.Context, messages []Message) ([]fantasy.Messa
 				case fantasy.ReasoningContent:
 					parts = append(parts, fantasy.ReasoningPart{Text: v.Text})
 				case fantasy.ToolCallContent:
+					input := normalizeToolCallJSON(v.Input)
 					parts = append(parts, fantasy.ToolCallPart{
 						ToolCallID:       v.ToolCallID,
 						ToolName:         v.ToolName,
-						Input:            v.Input,
+						Input:            input,
 						ProviderExecuted: v.ProviderExecuted,
 					})
 				}
@@ -84,4 +87,12 @@ func DefaultConvertToLLM(_ context.Context, messages []Message) ([]fantasy.Messa
 		}
 	}
 	return out, nil
+}
+
+func normalizeToolCallJSON(input string) string {
+	raw := strings.TrimSpace(input)
+	if raw == "" || !json.Valid([]byte(raw)) {
+		return "{}"
+	}
+	return raw
 }

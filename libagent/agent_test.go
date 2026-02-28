@@ -715,6 +715,32 @@ func TestAgent_CustomConvertToLLM(t *testing.T) {
 	assert.GreaterOrEqual(t, len(capturedMessages), 1)
 }
 
+func TestDefaultConvertToLLM_NormalizesInvalidAssistantToolCallJSON(t *testing.T) {
+	msgs := []libagent.Message{
+		&libagent.AssistantMessage{
+			Role: "assistant",
+			Content: fantasy.ResponseContent{
+				fantasy.ToolCallContent{
+					ToolCallID: "tc1",
+					ToolName:   "read",
+					Input:      `{"path":"bad`,
+				},
+			},
+			Timestamp: time.Now(),
+		},
+	}
+
+	out, err := libagent.DefaultConvertToLLM(context.Background(), msgs)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, fantasy.MessageRoleAssistant, out[0].Role)
+	require.Len(t, out[0].Content, 1)
+
+	part, ok := out[0].Content[0].(fantasy.ToolCallPart)
+	require.True(t, ok)
+	assert.Equal(t, "{}", part.Input)
+}
+
 func TestAgent_TransformContext(t *testing.T) {
 	var transformedLen int
 	model := newMockModel(textResponse("ok"))
