@@ -3,6 +3,7 @@ package libagent
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -476,61 +477,73 @@ func executeToolCalls(
 		var resultMetadata string
 		var injectedAttachmentMsg *UserMessage
 
-		tool, found := toolMap[tc.ToolName]
-		if !found {
-			resultContent = fmt.Sprintf("tool not found: %s", tc.ToolName)
+		if raw := strings.TrimSpace(tc.Input); raw != "" && !json.Valid([]byte(raw)) {
+			resultContent = fmt.Sprintf(
+				"invalid tool call JSON input for %q: %q\nThe arguments are incomplete or malformed. Re-issue this tool call with valid JSON.",
+				tc.ToolName,
+				tc.Input,
+			)
 			isError = true
 		} else {
-			call := fantasy.ToolCall{ID: tc.ToolCallID, Name: tc.ToolName, Input: tc.Input}
-			var resp fantasy.ToolResponse
-			var runErr error
-
-			if st, ok := tool.(StreamingAgentTool); ok {
-				onUpdate := func(partial fantasy.ToolResponse) {
-					sendEvent(eventCh, AgentEvent{
-						Type:        AgentEventTypeToolExecutionUpdate,
-						ToolCallID:  tc.ToolCallID,
-						ToolName:    tc.ToolName,
-						ToolArgs:    tc.Input,
-						ToolResult:  partial.Content,
-						ToolIsError: partial.IsError,
-					})
-				}
-				resp, runErr = st.RunStreaming(ctx, call, onUpdate)
-			} else {
-				resp, runErr = tool.Run(ctx, call)
+			if raw == "" {
+				tc.Input = "{}"
 			}
-
-			if runErr != nil {
-				resultContent = runErr.Error()
+			tool, found := toolMap[tc.ToolName]
+			if !found {
+				resultContent = fmt.Sprintf("tool not found: %s", tc.ToolName)
 				isError = true
 			} else {
-				resultMetadata = resp.Metadata
-				isError = resp.IsError
-				isMediaResponse := len(resp.Data) > 0 ||
-					strings.EqualFold(resp.Type, "image") ||
-					strings.EqualFold(resp.Type, string(ToolResponseTypeMedia))
-				if isMediaResponse {
-					resultContent = fmt.Sprintf("user will provide the attachment for tool call #%s", tc.ToolCallID)
-					mediaData := normalizeMediaPayload(resp.Data)
-					filename := fmt.Sprintf("tool-call-%s", tc.ToolCallID)
-					if strings.TrimSpace(resp.MediaType) != "" {
-						filename += "." + strings.ReplaceAll(resp.MediaType, "/", "_")
+				call := fantasy.ToolCall{ID: tc.ToolCallID, Name: tc.ToolName, Input: tc.Input}
+				var resp fantasy.ToolResponse
+				var runErr error
+
+				if st, ok := tool.(StreamingAgentTool); ok {
+					onUpdate := func(partial fantasy.ToolResponse) {
+						sendEvent(eventCh, AgentEvent{
+							Type:        AgentEventTypeToolExecutionUpdate,
+							ToolCallID:  tc.ToolCallID,
+							ToolName:    tc.ToolName,
+							ToolArgs:    tc.Input,
+							ToolResult:  partial.Content,
+							ToolIsError: partial.IsError,
+						})
 					}
-					injectedAttachmentMsg = &UserMessage{
-						Role:    "user",
-						Content: fmt.Sprintf("attachment for tool call #%s", tc.ToolCallID),
-						Files: []FilePart{{
-							Filename:  filename,
-							MediaType: resp.MediaType,
-							Data:      mediaData,
-						}},
-						Timestamp: time.Now(),
-					}
+					resp, runErr = st.RunStreaming(ctx, call, onUpdate)
 				} else {
-					resultContent = resp.Content
-					resultData = resp.Data
-					resultMIMEType = resp.MediaType
+					resp, runErr = tool.Run(ctx, call)
+				}
+
+				if runErr != nil {
+					resultContent = runErr.Error()
+					isError = true
+				} else {
+					resultMetadata = resp.Metadata
+					isError = resp.IsError
+					isMediaResponse := len(resp.Data) > 0 ||
+						strings.EqualFold(resp.Type, "image") ||
+						strings.EqualFold(resp.Type, string(ToolResponseTypeMedia))
+					if isMediaResponse {
+						resultContent = fmt.Sprintf("user will provide the attachment for tool call #%s", tc.ToolCallID)
+						mediaData := normalizeMediaPayload(resp.Data)
+						filename := fmt.Sprintf("tool-call-%s", tc.ToolCallID)
+						if strings.TrimSpace(resp.MediaType) != "" {
+							filename += "." + strings.ReplaceAll(resp.MediaType, "/", "_")
+						}
+						injectedAttachmentMsg = &UserMessage{
+							Role:    "user",
+							Content: fmt.Sprintf("attachment for tool call #%s", tc.ToolCallID),
+							Files: []FilePart{{
+								Filename:  filename,
+								MediaType: resp.MediaType,
+								Data:      mediaData,
+							}},
+							Timestamp: time.Now(),
+						}
+					} else {
+						resultContent = resp.Content
+						resultData = resp.Data
+						resultMIMEType = resp.MediaType
+					}
 				}
 			}
 		}

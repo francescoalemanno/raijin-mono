@@ -448,6 +448,46 @@ func TestAgent_ToolExecution_FromToolInputOnlyStream(t *testing.T) {
 	assert.Equal(t, "echoed: hello", toolEndEvents[0].ToolResult)
 }
 
+func TestAgent_ToolExecution_WithPartialJSONArgs_ReturnsActionableError(t *testing.T) {
+	executed := make([]string, 0)
+	echoTool := libagent.NewTypedTool(
+		"echo",
+		"Echo the value back",
+		func(_ context.Context, input struct {
+			Value string `json:"value"`
+		}, _ libagent.ToolCall,
+		) (libagent.ToolResponse, error) {
+			executed = append(executed, input.Value)
+			return libagent.NewTextResponse("echoed: " + input.Value), nil
+		},
+	)
+
+	model := newMockModel(
+		toolInputOnlyResponse("tc1", "echo", `{"value":"hello`),
+		textResponse("I fixed the call."),
+	)
+
+	a := libagent.NewAgent(libagent.AgentOptions{
+		RuntimeModel: libagent.RuntimeModel{Model: model},
+		Tools:        []libagent.Tool{echoTool},
+	})
+
+	ch, unsub := a.Subscribe()
+	defer unsub()
+
+	err := a.Prompt(context.Background(), "Echo hello")
+	require.NoError(t, err)
+	events := collectEvents(ch)
+
+	require.Empty(t, executed)
+
+	toolEndEvents := filterByType(events, libagent.AgentEventTypeToolExecutionEnd)
+	require.Len(t, toolEndEvents, 1)
+	assert.True(t, toolEndEvents[0].ToolIsError)
+	assert.Contains(t, toolEndEvents[0].ToolResult, `"{\"value\":\"hello"`)
+	assert.Contains(t, toolEndEvents[0].ToolResult, "invalid tool call JSON input")
+}
+
 func TestAgent_FinishReasonToolCallsWithoutToolCalls_Errors(t *testing.T) {
 	model := newMockModel(func(_ int) fantasy.StreamResponse {
 		return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
