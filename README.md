@@ -41,7 +41,7 @@ No MCP. No hidden sub-agents. No permission popups.
 - Use reusable prompt templates with `/template-name args` (for example `/amplify add a tool that checks Jira status`)
 - Fork a conversation from any previous user prompt with `/fork`
 - Resume old chats with `/sessions`
-- Compact long history with `/compact` (also auto-runs on context overflow)
+- Compact long history with `/compact` (it will not auto-run on context overflow, you manage your context)
 
 ## Slash commands
 
@@ -109,10 +109,10 @@ go build -o raijin .
 ## Usage
 
 ```bash
-./raijin
-./raijin "fix the bug in main.go"
-./raijin "add unit tests for auth"
-./raijin "refactor this messy function"
+raijin
+raijin "fix the bug in main.go"
+raijin "add unit tests for auth"
+raijin "refactor this messy function"
 ```
 
 ## Development
