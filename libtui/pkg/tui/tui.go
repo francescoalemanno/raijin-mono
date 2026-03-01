@@ -113,6 +113,7 @@ type TUI struct {
 
 	previousLines       []string
 	previousWidth       int
+	previousHeight      int
 	focusedComponent    Component
 	inputListeners      []InputListener
 	onDebug             func()
@@ -405,6 +406,7 @@ func (t *TUI) loop() {
 			if forceRedraw {
 				t.previousLines = nil
 				t.previousWidth = -1
+				t.previousHeight = -1
 				t.cursorRow = 0
 				t.hardwareCursorRow = 0
 				t.maxLinesRendered = 0
@@ -548,8 +550,9 @@ func (t *TUI) doRender() {
 
 	newLines = t.applyLineResets(newLines)
 
-	// Width changed - need full re-render
+	// Width/height changed - need full re-render
 	widthChanged := t.previousWidth != 0 && t.previousWidth != width
+	heightChanged := t.previousHeight != 0 && t.previousHeight != height
 
 	// Helper for full render
 	fullRender := func(clear bool) {
@@ -579,6 +582,7 @@ func (t *TUI) doRender() {
 		t.positionHardwareCursor(&cursorPos, len(newLines))
 		t.previousLines = newLines
 		t.previousWidth = width
+		t.previousHeight = height
 	}
 
 	debugRedraw := os.Getenv("RAIJIN_DEBUG_REDRAW") == "1"
@@ -602,7 +606,7 @@ func (t *TUI) doRender() {
 	}
 
 	// First render
-	if len(t.previousLines) == 0 && !widthChanged {
+	if len(t.previousLines) == 0 && !widthChanged && !heightChanged {
 		logRedraw("first render")
 		fullRender(false)
 		return
@@ -611,6 +615,13 @@ func (t *TUI) doRender() {
 	// Width changed
 	if widthChanged {
 		logRedraw(fmt.Sprintf("width changed (%d -> %d)", t.previousWidth, width))
+		fullRender(true)
+		return
+	}
+
+	// Height changed
+	if heightChanged {
+		logRedraw(fmt.Sprintf("height changed (%d -> %d)", t.previousHeight, height))
 		fullRender(true)
 		return
 	}
@@ -704,6 +715,7 @@ func (t *TUI) doRender() {
 		}
 		t.previousLines = newLines
 		t.previousWidth = width
+		t.previousHeight = height
 		t.previousViewportTop = max(0, t.maxLinesRendered-height)
 		return
 	}
@@ -815,6 +827,7 @@ func (t *TUI) doRender() {
 
 	t.previousLines = newLines
 	t.previousWidth = width
+	t.previousHeight = height
 }
 
 func (t *TUI) positionHardwareCursor(cursorPos *struct{ Row, Col int }, totalLines int) {

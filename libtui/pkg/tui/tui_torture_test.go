@@ -297,3 +297,30 @@ func TestTUI_Torture_FocusedInputNotStarvedByDrainAndResizeStorm(t *testing.T) {
 	wg.Wait()
 	t.Fatalf("focused component input handler appeared starved; inputs=%d start=%d", comp.inputs.Load(), start)
 }
+
+func TestTUI_HeightChangeTriggersFullRedraw(t *testing.T) {
+	t.Parallel()
+
+	term := newTortureTerminal(100, 30)
+	ui := NewTUI(term)
+	ui.AddChild(&tortureComponent{})
+	ui.Start()
+	defer ui.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if !ui.DispatchSync(ctx, func(UIToken) {}) {
+		t.Fatal("UI did not complete initial render")
+	}
+
+	initialRedraws := ui.FullRedraws()
+	term.emitResize(100, 35)
+
+	if !ui.DispatchSync(ctx, func(UIToken) {}) {
+		t.Fatal("UI did not process resize render")
+	}
+
+	if got := ui.FullRedraws(); got <= initialRedraws {
+		t.Fatalf("expected full redraw count to increase on height change; before=%d after=%d", initialRedraws, got)
+	}
+}
