@@ -163,7 +163,7 @@ func NewBashTool(paths *PathRegistry) libagent.Tool {
 
 	return WithRender(
 		libagent.NewParallelTypedTool("bash", fmt.Sprintf(
-			"Execute bash scripts in the current working directory. Returns stdout and stderr. Output is truncated to last %d lines or %dKB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+			"Execute non-interactive bash scripts in the current working directory. Returns stdout and stderr. Output is truncated to last %d lines or %dKB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
 			DefaultMaxLines,
 			DefaultMaxBytes/1024,
 		), handler),
