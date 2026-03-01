@@ -297,6 +297,17 @@ func (t *TUI) RequestRender(force ...bool) {
 	}()
 }
 
+// DispatchOrdered sends fn to be executed in the event loop, blocking until
+// accepted or the TUI shuts down. Unlike Dispatch, it never spawns a goroutine,
+// so callers that must preserve strict FIFO ordering across consecutive calls
+// (e.g. streaming event pipelines) can rely on this guarantee.
+func (t *TUI) DispatchOrdered(fn func()) {
+	if fn == nil {
+		return
+	}
+	t.enqueueTask(uiTask{fn: fn})
+}
+
 // Dispatch sends fn to be executed in the event loop before the next render.
 func (t *TUI) Dispatch(fn func()) {
 	if fn == nil {
@@ -548,6 +559,35 @@ func (t *TUI) doRender() {
 	cursorRow, cursorCol, hasCursor := t.extractCursorPosition(newLines, height)
 	cursorPos := struct{ Row, Col int }{cursorRow, cursorCol}
 
+	debugRedraw := os.Getenv("RAIJIN_DEBUG_REDRAW") == "1"
+
+	// Width-overflow crash guard: only active under RAIJIN_DEBUG_REDRAW=1.
+	// Checked before applyLineResets so lines contain no trailing ANSI resets
+	// and VisibleWidth stays on the fast pure-ASCII path for normal content.
+	if debugRedraw {
+		for i, line := range newLines {
+			if utils.VisibleWidth(line) > width {
+				crashLogPath := paths.RaijinPath("crash.log")
+				var crashData strings.Builder
+				crashData.WriteString("Crash at " + time.Now().Format(time.RFC3339) + "\n")
+				crashData.WriteString(fmt.Sprintf("Terminal width: %d\n", width))
+				crashData.WriteString(fmt.Sprintf("Line %d visible width: %d\n", i, utils.VisibleWidth(line)))
+				crashData.WriteString("\n=== All rendered lines ===\n")
+				for idx, l := range newLines {
+					crashData.WriteString(fmt.Sprintf("[%d] (w=%d) %s\n", idx, utils.VisibleWidth(l), l))
+				}
+				crashData.WriteString("\n")
+				os.MkdirAll(paths.RaijinPath(), 0o755)
+				os.WriteFile(crashLogPath, []byte(crashData.String()), 0o644)
+				t.Stop()
+				panic(fmt.Sprintf("Rendered line %d exceeds terminal width (%d > %d).\n\n"+
+					"This is likely caused by a custom TUI component not truncating its output.\n"+
+					"Use VisibleWidth() to measure and TruncateToWidth() to truncate lines.\n\n"+
+					"Debug log written to: %s", i, utils.VisibleWidth(line), width, crashLogPath))
+			}
+		}
+	}
+
 	newLines = t.applyLineResets(newLines)
 
 	// Width/height changed - need full re-render
@@ -585,7 +625,6 @@ func (t *TUI) doRender() {
 		t.previousHeight = height
 	}
 
-	debugRedraw := os.Getenv("RAIJIN_DEBUG_REDRAW") == "1"
 	logRedraw := func(reason string) {
 		if !debugRedraw {
 			return
@@ -771,28 +810,7 @@ func (t *TUI) doRender() {
 			buffer.WriteString("\r\n")
 		}
 		buffer.WriteString("\x1b[2K") // Clear current line
-		line := newLines[i]
-		if utils.VisibleWidth(line) > width {
-			// Log crash
-			crashLogPath := paths.RaijinPath("crash.log")
-			var crashData strings.Builder
-			crashData.WriteString("Crash at " + time.Now().Format(time.RFC3339) + "\n")
-			crashData.WriteString(fmt.Sprintf("Terminal width: %d\n", width))
-			crashData.WriteString(fmt.Sprintf("Line %d visible width: %d\n", i, utils.VisibleWidth(line)))
-			crashData.WriteString("\n=== All rendered lines ===\n")
-			for idx, l := range newLines {
-				crashData.WriteString(fmt.Sprintf("[%d] (w=%d) %s\n", idx, utils.VisibleWidth(l), l))
-			}
-			crashData.WriteString("\n")
-			os.MkdirAll(paths.RaijinPath(), 0o755)
-			os.WriteFile(crashLogPath, []byte(crashData.String()), 0o644)
-			t.Stop()
-			panic(fmt.Sprintf("Rendered line %d exceeds terminal width (%d > %d).\n\n"+
-				"This is likely caused by a custom TUI component not truncating its output.\n"+
-				"Use VisibleWidth() to measure and TruncateToWidth() to truncate lines.\n\n"+
-				"Debug log written to: %s", i, utils.VisibleWidth(line), width, crashLogPath))
-		}
-		buffer.WriteString(line)
+		buffer.WriteString(newLines[i])
 	}
 
 	finalCursorRow := renderEnd

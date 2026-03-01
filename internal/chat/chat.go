@@ -578,7 +578,7 @@ func (app *ChatApp) flushReply() {
 // ---------------------------------------------------------------------------
 
 func (app *ChatApp) handleEvent(event libagent.AgentEvent) {
-	app.ui.Dispatch(func() {
+	app.ui.DispatchOrdered(func() {
 		if app.suppressTextEvents {
 			if event.Type == libagent.AgentEventTypeMessageUpdate && event.Delta != nil {
 				switch event.Delta.Type {
