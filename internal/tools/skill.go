@@ -29,9 +29,6 @@ func RegisterSkillScriptsPath(paths *PathRegistry, scriptsDir string) {
 
 func NewSkillTool(paths *PathRegistry) libagent.Tool {
 	handler := func(ctx context.Context, params skillParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
-		if resp, blocked := toolExecutionGate(ctx, "skill"); blocked {
-			return resp, nil
-		}
 		name := strings.ToLower(strings.TrimSpace(params.Name))
 		if name == "" {
 			return libagent.NewTextErrorResponse("skill name is required"), nil

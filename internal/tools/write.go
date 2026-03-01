@@ -19,9 +19,6 @@ func NewWriteTool() libagent.Tool {
 	}
 
 	handler := func(ctx context.Context, params writeToolParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
-		if resp, blocked := toolExecutionGate(ctx, "write"); blocked {
-			return resp, nil
-		}
 		if params.Path == "" {
 			return libagent.NewTextErrorResponse("path is required"), nil
 		}

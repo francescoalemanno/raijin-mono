@@ -28,9 +28,6 @@ type bashToolDetails struct {
 // NewBashTool creates a bash tool with optional path registry for extra PATH directories.
 func NewBashTool(paths *PathRegistry) libagent.Tool {
 	handler := func(ctx context.Context, params bashParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
-		if resp, blocked := toolExecutionGate(ctx, "bash"); blocked {
-			return resp, nil
-		}
 		if strings.TrimSpace(params.Command) == "" {
 			return libagent.NewTextErrorResponse("command is required"), nil
 		}

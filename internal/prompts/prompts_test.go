@@ -3,7 +3,6 @@ package prompts
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -61,12 +60,12 @@ func TestLoadPrecedenceProjectUserEmbedded(t *testing.T) {
 		t.Fatalf("review content = %q, want project content", review.Content)
 	}
 
-	plan, ok := res.Find("plan")
+	init, ok := res.Find("init")
 	if !ok {
-		t.Fatalf("expected embedded plan template")
+		t.Fatalf("expected embedded init template")
 	}
-	if plan.Source != SourceEmbedded {
-		t.Fatalf("plan source = %q, want %q", plan.Source, SourceEmbedded)
+	if init.Source != SourceEmbedded {
+		t.Fatalf("init source = %q, want %q", init.Source, SourceEmbedded)
 	}
 }
 
@@ -77,63 +76,21 @@ func TestLoadPrecedenceUserOverEmbedded(t *testing.T) {
 	withCwd(t, project)
 
 	writeFile(t,
-		filepath.Join(paths.UserPromptsDir(), "plan.md"),
-		"---\ndescription: User plan\n---\nuser plan body",
+		filepath.Join(paths.UserPromptsDir(), "init.md"),
+		"---\ndescription: User init\n---\nuser init body",
 	)
 
 	res := Load()
-	plan, ok := res.Find("plan")
+	init, ok := res.Find("init")
 	if !ok {
-		t.Fatalf("expected plan template")
+		t.Fatalf("expected init template")
 	}
-	if plan.Source != SourceUser {
-		t.Fatalf("plan source = %q, want %q", plan.Source, SourceUser)
+	if init.Source != SourceUser {
+		t.Fatalf("init source = %q, want %q", init.Source, SourceUser)
 	}
-	if !strings.Contains(plan.Content, "user plan body") {
-		t.Fatalf("plan content = %q, want user content", plan.Content)
+	if !strings.Contains(init.Content, "user init body") {
+		t.Fatalf("init content = %q, want user content", init.Content)
 	}
 }
 
-func TestAllowedToolsFrontmatterParsing(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	project := t.TempDir()
-	withCwd(t, project)
 
-	writeFile(t,
-		filepath.Join(project, projectPromptsDirRel, "gated.md"),
-		"---\ndescription: gated\nallowed-tools:\n  - read\n  - GREP\n  - read\n---\nbody",
-	)
-
-	res := Load()
-	tmpl, ok := res.Find("gated")
-	if !ok {
-		t.Fatalf("expected gated template")
-	}
-	want := []string{"read", "grep"}
-	if !reflect.DeepEqual(tmpl.AllowedTools, want) {
-		t.Fatalf("allowed_tools = %#v, want %#v", tmpl.AllowedTools, want)
-	}
-}
-
-func TestAllowedToolsFrontmatterSpaceDelimited(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	project := t.TempDir()
-	withCwd(t, project)
-
-	writeFile(t,
-		filepath.Join(project, projectPromptsDirRel, "space.md"),
-		"---\ndescription: spaced\nallowed-tools: read GREP webfetch\n---\nbody",
-	)
-
-	res := Load()
-	tmpl, ok := res.Find("space")
-	if !ok {
-		t.Fatalf("expected space template")
-	}
-	want := []string{"read", "grep", "webfetch"}
-	if !reflect.DeepEqual(tmpl.AllowedTools, want) {
-		t.Fatalf("allowed_tools = %#v, want %#v", tmpl.AllowedTools, want)
-	}
-}

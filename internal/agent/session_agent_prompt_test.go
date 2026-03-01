@@ -3,34 +3,7 @@ package agent
 import (
 	"strings"
 	"testing"
-
-	"github.com/francescoalemanno/raijin-mono/internal/core"
-	"github.com/francescoalemanno/raijin-mono/internal/message"
 )
-
-func TestPrepareUserRequest_NoAllowedToolsNotice(t *testing.T) {
-	t.Parallel()
-
-	got := message.PrepareUserRequest(message.UserRequest{
-		Prompt: "Review this file.",
-	}).Prompt
-	if strings.Contains(got, "only tools that are allowed are") {
-		t.Fatalf("unexpected tool-allowlist notice in prompt: %q", got)
-	}
-}
-
-func TestPrepareUserRequest_AppendsAllowedToolsNotice(t *testing.T) {
-	t.Parallel()
-
-	got := message.PrepareUserRequest(message.UserRequest{
-		Prompt:       "Review this file.",
-		AllowedTools: core.DedupeSorted([]string{" read ", "GREP", "read"}),
-	}).Prompt
-	want := "<system_info>For this specific user request the only tools that are allowed are: grep, read.</system_info>"
-	if !strings.Contains(got, want) {
-		t.Fatalf("prompt missing notice.\nGot: %q\nWant to contain: %q", got, want)
-	}
-}
 
 func TestBuildSystemPrompt_IncludesToolPreferencesSection(t *testing.T) {
 	t.Parallel()

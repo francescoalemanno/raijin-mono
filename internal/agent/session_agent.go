@@ -26,7 +26,6 @@ type SessionAgentCall struct {
 	Prompt           string
 	Attachments      []message.BinaryContent
 	Skills           []message.SkillContent
-	AllowedTools     []string
 	MaxOutputTokens  int64
 	Temperature      *float64
 	TopP             *float64
@@ -104,7 +103,6 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	systemPrompt := a.systemPrompt
 	a.mu.RUnlock()
 
-	allowedTools := core.DedupeSorted(call.AllowedTools)
 	if model.Model == nil {
 		return errors.New("llm runtime is not configured")
 	}
@@ -122,7 +120,6 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 
 	// Set up cancellation
 	genCtx, cancel := context.WithCancel(ctx)
-	genCtx = tools.WithAllowedTools(genCtx, allowedTools)
 	a.mu.Lock()
 	a.activeRequests[call.SessionID] = cancel
 	a.mu.Unlock()
@@ -162,10 +159,9 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 
 	// Prepare the user prompt message for the agent.
 	prepared := message.PrepareUserRequest(message.UserRequest{
-		Prompt:       call.Prompt,
-		Attachments:  call.Attachments,
-		Skills:       call.Skills,
-		AllowedTools: allowedTools,
+		Prompt:      call.Prompt,
+		Attachments: call.Attachments,
+		Skills:      call.Skills,
 	})
 
 	promptMsg := &libagent.UserMessage{
@@ -456,10 +452,9 @@ func (a *SessionAgent) Steer(_ context.Context, call SessionAgentCall) error {
 	}
 
 	prepared := message.PrepareUserRequest(message.UserRequest{
-		Prompt:       call.Prompt,
-		Attachments:  call.Attachments,
-		Skills:       call.Skills,
-		AllowedTools: nil,
+		Prompt:      call.Prompt,
+		Attachments: call.Attachments,
+		Skills:      call.Skills,
 	})
 	ag.Steer(&libagent.UserMessage{
 		Role:      "user",

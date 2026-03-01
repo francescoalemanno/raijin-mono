@@ -1,7 +1,6 @@
 package frontmatter
 
 import (
-	"reflect"
 	"testing"
 )
 
@@ -10,9 +9,6 @@ func TestParseHeaderAndBody(t *testing.T) {
 
 	content := `---
 description: "demo"
-allowed-tools:
-  - read
-  - "GREP"
 ---
 
 body`
@@ -24,11 +20,6 @@ body`
 
 	if got := FirstValue(header, "description"); got != "demo" {
 		t.Fatalf("description = %q, want %q", got, "demo")
-	}
-
-	wantTools := []string{"read", "GREP"}
-	if got := Values(header, "allowed-tools"); !reflect.DeepEqual(got, wantTools) {
-		t.Fatalf("allowed-tools = %#v, want %#v", got, wantTools)
 	}
 
 	if body != "body" {

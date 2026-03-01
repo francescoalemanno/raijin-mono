@@ -84,10 +84,6 @@ func (t *pluginTool) Info() libagent.ToolInfo {
 }
 
 func (t *pluginTool) Run(ctx context.Context, params libagent.ToolCall) (libagent.ToolResponse, error) {
-	if resp, blocked := toolExecutionGate(ctx, t.meta.Name); blocked {
-		return resp, nil
-	}
-
 	var stdout, stderr bytes.Buffer
 	err := shellrun.Run(ctx, shellrun.ExecSpec{
 		Path:  t.scriptPath,

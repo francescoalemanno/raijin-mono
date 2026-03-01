@@ -50,9 +50,6 @@ func NewReadTool() libagent.Tool {
 	}
 
 	handler := func(ctx context.Context, params readParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
-		if resp, blocked := toolExecutionGate(ctx, "read"); blocked {
-			return resp, nil
-		}
 		if strings.TrimSpace(params.Path) == "" {
 			return readToolNudge("path is required"), nil
 		}

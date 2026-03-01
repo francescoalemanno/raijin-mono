@@ -30,10 +30,6 @@ func NewEditTool() libagent.Tool {
 
 func createEditTool(cwd string) libagent.Tool {
 	handler := func(ctx context.Context, params editParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
-		if resp, blocked := toolExecutionGate(ctx, "edit"); blocked {
-			return resp, nil
-		}
-
 		absolutePath := fsutil.ResolveToCwd(params.Path, cwd)
 
 		buffer, err := os.ReadFile(absolutePath)

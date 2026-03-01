@@ -87,9 +87,6 @@ type grepMatch struct {
 // NewGrepTool creates a grep tool for searching file contents.
 func NewGrepTool() libagent.Tool {
 	handler := func(ctx context.Context, params grepParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
-		if resp, blocked := toolExecutionGate(ctx, "grep"); blocked {
-			return resp, nil
-		}
 		if params.Pattern == "" {
 			return libagent.NewTextErrorResponse("pattern is required"), nil
 		}

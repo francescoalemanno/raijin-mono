@@ -34,9 +34,6 @@ type globToolDetails struct {
 // NewGlobTool creates a glob tool for finding files by pattern.
 func NewGlobTool() libagent.Tool {
 	handler := func(ctx context.Context, params globParams, _ libagent.ToolCall) (libagent.ToolResponse, error) {
-		if resp, blocked := toolExecutionGate(ctx, "glob"); blocked {
-			return resp, nil
-		}
 		if params.Pattern == "" {
 			return libagent.NewTextErrorResponse("pattern is required"), nil
 		}

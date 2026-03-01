@@ -19,7 +19,6 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/agent"
 	chatsession "github.com/francescoalemanno/raijin-mono/internal/chat/session"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
-	"github.com/francescoalemanno/raijin-mono/internal/core"
 	"github.com/francescoalemanno/raijin-mono/internal/input"
 	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
@@ -732,7 +731,6 @@ func (app *ChatApp) handleSubmit(text string) {
 }
 
 type promptRunOptions struct {
-	AllowedTools []string
 	TemplateName string
 }
 
@@ -772,9 +770,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) {
 			}
 			app.appendMessage(userInput, theme.BorderThick, theme.Default.Accent.Ansi24, theme.Default.Foreground.Ansi24, false)
 			notice := "↪ /" + current.Opts.TemplateName + " template expanded"
-			if len(current.Opts.AllowedTools) > 0 {
-				notice += " (tools limited: " + strings.Join(current.Opts.AllowedTools, ", ") + ")"
-			}
 			app.appendMessage(notice, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		} else {
 			app.appendMessage(current.Input, theme.BorderThick, theme.Default.Accent.Ansi24, theme.Default.Foreground.Ansi24, false)
@@ -824,7 +819,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) {
 		Prompt:          prepared.text,
 		Attachments:     prepared.attachments,
 		Skills:          prepared.skills,
-		AllowedTools:    current.Opts.AllowedTools,
 		MaxOutputTokens: maxTokens,
 	})
 
@@ -1080,11 +1074,7 @@ func (app *ChatApp) showTemplates() {
 		if _, blocked := reserved[tmpl.Name]; blocked {
 			b.WriteString(" (reserved command, not invokable)")
 		}
-		if len(tmpl.AllowedTools) > 0 {
-			b.WriteString(" {tools: ")
-			b.WriteString(strings.Join(tmpl.AllowedTools, ", "))
-			b.WriteString("}")
-		}
+
 		b.WriteString("\n")
 	}
 	if len(result.Diagnostics) > 0 {
@@ -1123,32 +1113,8 @@ func (app *ChatApp) tryRunTemplateCommand(name, argsString string) bool {
 		return true
 	}
 
-	allowedTools := core.DedupeSorted(tmpl.AllowedTools)
-	if len(allowedTools) > 0 {
-		var sessionTools []libagent.Tool
-		app.dispatchSync(func(_ tui.UIToken) {
-			if app.session != nil {
-				sessionTools = app.session.Tools()
-			}
-		})
-		unknown := core.FilterUnknown(allowedTools, sessionTools)
-		if len(unknown) > 0 {
-			app.dispatchSync(func(_ tui.UIToken) {
-				app.appendMessage(
-					"template /"+tmpl.Name+" has unknown allowed-tools: "+strings.Join(unknown, ", "),
-					theme.BorderThin,
-					theme.Default.Danger.Ansi24,
-					theme.Default.Foreground.Ansi24,
-					false,
-				)
-			})
-			return true
-		}
-	}
-
 	expanded := substitution.ExpandAll(context.Background(), strings.TrimSpace(tmpl.Content), argsString, substitution.ArgModeList)
 	app.runPromptWithOptions(expanded, promptRunOptions{
-		AllowedTools: allowedTools,
 		TemplateName: tmpl.Name,
 	})
 	return true

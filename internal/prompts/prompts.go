@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/francescoalemanno/raijin-mono/internal/core"
 	"github.com/francescoalemanno/raijin-mono/internal/frontmatter"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
 )
@@ -30,12 +29,11 @@ const (
 )
 
 type Template struct {
-	Name         string
-	Description  string
-	Content      string
-	Source       Source
-	FilePath     string
-	AllowedTools []string
+	Name        string
+	Description string
+	Content     string
+	Source      Source
+	FilePath    string
 }
 
 type Diagnostic struct {
@@ -177,18 +175,16 @@ func parseTemplateFile(fileName, filePath, raw string, source Source) Template {
 		desc = frontmatter.FirstNonEmptyLine(body)
 	}
 	return Template{
-		Name:         name,
-		Description:  desc,
-		Content:      body,
-		Source:       source,
-		FilePath:     filePath,
-		AllowedTools: meta.AllowedTools,
+		Name:        name,
+		Description: desc,
+		Content:     body,
+		Source:      source,
+		FilePath:    filePath,
 	}
 }
 
 type templateMeta struct {
-	Description  string
-	AllowedTools []string
+	Description string
 }
 
 func parseTemplateMarkdown(content string) (templateMeta, string) {
@@ -200,41 +196,7 @@ func parseTemplateMarkdown(content string) (templateMeta, string) {
 
 	meta := templateMeta{}
 	meta.Description = frontmatter.StripOptionalQuotes(frontmatter.FirstValue(header, "description"))
-	for _, value := range frontmatter.Values(header, "allowed-tools") {
-		meta.AllowedTools = append(meta.AllowedTools, parseAllowedToolsValue(value)...)
-	}
-
-	meta.AllowedTools = core.Dedupe(meta.AllowedTools)
 	return meta, strings.TrimSpace(body)
 }
 
-func parseAllowedToolsValue(value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
-		value = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "["), "]"))
-		if value == "" {
-			return nil
-		}
-	}
-	var parts []string
-	if strings.Contains(value, ",") {
-		parts = strings.Split(value, ",")
-	} else {
-		parts = strings.Fields(value)
-	}
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if normalized := normalizeToolName(part); normalized != "" {
-			out = append(out, normalized)
-		}
-	}
-	return out
-}
 
-func normalizeToolName(s string) string {
-	s = frontmatter.StripOptionalQuotes(strings.TrimSpace(s))
-	return core.Normalize(s)
-}

@@ -75,13 +75,11 @@ You can:
 
 - invoke templates as slash commands
 - pass template args (`$@`, `$1`, `${@:2}`, `{{ARGUMENTS}}`)
-- restrict template tool access via `allowed-tools`
 - call skills from prompts via `$skill-name`
 
 Built-in templates include:
 
 - `/amplify` - generate or update Raijin extensions (skills, plugin tools, prompt templates)
-- `/plan` - produce a concrete implementation plan before coding
 - `/init` - generate or refresh an `AGENTS.md` for the current repository
 
 ## Custom extensions

@@ -21,17 +21,12 @@ A prompt template is a Markdown file with optional YAML frontmatter followed by 
 ```yaml
 ---
 description: "Short sentence shown to the user when listing templates."
-allowed-tools:
-  - bash
-  - read
-  - grep
 ---
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `description` | no | Shown when listing templates. Falls back to first non-empty line of the body. |
-| `allowed-tools` | no | Restricts which tools the LLM may call during this template's session. Omit to allow all tools. List tool names one per line or comma-separated. |
 
 ### Body
 
@@ -59,10 +54,6 @@ Summarise the file at `$1` in plain language. Focus on what it does, not how.
 ```markdown
 ---
 description: Review code for correctness and style
-allowed-tools:
-  - read
-  - grep
-  - glob
 ---
 Review the code described below for correctness, style, and potential bugs.
 Be concise. List issues as a numbered list, most critical first.
@@ -103,6 +94,6 @@ Project templates override user templates, which override built-in templates.
 <golden_rules>
 - Keep the body prompt-shaped: write it as if you are addressing the LLM directly.
 - Use `$ARGUMENTS` when the task varies per invocation. Omit it for fixed-purpose templates.
-- Restrict `allowed-tools` only when the template must be read-only or sandboxed. Omit otherwise.
+
 - Never add `{{ARGUMENTS}}` (double-brace form) to the body — that is the skill substitution syntax, not the template syntax. Use `$ARGUMENTS` instead.
 </golden_rules>

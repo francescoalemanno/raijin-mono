@@ -28,10 +28,9 @@ func unixMilliToTime(ms int64) time.Time {
 
 // UserRequest is a user input payload for agent preparation.
 type UserRequest struct {
-	Prompt       string
-	Attachments  []BinaryContent
-	Skills       []SkillContent
-	AllowedTools []string
+	Prompt      string
+	Attachments []BinaryContent
+	Skills      []SkillContent
 }
 
 // PreparedUserRequest is the normalized request payload for the agent.
@@ -43,7 +42,6 @@ type PreparedUserRequest struct {
 // PrepareUserRequest builds a prompt and file attachments from message input.
 func PrepareUserRequest(req UserRequest) PreparedUserRequest {
 	prompt := PromptWithUserAttachments(req.Prompt, req.Attachments, req.Skills)
-	prompt = withAllowedToolsNotice(prompt, req.AllowedTools)
 	return PreparedUserRequest{
 		Prompt: prompt,
 		Files:  nonTextFiles(req.Attachments),
@@ -246,17 +244,4 @@ func PromptWithUserAttachments(prompt string, attachments []BinaryContent, skill
 	return sb.String()
 }
 
-func withAllowedToolsNotice(prompt string, allowedTools []string) string {
-	if len(allowedTools) == 0 {
-		return prompt
-	}
-	var b strings.Builder
-	b.WriteString(prompt)
-	if strings.TrimSpace(prompt) != "" {
-		b.WriteString("\n")
-	}
-	b.WriteString("<system_info>For this specific user request the only tools that are allowed are: ")
-	b.WriteString(strings.Join(allowedTools, ", "))
-	b.WriteString(".</system_info>\n")
-	return b.String()
-}
+

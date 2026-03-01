@@ -31,9 +31,6 @@ var multipleNewlinesRe = regexp.MustCompile(`\n{3,}`)
 // NewWebFetchTool creates a webfetch tool for fetching web content.
 func NewWebFetchTool() libagent.Tool {
 	handler := func(ctx context.Context, params webfetchParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
-		if resp, blocked := toolExecutionGate(ctx, "webfetch"); blocked {
-			return resp, nil
-		}
 		if params.URL == "" {
 			return libagent.NewTextErrorResponse("url is required"), nil
 		}
