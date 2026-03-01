@@ -3,6 +3,7 @@ package libagent
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"charm.land/fantasy"
@@ -11,6 +12,10 @@ import (
 // Agent is a stateful, event-emitting agent that manages conversation history,
 // tool execution, and streaming LLM responses.
 type Agent struct {
+	// mu protects fields that may be read concurrently while runLoop is active:
+	// isStreaming, streamMsg, lastErr, pendingCalls, messages.
+	mu sync.RWMutex
+
 	// state
 	systemPrompt string
 	runtimeModel RuntimeModel
@@ -109,21 +114,26 @@ func NewAgent(opts AgentOptions) *Agent {
 
 // State returns a snapshot of the current agent state.
 func (a *Agent) State() AgentState {
+	a.mu.RLock()
 	msgs := make([]Message, len(a.messages))
 	copy(msgs, a.messages)
 	pending := make(map[string]struct{}, len(a.pendingCalls))
 	for k := range a.pendingCalls {
 		pending[k] = struct{}{}
 	}
+	isStreaming := a.isStreaming
+	streamMsg := a.streamMsg
+	lastErr := a.lastErr
+	a.mu.RUnlock()
 	return AgentState{
 		SystemPrompt:     a.systemPrompt,
 		Model:            a.runtimeModel.Model,
 		Tools:            AdaptTools(a.tools),
 		Messages:         msgs,
-		IsStreaming:      a.isStreaming,
-		StreamMessage:    a.streamMsg,
+		IsStreaming:      isStreaming,
+		StreamMessage:    streamMsg,
 		PendingToolCalls: pending,
-		Error:            a.lastErr,
+		Error:            lastErr,
 	}
 }
 
@@ -351,7 +361,9 @@ func (a *Agent) Continue(ctx context.Context) error {
 
 // Abort cancels the current streaming operation.
 func (a *Agent) Abort() {
+	a.mu.RLock()
 	cancel := a.cancel
+	a.mu.RUnlock()
 	if cancel != nil {
 		cancel()
 	}
@@ -359,7 +371,9 @@ func (a *Agent) Abort() {
 
 // WaitForIdle blocks until the agent is not streaming.
 func (a *Agent) WaitForIdle() {
+	a.mu.RLock()
 	done := a.runningDone
+	a.mu.RUnlock()
 	if done != nil {
 		<-done
 	}
@@ -381,22 +395,26 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message, skipInitialSteer
 	tools := AdaptTools(a.tools)
 	systemPrompt := a.systemPrompt
 	transformContext := composeTransformContext(a.transformContext, runtimeMediaTransform(mediaSupport))
+	done := make(chan struct{})
+	runCtx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
 	a.isStreaming = true
 	a.streamMsg = nil
 	a.lastErr = nil
-	done := make(chan struct{})
 	a.runningDone = done
-	runCtx, cancel := context.WithCancel(ctx)
 	a.cancel = cancel
+	a.mu.Unlock()
 
 	// Close done and cleanup when we exit.
 	defer func() {
 		cancel()
+		a.mu.Lock()
 		a.isStreaming = false
 		a.streamMsg = nil
 		a.pendingCalls = make(map[string]struct{})
 		a.cancel = nil
 		a.runningDone = nil
+		a.mu.Unlock()
 		close(done)
 	}()
 
@@ -446,6 +464,7 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message, skipInitialSteer
 
 	for event := range eventCh {
 		// Update internal state.
+		a.mu.Lock()
 		switch event.Type {
 		case AgentEventTypeMessageStart:
 			a.streamMsg = event.Message
@@ -466,13 +485,16 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message, skipInitialSteer
 		case AgentEventTypeAgentEnd:
 			a.isStreaming = false
 		}
+		a.mu.Unlock()
 
 		// Forward to subscribers.
 		a.emit(event)
 	}
 
 	if loopErr != nil {
+		a.mu.Lock()
 		a.lastErr = loopErr
+		a.mu.Unlock()
 		// Emit an error agent_end so subscribers know it finished.
 		a.emit(AgentEvent{Type: AgentEventTypeAgentEnd, Messages: newMessages})
 	}
