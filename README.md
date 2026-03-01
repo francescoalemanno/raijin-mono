@@ -92,7 +92,15 @@ You can extend Raijin without changing core code:
 
 ## Installation
 
-Build from source:
+Install the latest release with a single command:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/francescoalemanno/raijin-mono/main/scripts/install.sh | sh
+```
+
+This installs `raijin` to `~/.local/bin` and adds it to your `PATH` automatically.
+
+Or build from source:
 
 ```bash
 go build -o raijin .
