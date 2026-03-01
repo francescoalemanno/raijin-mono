@@ -303,14 +303,18 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 		if delta == nil {
 			return nil
 		}
+		// Use a non-cancellable context for streaming delta persistence so that
+		// transient WAL write failures do not abort the in-flight LLM stream.
+		// The authoritative final commit happens at MessageEnd using rs.genCtx.
+		persistCtx := context.WithoutCancel(rs.genCtx)
 		switch delta.Type {
 		case "reasoning_delta":
 			rs.currentAssistant.AppendReasoningContent(delta.Delta)
-			return rs.agent.messages.Update(rs.genCtx, *rs.currentAssistant)
+			_ = rs.agent.messages.Update(persistCtx, *rs.currentAssistant)
 
 		case "reasoning_end":
 			rs.currentAssistant.FinishThinking()
-			return rs.agent.messages.Update(rs.genCtx, *rs.currentAssistant)
+			_ = rs.agent.messages.Update(persistCtx, *rs.currentAssistant)
 
 		case "text_delta":
 			text := delta.Delta
