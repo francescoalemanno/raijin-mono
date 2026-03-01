@@ -2,6 +2,7 @@ package components
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/keybindings"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/tui"
@@ -549,27 +550,15 @@ func (i *Input) Render(width int) []string {
 		halfWidth := scrollWidth / 2
 
 		findValidStart := func(start int) int {
-			for start < len(i.value) {
-				code := rune(i.value[start])
-				// Low surrogate (0xDC00-0xDFFF) is not a valid start
-				if code >= 0xDC00 && code < 0xE000 {
-					start++
-					continue
-				}
-				break
+			for start < len(i.value) && !utf8.RuneStart(i.value[start]) {
+				start++
 			}
 			return start
 		}
 
 		findValidEnd := func(end int) int {
-			for end > 0 {
-				code := rune(i.value[end-1])
-				// High surrogate (0xD800-0xDBFF) might be split
-				if code >= 0xD800 && code < 0xDC00 {
-					end--
-					continue
-				}
-				break
+			for end > 0 && !utf8.RuneStart(i.value[end-1]) {
+				end--
 			}
 			return end
 		}
