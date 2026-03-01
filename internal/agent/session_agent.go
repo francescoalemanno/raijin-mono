@@ -323,11 +323,11 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 				rs.textStarted = true
 			}
 			rs.currentAssistant.AppendContent(text)
-			return rs.agent.messages.Update(rs.genCtx, *rs.currentAssistant)
+			_ = rs.agent.messages.Update(persistCtx, *rs.currentAssistant)
 
 		case "tool_input_start":
 			rs.currentAssistant.AddToolCall(message.ToolCall{ID: delta.ID, Name: delta.ToolName, Finished: false})
-			return rs.agent.messages.Update(rs.genCtx, *rs.currentAssistant)
+			_ = rs.agent.messages.Update(persistCtx, *rs.currentAssistant)
 
 		case "tool_input_delta":
 			rs.currentAssistant.AppendToolCallInput(delta.ID, delta.Delta)
@@ -609,16 +609,18 @@ You are an expert coding agent, operating inside Raijin a coding-agent harness.
 
 		// Append subprocess pattern guidance only if bash tool is available and we're not already in a subprocess.
 		if hasTool(allTools, "bash") && os.Getenv("RAIJIN_ENV") != "true" {
-			sp += "\n\n<subprocess>\n" +
-				"The $RAIJIN_BINARY environment variable is set to the path of the raijin executable. " +
-				"When the user prefixes their request with 'subprocess:', they want the query executed in a sub-process.\n\n" +
-				"The subprocess is STATELESS with no access to session history or files. " +
-				"You MUST enhance the query to be self-contained: include minimal necessary context (file paths, code snippets), " +
-				"avoid pronouns without referents, and make it explicit.\n\n" +
-				"Invoke: $RAIJIN_BINARY -p \"<enhanced self-contained query>\"\n\n" +
-				"Example: User asks \"subprocess: How would you optimize this function?\" → " +
-				"You invoke $RAIJIN_BINARY -p \"How would you optimize the processData function in internal/processor.go lines 45-62?\"" +
-				"\n</subprocess>"
+			sp += `
+<subprocess>
+The $RAIJIN_BINARY environment variable is set to the path of the raijin executable. 
+When the user prefixes their request with 'subprocess:', they want the query executed in a sub-process.
+The subprocess is STATELESS with no access to session history or files. 
+You MUST enhance the query to be self-contained: include minimal necessary context (file paths, code snippets), 
+avoid pronouns without referents, and make it explicit.
+Invoke: $RAIJIN_BINARY -p "<enhanced self-contained query>"
+Example: User asks "subprocess: How would you optimize this function?" → 
+You invoke $RAIJIN_BINARY -p "How would you optimize the processData function in internal/processor.go lines 45-62?"
+</subprocess>
+`
 		}
 	}
 
