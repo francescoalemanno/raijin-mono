@@ -198,5 +198,3 @@ func parseTemplateMarkdown(content string) (templateMeta, string) {
 	meta.Description = frontmatter.StripOptionalQuotes(frontmatter.FirstValue(header, "description"))
 	return meta, strings.TrimSpace(body)
 }
-
-

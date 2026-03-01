@@ -43,6 +43,8 @@ No MCP. No hidden sub-agents. No permission popups.
 - Resume old chats with `/sessions`
 - Compact long history with `/compact` (it will not auto-run on context overflow, you manage your context)
 
+One-shot mode (`-p`) prints only the final assistant response and supports regular prompt features (attachments, skills, shell substitution, templates). Interactive slash commands are not available in one-shot mode.
+
 ## Slash commands
 
 - `/help` - show command help
@@ -113,6 +115,7 @@ raijin
 raijin "fix the bug in main.go"
 raijin "add unit tests for auth"
 raijin "refactor this messy function"
+raijin -p "summarize TODOs and propose a plan"
 ```
 
 ## Development

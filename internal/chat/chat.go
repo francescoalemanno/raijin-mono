@@ -19,11 +19,9 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/agent"
 	chatsession "github.com/francescoalemanno/raijin-mono/internal/chat/session"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
-	"github.com/francescoalemanno/raijin-mono/internal/input"
 	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
-	"github.com/francescoalemanno/raijin-mono/internal/substitution"
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 )
@@ -720,30 +718,24 @@ func (app *ChatApp) handleSubmit(text string) {
 		return
 	}
 
-	// Commands
-	if strings.HasPrefix(text, "/") {
-		app.handleCommand(text)
+	resolved, err := resolvePromptSubmission(context.Background(), text, promptModeInteractive)
+	if err != nil {
+		app.dispatchSync(func(_ tui.UIToken) {
+			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
+		})
+		return
+	}
+	if resolved.builtin != nil {
+		app.handleBuiltinCommand(*resolved.builtin)
 		return
 	}
 
-	text, _ = substitution.ExpandShellSubstitutions(context.Background(), text)
-	app.runPromptWithOptions(text, promptRunOptions{})
-}
-
-type promptRunOptions struct {
-	TemplateName string
+	app.runPromptWithOptions(resolved.promptText, resolved.opts)
 }
 
 type queuedPrompt struct {
 	Input string
 	Opts  promptRunOptions
-}
-
-type preparedPromptInput struct {
-	text         string
-	attachments  []message.BinaryContent
-	skills       []message.SkillContent
-	loadedSkills []string
 }
 
 func (app *ChatApp) dispatchSync(fn func(tui.UIToken)) bool {
@@ -796,7 +788,7 @@ func (app *ChatApp) runOnce(current queuedPrompt) {
 		return
 	}
 
-	prepared, err := app.preparePromptInput(current.Input)
+	prepared, err := preparePromptInput(current.Input, app.session.Paths())
 	if err != nil {
 		app.dispatchSync(func(_ tui.UIToken) {
 			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
@@ -871,7 +863,7 @@ func (app *ChatApp) trySteer(current queuedPrompt) bool {
 		return true
 	}
 
-	prepared, err := app.preparePromptInput(current.Input)
+	prepared, err := preparePromptInput(current.Input, app.session.Paths())
 	if err != nil {
 		app.dispatchSync(func(_ tui.UIToken) {
 			app.appendMessage(err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
@@ -913,38 +905,6 @@ func (app *ChatApp) trySteer(current queuedPrompt) bool {
 	return true
 }
 
-func (app *ChatApp) preparePromptInput(raw string) (preparedPromptInput, error) {
-	text, files, loadedSkills, err := input.ParseAndLoadResources(raw)
-	if err != nil {
-		return preparedPromptInput{}, err
-	}
-
-	out := preparedPromptInput{
-		text:         text,
-		attachments:  make([]message.BinaryContent, 0, len(files)),
-		skills:       make([]message.SkillContent, 0, len(loadedSkills)),
-		loadedSkills: make([]string, 0, len(loadedSkills)),
-	}
-	for _, f := range files {
-		out.attachments = append(out.attachments, message.BinaryContent{
-			Path:     f.Path,
-			MIMEType: f.MediaType,
-			Data:     f.Data,
-		})
-	}
-
-	paths := app.session.Paths()
-	for _, loaded := range loadedSkills {
-		out.skills = append(out.skills, message.SkillContent{
-			Name:    loaded.Name,
-			Content: loaded.Content,
-		})
-		out.loadedSkills = append(out.loadedSkills, loaded.Name)
-		tools.RegisterSkillScriptsPath(paths, loaded.ScriptsDir)
-	}
-	return out, nil
-}
-
 func (app *ChatApp) showLoadedSkills(names []string) {
 	if len(names) == 0 {
 		return
@@ -956,49 +916,22 @@ func (app *ChatApp) showLoadedSkills(names []string) {
 	})
 }
 
-func (app *ChatApp) handleCommand(input string) {
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return
-	}
-
-	var compacting bool
-	app.dispatchSync(func(_ tui.UIToken) {
-		compacting = app.compacting
-	})
-	if compacting {
-		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("compaction in progress; wait until it completes", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
-		})
-		return
-	}
-
-	// Extract the first token to identify the command
-	fields := strings.Fields(input)
-	if len(fields) == 0 {
-		return
-	}
-	cmd := fields[0]
-	if !strings.HasPrefix(cmd, "/") {
-		return
-	}
-	args := input[len(cmd):] // preserve original spacing for args
-	cmd = cmd[1:]
+func (app *ChatApp) handleBuiltinCommand(cmd builtinCommandCall) {
 	switch {
-	case cmd == "exit":
+	case cmd.name == "exit":
 		app.dispatchSync(func(_ tui.UIToken) { app.quit() })
-	case cmd == "new":
+	case cmd.name == "new":
 		if err := app.reloadFromScratch(""); err != nil {
 			app.dispatchSync(func(_ tui.UIToken) {
 				app.appendMessage("failed to reset session: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 			})
 		}
-	case cmd == "sessions":
+	case cmd.name == "sessions":
 		app.dispatchSync(func(_ tui.UIToken) { app.showSessionSelector() })
-	case cmd == "fork":
+	case cmd.name == "fork":
 		app.dispatchSync(func(_ tui.UIToken) { app.showForkSelector() })
-	case cmd == "compact":
-		instructions := strings.TrimSpace(args)
+	case cmd.name == "compact":
+		instructions := strings.TrimSpace(cmd.args)
 		go func() {
 			if err := app.compactConversation(instructions); err != nil {
 				app.dispatchSync(func(_ tui.UIToken) {
@@ -1006,23 +939,20 @@ func (app *ChatApp) handleCommand(input string) {
 				})
 			}
 		}()
-	case cmd == "help":
+	case cmd.name == "help":
 		app.dispatchSync(func(_ tui.UIToken) {
 			app.appendSpacer()
 			app.appendMessage(helpText(), theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		})
-	case cmd == "templates":
+	case cmd.name == "templates":
 		app.dispatchSync(func(_ tui.UIToken) { app.showTemplates() })
-	case cmd == "models" && len(fields) == 1:
+	case cmd.name == "models" && len(cmd.fields) == 1:
 		app.dispatchSync(func(_ tui.UIToken) { app.showModelSelector() })
-	case cmd == "models" && len(fields) == 2 && fields[1] == "add":
+	case cmd.name == "models" && len(cmd.fields) == 2 && cmd.fields[1] == "add":
 		app.dispatchSync(func(_ tui.UIToken) { app.showModelAdd() })
 	default:
-		if app.tryRunTemplateCommand(cmd, args) {
-			return
-		}
 		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("unknown command: "+cmd, theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
+			app.appendMessage("unknown command: "+cmd.name, theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 		})
 	}
 }
@@ -1090,64 +1020,6 @@ func (app *ChatApp) showTemplates() {
 
 	app.appendSpacer()
 	app.appendMessage(strings.TrimSpace(b.String()), theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
-}
-
-func (app *ChatApp) tryRunTemplateCommand(name, argsString string) bool {
-	result := prompts.Load()
-	tmpl, found := result.Find(name)
-	if !found {
-		return false
-	}
-
-	if _, reserved := builtinSlashCommands()[tmpl.Name]; reserved {
-		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("template /"+tmpl.Name+" is reserved by a built-in command", theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
-		})
-		return true
-	}
-	argsString = strings.TrimSpace(argsString)
-	if argsString == "" && templateNeedsArguments(tmpl.Content) {
-		app.dispatchSync(func(_ tui.UIToken) {
-			app.appendMessage("template /"+tmpl.Name+" requires arguments", theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
-		})
-		return true
-	}
-
-	expanded := substitution.ExpandAll(context.Background(), strings.TrimSpace(tmpl.Content), argsString, substitution.ArgModeList)
-	app.runPromptWithOptions(expanded, promptRunOptions{
-		TemplateName: tmpl.Name,
-	})
-	return true
-}
-
-func templateNeedsArguments(content string) bool {
-	for i := 0; i < len(content); i++ {
-		switch content[i] {
-		case '\\':
-			i++
-		case '$':
-			if strings.HasPrefix(content[i:], "$@") || strings.HasPrefix(content[i:], "$ARGUMENTS") || strings.HasPrefix(content[i:], "${@:") {
-				return true
-			}
-			if i+1 < len(content) && content[i+1] >= '1' && content[i+1] <= '9' {
-				return true
-			}
-		}
-	}
-	return unescapedToken(content, "{{ARGUMENTS}}")
-}
-
-func unescapedToken(content, token string) bool {
-	for i := 0; i < len(content); i++ {
-		if content[i] == '\\' {
-			i++
-			continue
-		}
-		if strings.HasPrefix(content[i:], token) {
-			return true
-		}
-	}
-	return false
 }
 
 func (app *ChatApp) showForkSelector() {

@@ -92,5 +92,3 @@ func TestLoadPrecedenceUserOverEmbedded(t *testing.T) {
 		t.Fatalf("init content = %q, want user content", init.Content)
 	}
 }
-
-

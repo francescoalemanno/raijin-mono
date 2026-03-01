@@ -18,6 +18,7 @@ import (
 func main() {
 	versionFlag := flag.Bool("version", false, "show version")
 	themeFlag := flag.String("theme", "dark", "color theme (dark, light)")
+	oneShotPrompt := flag.String("p", "", "run one-shot prompt in CLI mode")
 	flag.Parse()
 
 	if *versionFlag {
@@ -55,6 +56,21 @@ func main() {
 				fmt.Fprintf(os.Stderr, "warning: failed to configure model (%v); select another model to continue\n", err)
 			}
 		}
+	}
+
+	oneShot := strings.TrimSpace(*oneShotPrompt)
+	if oneShot != "" {
+		if len(flag.Args()) > 0 {
+			fmt.Fprintln(os.Stderr, "error: positional prompt arguments cannot be combined with -p")
+			os.Exit(1)
+		}
+		response, err := chat.RunOneShot(runtimeModel, modelCfg, oneShot)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(response)
+		return
 	}
 
 	if err := chat.RunChatWithPrompt(runtimeModel, modelCfg, strings.Join(flag.Args(), " ")); err != nil {
