@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 const editDescription = "Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits."
@@ -111,7 +111,7 @@ func createEditTool(cwd string) libagent.Tool {
 	}
 
 	return WithRender(
-		libagent.NewTypedTool("edit", editDescription, handler),
+		libagent.NewParallelTypedTool("edit", editDescription, handler),
 		renderFunc,
 	)
 }

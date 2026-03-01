@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/francescoalemanno/raijin-mono/libagent"
 	shellrun "github.com/francescoalemanno/raijin-mono/internal/shell"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 type bashParams struct {
@@ -165,7 +165,7 @@ func NewBashTool(paths *PathRegistry) libagent.Tool {
 	}
 
 	return WithRender(
-		libagent.NewTypedTool("bash", fmt.Sprintf(
+		libagent.NewParallelTypedTool("bash", fmt.Sprintf(
 			"Execute bash scripts in the current working directory. Returns stdout and stderr. Output is truncated to last %d lines or %dKB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
 			DefaultMaxLines,
 			DefaultMaxBytes/1024,

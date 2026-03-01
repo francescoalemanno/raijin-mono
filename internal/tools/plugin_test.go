@@ -10,9 +10,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func writePluginScript(t *testing.T, dir, name, content string) string {

@@ -6,9 +6,9 @@ import (
 	"math"
 	"strings"
 
-	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/tui"
 )
 

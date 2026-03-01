@@ -1,8 +1,8 @@
 package tools
 
 import (
-	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/core"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 // mergeByPrecedence merges slices left-to-right, with later entries overriding

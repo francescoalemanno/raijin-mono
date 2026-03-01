@@ -63,7 +63,7 @@ func NewSkillTool(paths *PathRegistry) libagent.Tool {
 	}
 
 	return WithRender(
-		libagent.NewTypedTool("skill", skillDescription, handler),
+		libagent.NewParallelTypedTool("skill", skillDescription, handler),
 		renderFunc,
 	)
 }

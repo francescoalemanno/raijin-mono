@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 const grepDescription = "Search file contents for a pattern. Returns matching lines with file paths and line numbers."

@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 const (

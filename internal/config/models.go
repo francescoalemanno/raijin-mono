@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 const modelsDirPerm = 0o755

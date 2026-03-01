@@ -12,9 +12,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
 	"github.com/francescoalemanno/raijin-mono/internal/input"
+	"github.com/francescoalemanno/raijin-mono/libagent"
 	"golang.org/x/text/unicode/norm"
 )
 

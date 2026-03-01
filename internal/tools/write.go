@@ -59,7 +59,7 @@ func NewWriteTool() libagent.Tool {
 	}
 
 	return WithRender(
-		libagent.NewTypedTool("write", "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.", handler),
+		libagent.NewParallelTypedTool("write", "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.", handler),
 		renderFunc,
 	)
 }
