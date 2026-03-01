@@ -462,13 +462,68 @@ func executeToolCalls(
 		toolMap[t.Info().Name] = t
 	}
 
-	for i, tc := range toolCalls {
+	for _, tc := range toolCalls {
+		// Check for steering messages before each tool (only if not already steering).
+		if getSteeringMessages != nil && steeringMessages == nil {
+			sm, err := getSteeringMessages(ctx)
+			if err != nil {
+				return produced, results, nil, fmt.Errorf("get steering messages: %w", err)
+			}
+			steeringMessages = sm
+		}
+		if steeringMessages != nil {
+			skippedResult := skipToolCall(tc, "Skipped due to queued user message.", eventCh)
+			results = append(results, skippedResult)
+			produced = append(produced, skippedResult)
+			continue
+		}
+
+		if raw := strings.TrimSpace(tc.Input); raw != "" && !json.Valid([]byte(raw)) {
+			skippedResult := skipToolCall(tc, fmt.Sprintf(
+				"invalid tool call JSON input for %q: %q\nThe arguments are incomplete or malformed. Re-issue this tool call with valid JSON.",
+				tc.ToolName, tc.Input,
+			), eventCh)
+			results = append(results, skippedResult)
+			produced = append(produced, skippedResult)
+			continue
+		} else if raw == "" {
+			tc.Input = "{}"
+		}
+
+		tool, found := toolMap[tc.ToolName]
+		if !found {
+			skippedResult := skipToolCall(tc, fmt.Sprintf("tool not found: %s", tc.ToolName), eventCh)
+			results = append(results, skippedResult)
+			produced = append(produced, skippedResult)
+			continue
+		}
+
 		sendEvent(eventCh, AgentEvent{
 			Type:       AgentEventTypeToolExecutionStart,
 			ToolCallID: tc.ToolCallID,
 			ToolName:   tc.ToolName,
 			ToolArgs:   tc.Input,
 		})
+
+		call := fantasy.ToolCall{ID: tc.ToolCallID, Name: tc.ToolName, Input: tc.Input}
+		var resp fantasy.ToolResponse
+		var runErr error
+
+		if st, ok := tool.(StreamingAgentTool); ok {
+			onUpdate := func(partial fantasy.ToolResponse) {
+				sendEvent(eventCh, AgentEvent{
+					Type:        AgentEventTypeToolExecutionUpdate,
+					ToolCallID:  tc.ToolCallID,
+					ToolName:    tc.ToolName,
+					ToolArgs:    tc.Input,
+					ToolResult:  partial.Content,
+					ToolIsError: partial.IsError,
+				})
+			}
+			resp, runErr = st.RunStreaming(ctx, call, onUpdate)
+		} else {
+			resp, runErr = tool.Run(ctx, call)
+		}
 
 		var resultContent string
 		var isError bool
@@ -477,74 +532,36 @@ func executeToolCalls(
 		var resultMetadata string
 		var injectedAttachmentMsg *UserMessage
 
-		if raw := strings.TrimSpace(tc.Input); raw != "" && !json.Valid([]byte(raw)) {
-			resultContent = fmt.Sprintf(
-				"invalid tool call JSON input for %q: %q\nThe arguments are incomplete or malformed. Re-issue this tool call with valid JSON.",
-				tc.ToolName,
-				tc.Input,
-			)
+		if runErr != nil {
+			resultContent = runErr.Error()
 			isError = true
 		} else {
-			if raw == "" {
-				tc.Input = "{}"
-			}
-			tool, found := toolMap[tc.ToolName]
-			if !found {
-				resultContent = fmt.Sprintf("tool not found: %s", tc.ToolName)
-				isError = true
+			resultMetadata = resp.Metadata
+			isError = resp.IsError
+			isMediaResponse := len(resp.Data) > 0 ||
+				strings.EqualFold(resp.Type, "image") ||
+				strings.EqualFold(resp.Type, string(ToolResponseTypeMedia))
+			if isMediaResponse {
+				resultContent = fmt.Sprintf("user will provide the attachment for tool call #%s", tc.ToolCallID)
+				mediaData := normalizeMediaPayload(resp.Data)
+				filename := fmt.Sprintf("tool-call-%s", tc.ToolCallID)
+				if strings.TrimSpace(resp.MediaType) != "" {
+					filename += "." + strings.ReplaceAll(resp.MediaType, "/", "_")
+				}
+				injectedAttachmentMsg = &UserMessage{
+					Role:    "user",
+					Content: fmt.Sprintf("attachment for tool call #%s", tc.ToolCallID),
+					Files: []FilePart{{
+						Filename:  filename,
+						MediaType: resp.MediaType,
+						Data:      mediaData,
+					}},
+					Timestamp: time.Now(),
+				}
 			} else {
-				call := fantasy.ToolCall{ID: tc.ToolCallID, Name: tc.ToolName, Input: tc.Input}
-				var resp fantasy.ToolResponse
-				var runErr error
-
-				if st, ok := tool.(StreamingAgentTool); ok {
-					onUpdate := func(partial fantasy.ToolResponse) {
-						sendEvent(eventCh, AgentEvent{
-							Type:        AgentEventTypeToolExecutionUpdate,
-							ToolCallID:  tc.ToolCallID,
-							ToolName:    tc.ToolName,
-							ToolArgs:    tc.Input,
-							ToolResult:  partial.Content,
-							ToolIsError: partial.IsError,
-						})
-					}
-					resp, runErr = st.RunStreaming(ctx, call, onUpdate)
-				} else {
-					resp, runErr = tool.Run(ctx, call)
-				}
-
-				if runErr != nil {
-					resultContent = runErr.Error()
-					isError = true
-				} else {
-					resultMetadata = resp.Metadata
-					isError = resp.IsError
-					isMediaResponse := len(resp.Data) > 0 ||
-						strings.EqualFold(resp.Type, "image") ||
-						strings.EqualFold(resp.Type, string(ToolResponseTypeMedia))
-					if isMediaResponse {
-						resultContent = fmt.Sprintf("user will provide the attachment for tool call #%s", tc.ToolCallID)
-						mediaData := normalizeMediaPayload(resp.Data)
-						filename := fmt.Sprintf("tool-call-%s", tc.ToolCallID)
-						if strings.TrimSpace(resp.MediaType) != "" {
-							filename += "." + strings.ReplaceAll(resp.MediaType, "/", "_")
-						}
-						injectedAttachmentMsg = &UserMessage{
-							Role:    "user",
-							Content: fmt.Sprintf("attachment for tool call #%s", tc.ToolCallID),
-							Files: []FilePart{{
-								Filename:  filename,
-								MediaType: resp.MediaType,
-								Data:      mediaData,
-							}},
-							Timestamp: time.Now(),
-						}
-					} else {
-						resultContent = resp.Content
-						resultData = resp.Data
-						resultMIMEType = resp.MediaType
-					}
-				}
+				resultContent = resp.Content
+				resultData = resp.Data
+				resultMIMEType = resp.MediaType
 			}
 		}
 
@@ -578,24 +595,6 @@ func executeToolCalls(
 			sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageEnd, Message: injectedAttachmentMsg})
 			produced = append(produced, injectedAttachmentMsg)
 		}
-
-		// Check for steering messages - skip remaining tools if user interrupted.
-		if getSteeringMessages != nil {
-			sm, err := getSteeringMessages(ctx)
-			if err != nil {
-				return produced, results, nil, fmt.Errorf("get steering messages: %w", err)
-			}
-			if len(sm) > 0 {
-				steeringMessages = sm
-				// Skip remaining tool calls.
-				for _, skipped := range toolCalls[i+1:] {
-					skippedResult := skipToolCall(skipped, eventCh)
-					results = append(results, skippedResult)
-					produced = append(produced, skippedResult)
-				}
-				break
-			}
-		}
 	}
 
 	return produced, results, steeringMessages, nil
@@ -613,10 +612,8 @@ func normalizeMediaPayload(data []byte) []byte {
 }
 
 // skipToolCall emits start/end events for a skipped tool call and returns a
-// ToolResultMessage indicating it was skipped due to steering.
-func skipToolCall(tc fantasy.ToolCallContent, eventCh chan<- AgentEvent) *ToolResultMessage {
-	const skipMsg = "Skipped due to queued user message."
-
+// ToolResultMessage with the given reason as an error.
+func skipToolCall(tc fantasy.ToolCallContent, reason string, eventCh chan<- AgentEvent) *ToolResultMessage {
 	sendEvent(eventCh, AgentEvent{
 		Type:       AgentEventTypeToolExecutionStart,
 		ToolCallID: tc.ToolCallID,
@@ -628,7 +625,7 @@ func skipToolCall(tc fantasy.ToolCallContent, eventCh chan<- AgentEvent) *ToolRe
 		ToolCallID:  tc.ToolCallID,
 		ToolName:    tc.ToolName,
 		ToolArgs:    tc.Input,
-		ToolResult:  skipMsg,
+		ToolResult:  reason,
 		ToolIsError: true,
 	})
 
@@ -636,7 +633,7 @@ func skipToolCall(tc fantasy.ToolCallContent, eventCh chan<- AgentEvent) *ToolRe
 		Role:       "toolResult",
 		ToolCallID: tc.ToolCallID,
 		ToolName:   tc.ToolName,
-		Content:    skipMsg,
+		Content:    reason,
 		IsError:    true,
 		Timestamp:  time.Now(),
 	}
