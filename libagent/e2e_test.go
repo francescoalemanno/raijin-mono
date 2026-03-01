@@ -14,14 +14,17 @@ import (
 
 const (
 	e2eProviderID = "synthetic"
-	e2eModelID    = "hf:meta-llama/Llama-3.3-70B-Instruct"
+	e2eModelID    = "hf:openai/gpt-oss-120b"
 )
 
 func syntheticRuntimeModel(t *testing.T) libagent.RuntimeModel {
 	t.Helper()
-	apiKey := os.Getenv("SYNTHETIC_API_KEY")
+	apiKey := strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY"))
 	if apiKey == "" {
 		t.Skip("SYNTHETIC_API_KEY not set")
+	}
+	if os.Getenv("LIBAGENT_RUN_NETWORK_TESTS") != "1" {
+		t.Skip("set LIBAGENT_RUN_NETWORK_TESTS=1 to run network-backed e2e tests")
 	}
 	cat := libagent.DefaultCatalog()
 	info, _, err := cat.FindModel(e2eProviderID, e2eModelID)
