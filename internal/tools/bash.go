@@ -40,6 +40,10 @@ func NewBashTool(paths *PathRegistry) libagent.Tool {
 		defer cancel()
 
 		environ := os.Environ()
+		environ = append(environ, "RAIJIN_ENV=true")
+		if exe, err := os.Executable(); err == nil {
+			environ = append(environ, "RAIJIN_BINARY="+exe)
+		}
 		if paths != nil {
 			if extra := paths.Paths(); len(extra) > 0 {
 				environ = shellrun.PrependPath(environ, extra)

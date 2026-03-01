@@ -602,6 +602,20 @@ You are an expert coding agent, operating inside Raijin a coding-agent harness.
 		}
 		sp += "</tools>"
 		sp += buildToolPreferencesSection(allTools)
+
+		// Append subprocess pattern guidance only if bash tool is available and we're not already in a subprocess.
+		if hasTool(allTools, "bash") && os.Getenv("RAIJIN_ENV") != "true" {
+			sp += "\n\n<subprocess>\n" +
+				"The $RAIJIN_BINARY environment variable is set to the path of the raijin executable. " +
+				"When the user prefixes their request with 'subprocess:', they want the query executed in a sub-process.\n\n" +
+				"The subprocess is STATELESS with no access to session history or files. " +
+				"You MUST enhance the query to be self-contained: include minimal necessary context (file paths, code snippets), " +
+				"avoid pronouns without referents, and make it explicit.\n\n" +
+				"Invoke: $RAIJIN_BINARY -p \"<enhanced self-contained query>\"\n\n" +
+				"Example: User asks \"subprocess: How would you optimize this function?\" → " +
+				"You invoke $RAIJIN_BINARY -p \"How would you optimize the processData function in internal/processor.go lines 45-62?\"" +
+				"\n</subprocess>"
+		}
 	}
 
 	// Append AGENTS.md content.
@@ -676,4 +690,14 @@ func toolPreferenceFor(name string) string {
 	default:
 		return "Use the " + name + " tool instead of using bash or shell scripts as equivalents for that task."
 	}
+}
+
+// hasTool checks if a tool with the given normalized name exists in the list.
+func hasTool(tools []libagent.Tool, name string) bool {
+	for _, t := range tools {
+		if core.Normalize(t.Info().Name) == name {
+			return true
+		}
+	}
+	return false
 }
