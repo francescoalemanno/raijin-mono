@@ -1562,7 +1562,10 @@ func (app *ChatApp) interruptRun() {
 	app.flushReply()
 	app.cancelPendingTools()
 	app.appendMessage("(interrupted)", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
-	app.stopLoader()
+	// Keep state as stateRunning and the loader visible (changed to "Interrupting…")
+	// until runOnce() finalizes. This prevents new submits from being mis-routed
+	// as steering while the agent goroutine is still unwinding.
+	app.showStatusLoader("Interrupting…")
 }
 
 // cancelPendingTools stops loaders and marks all pending tool calls as cancelled.

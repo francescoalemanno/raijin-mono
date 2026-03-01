@@ -39,8 +39,9 @@ type Agent struct {
 	steeringQueue []Message
 	followUpQueue []Message
 
-	// event subscribers
-	subscribers []chan AgentEvent
+	// event subscribers (subMu protects subscribers slice)
+	subMu       sync.RWMutex
+	subscribers []*agentSubscriber
 
 	// abort / idle coordination
 	cancel      context.CancelFunc
@@ -278,31 +279,154 @@ func (a *Agent) dequeueFollowUpMessages() []Message {
 
 // ----- Event subscription ------------------------------------------------------
 
-// Subscribe registers a listener for agent events.
-// Returns an unsubscribe function that removes the listener.
-// Events are delivered on a buffered channel; if the channel is full the event is dropped.
-func (a *Agent) Subscribe() (<-chan AgentEvent, func()) {
-	ch := make(chan AgentEvent, 64)
-	a.subscribers = append(a.subscribers, ch)
-	remove := func() {
-		for i, s := range a.subscribers {
-			if s == ch {
-				a.subscribers = append(a.subscribers[:i], a.subscribers[i+1:]...)
-				close(ch)
+// agentSubscriber is an unbounded, lossless event queue for a single subscriber.
+// A relay goroutine buffers events in a slice so the emitter never blocks and
+// events are never dropped regardless of how slowly the subscriber consumes them.
+type agentSubscriber struct {
+	in   chan AgentEvent // emitter writes here (unbuffered; relay goroutine is the buffer)
+	out  chan AgentEvent // subscriber reads here (unbuffered; relay goroutine is the buffer)
+	done chan struct{}   // closed by stop() to tear down the relay
+}
+
+func newAgentSubscriber() *agentSubscriber {
+	s := &agentSubscriber{
+		in:   make(chan AgentEvent),
+		out:  make(chan AgentEvent),
+		done: make(chan struct{}),
+	}
+	go s.relay()
+	return s
+}
+
+// relay moves events from in → internal slice → out without ever dropping.
+// When done is closed (stop called), the relay flushes any buffered events
+// to out before closing it, so subscribers always see the full event stream.
+func (s *agentSubscriber) relay() {
+	defer close(s.out)
+	var buf []AgentEvent
+	for {
+		if len(buf) == 0 {
+			select {
+			case v, ok := <-s.in:
+				if !ok {
+					return
+				}
+				buf = append(buf, v)
+			case <-s.done:
+				// Drain in without blocking, then flush buf, then exit.
+				for {
+					select {
+					case v, ok := <-s.in:
+						if !ok {
+							goto flush
+						}
+						buf = append(buf, v)
+					default:
+						goto flush
+					}
+				}
+			flush:
+				for _, item := range buf {
+					s.out <- item
+				}
+				return
+			}
+		} else {
+			select {
+			case v, ok := <-s.in:
+				if !ok {
+					// in closed; flush remaining buffer then exit.
+					for _, item := range buf {
+						s.out <- item
+					}
+					return
+				}
+				buf = append(buf, v)
+			case s.out <- buf[0]:
+				buf = buf[1:]
+			case <-s.done:
+				// Drain in without blocking, flush buf, then exit.
+				for {
+					select {
+					case v, ok := <-s.in:
+						if !ok {
+							goto flush2
+						}
+						buf = append(buf, v)
+					default:
+						goto flush2
+					}
+				}
+			flush2:
+				for _, item := range buf {
+					s.out <- item
+				}
 				return
 			}
 		}
 	}
-	return ch, remove
+}
+
+// send delivers an event to the subscriber. It blocks only until the relay
+// goroutine receives it (typically nanoseconds), after which the event sits
+// in the relay's unbounded internal slice.
+func (s *agentSubscriber) send(event AgentEvent) {
+	select {
+	case s.in <- event:
+	case <-s.done:
+	}
+}
+
+// stop shuts down the relay goroutine and closes the output channel.
+func (s *agentSubscriber) stop() {
+	select {
+	case <-s.done:
+	default:
+		close(s.done)
+	}
+}
+
+// Subscribe registers a listener for agent events.
+// Returns the event channel and an unsubscribe function.
+// Events are delivered in order and never dropped; the channel is closed when
+// unsubscribed. Subscribe and unsubscribe are safe to call concurrently with emit.
+func (a *Agent) Subscribe() (<-chan AgentEvent, func()) {
+	sub := newAgentSubscriber()
+	a.subMu.Lock()
+	a.subscribers = append(a.subscribers, sub)
+	a.subMu.Unlock()
+	remove := func() {
+		a.subMu.Lock()
+		for i, s := range a.subscribers {
+			if s == sub {
+				a.subscribers = append(a.subscribers[:i], a.subscribers[i+1:]...)
+				break
+			}
+		}
+		a.subMu.Unlock()
+		sub.stop()
+	}
+	return sub.out, remove
+}
+
+// stopAllSubscribers stops and removes every active subscriber, closing their
+// output channels. Called by runLoop's defer so range-evCh callers unblock.
+func (a *Agent) stopAllSubscribers() {
+	a.subMu.Lock()
+	subs := a.subscribers
+	a.subscribers = nil
+	a.subMu.Unlock()
+	for _, s := range subs {
+		s.stop()
+	}
 }
 
 func (a *Agent) emit(event AgentEvent) {
+	a.subMu.RLock()
 	subs := a.subscribers
-	for _, ch := range subs {
-		select {
-		case ch <- event:
-		default:
-		}
+	a.subMu.RUnlock()
+	for _, s := range subs {
+		s.send(event)
 	}
 }
 
@@ -405,9 +529,21 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message, skipInitialSteer
 	a.cancel = cancel
 	a.mu.Unlock()
 
-	// Close done and cleanup when we exit.
+	// Declared here so the defer closure below can read them after the goroutine writes them.
+	var loopErr error
+	var newMessages []Message
+
+	// Cleanup when we exit: emit a terminal AgentEnd if the loop errored (so
+	// subscribers always see one), then close all active subscriber channels so
+	// callers blocked on range-evCh unblock without any special-casing.
 	defer func() {
 		cancel()
+		if loopErr != nil {
+			a.mu.Lock()
+			a.lastErr = loopErr
+			a.mu.Unlock()
+			a.emit(AgentEvent{Type: AgentEventTypeAgentEnd, Messages: newMessages})
+		}
 		a.mu.Lock()
 		a.isStreaming = false
 		a.streamMsg = nil
@@ -416,6 +552,7 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message, skipInitialSteer
 		a.runningDone = nil
 		a.mu.Unlock()
 		close(done)
+		a.stopAllSubscribers()
 	}()
 
 	skipFirst := skipInitialSteeringPoll
@@ -449,9 +586,6 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message, skipInitialSteer
 
 	// Event channel: we read events from it and update state + emit to subscribers.
 	eventCh := make(chan AgentEvent, 64)
-
-	var loopErr error
-	var newMessages []Message
 
 	go func() {
 		if len(prompts) > 0 {
@@ -489,14 +623,6 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message, skipInitialSteer
 
 		// Forward to subscribers.
 		a.emit(event)
-	}
-
-	if loopErr != nil {
-		a.mu.Lock()
-		a.lastErr = loopErr
-		a.mu.Unlock()
-		// Emit an error agent_end so subscribers know it finished.
-		a.emit(AgentEvent{Type: AgentEventTypeAgentEnd, Messages: newMessages})
 	}
 
 	return loopErr

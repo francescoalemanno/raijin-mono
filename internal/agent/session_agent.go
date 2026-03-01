@@ -210,17 +210,18 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	}
 
 	// Run the agent prompt in a goroutine; we handle events synchronously.
+	// libagent closes evCh (via stopAllSubscribers) when the run completes,
+	// so the range loop exits naturally without any special-casing.
 	promptErrCh := make(chan error, 1)
 	go func() {
 		promptErrCh <- ag.Prompt(genCtx, promptMsg.Content, promptMsg.Files...)
 	}()
 
-	// Drain events and persist state.
 	for event := range evCh {
 		if err := rs.handleEvent(ctx, event); err != nil {
-			// Propagate fatal persistence errors; cancel the agent run.
+			// Fatal persistence error: cancel the run and drain evCh so the
+			// subscriber goroutine and libagent can unwind cleanly.
 			cancel()
-			// Drain remaining events.
 			for range evCh {
 			}
 			<-promptErrCh
@@ -229,11 +230,9 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 		if cb := a.EventCallback(); cb != nil {
 			cb(event)
 		}
-		if event.Type == libagent.AgentEventTypeAgentEnd {
-			break
-		}
 	}
 
+	// evCh closed: libagent finished. Collect Prompt()'s return value.
 	promptErr := <-promptErrCh
 
 	if promptErr != nil {
