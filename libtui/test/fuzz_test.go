@@ -82,8 +82,8 @@ func FuzzExtractAnsiCode(f *testing.F) {
 	f.Add("\x1b[31m", 0)
 	f.Add("\x1b]0;title\x07", 0)
 	f.Add("\x1b_data\x1b\\", 0)
-	f.Add("\x1b[", 0)    // unterminated
-	f.Add("\x1b", 0)     // lone ESC
+	f.Add("\x1b[", 0)     // unterminated
+	f.Add("\x1b", 0)      // lone ESC
 	f.Add("abc\x1b[m", 3) // non-zero start pos
 	// pos points exactly at ESC inside a longer string
 	f.Add("hello\x1b[32mworld", 5)
@@ -368,14 +368,14 @@ func FuzzSliceWithWidth(f *testing.F) {
 
 // FuzzParseKey covers both legacy terminal sequences and Kitty CSI-u parsing.
 func FuzzParseKey(f *testing.F) {
-	f.Add("\x1b[A")         // up arrow
-	f.Add("\x1b[31;5u")     // kitty ctrl+1
-	f.Add("\x1b[99;5u")     // kitty ctrl+c
+	f.Add("\x1b[A")           // up arrow
+	f.Add("\x1b[31;5u")       // kitty ctrl+1
+	f.Add("\x1b[99;5u")       // kitty ctrl+c
 	f.Add("\x1b[1089::99;5u") // kitty cyrillic ctrl+c
-	f.Add("\x1b[24~")       // f12
-	f.Add("\x1b")           // bare ESC
-	f.Add("\x1b[")          // unterminated CSI
-	f.Add("\x03")           // ctrl+c legacy
+	f.Add("\x1b[24~")         // f12
+	f.Add("\x1b")             // bare ESC
+	f.Add("\x1b[")            // unterminated CSI
+	f.Add("\x03")             // ctrl+c legacy
 	f.Add("")
 	f.Add("\x1b[200~paste content\x1b[201~") // bracketed paste
 	f.Add("\x1b[1:2:3;4:5u")                 // full kitty format
