@@ -434,6 +434,10 @@ func streamAssistantResponse(
 		assistantMsg.FinishReason = fantasy.FinishReasonError
 		assistantMsg.Error = fmt.Errorf("language model returned no final response")
 	}
+	if assistantMsg.FinishReason == fantasy.FinishReasonLength {
+		assistantMsg.FinishReason = fantasy.FinishReasonError
+		assistantMsg.Error = fmt.Errorf("language model response was truncated: output token limit reached")
+	}
 
 	// Append assistant message to context.
 	currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
