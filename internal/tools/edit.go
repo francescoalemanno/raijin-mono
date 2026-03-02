@@ -30,6 +30,13 @@ func NewEditTool() libagent.Tool {
 
 func createEditTool(cwd string) libagent.Tool {
 	handler := func(ctx context.Context, params editParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
+		if strings.TrimSpace(params.OldText) == "" {
+			return libagent.NewTextErrorResponse("oldText cannot be empty. Provide the exact text to find and replace, including surrounding context to ensure uniqueness."), nil
+		}
+		if strings.TrimSpace(params.NewText) == "" {
+			return libagent.NewTextErrorResponse("newText cannot be empty. Provide the replacement text with proper context."), nil
+		}
+
 		absolutePath := fsutil.ResolveToCwd(params.Path, cwd)
 
 		buffer, err := os.ReadFile(absolutePath)

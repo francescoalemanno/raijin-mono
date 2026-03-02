@@ -527,3 +527,111 @@ func TestEditTool_RespectsContextCancellation(t *testing.T) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
+
+func TestEditTool_RejectsEmptyOldText(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "empty-old.txt")
+	mustWriteFile(t, file, "hello world\n")
+
+	tool := NewEditTool()
+	resp, err := runEdit(t, tool, map[string]any{
+		"path":    file,
+		"oldText": "",
+		"newText": "replacement",
+	})
+	if err != nil {
+		t.Fatalf("run edit: %v", err)
+	}
+	if !resp.IsError {
+		t.Fatalf("expected error response")
+	}
+	if !strings.Contains(resp.Content, "oldText cannot be empty") {
+		t.Fatalf("unexpected error content: %q", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "surrounding context") {
+		t.Fatalf("expected advice about context in error: %q", resp.Content)
+	}
+}
+
+func TestEditTool_RejectsEmptyNewText(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "empty-new.txt")
+	mustWriteFile(t, file, "hello world\n")
+
+	tool := NewEditTool()
+	resp, err := runEdit(t, tool, map[string]any{
+		"path":    file,
+		"oldText": "world",
+		"newText": "",
+	})
+	if err != nil {
+		t.Fatalf("run edit: %v", err)
+	}
+	if !resp.IsError {
+		t.Fatalf("expected error response")
+	}
+	if !strings.Contains(resp.Content, "newText cannot be empty") {
+		t.Fatalf("unexpected error content: %q", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "proper context") {
+		t.Fatalf("expected advice about context in error: %q", resp.Content)
+	}
+}
+
+func TestEditTool_RejectsWhitespaceOnlyOldText(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "ws-old.txt")
+	mustWriteFile(t, file, "hello world\n")
+
+	tool := NewEditTool()
+	resp, err := runEdit(t, tool, map[string]any{
+		"path":    file,
+		"oldText": "   \n\t  ",
+		"newText": "replacement",
+	})
+	if err != nil {
+		t.Fatalf("run edit: %v", err)
+	}
+	if !resp.IsError {
+		t.Fatalf("expected error response")
+	}
+	if !strings.Contains(resp.Content, "oldText cannot be empty") {
+		t.Fatalf("unexpected error content: %q", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "surrounding context") {
+		t.Fatalf("expected advice about context in error: %q", resp.Content)
+	}
+}
+
+func TestEditTool_RejectsWhitespaceOnlyNewText(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "ws-new.txt")
+	mustWriteFile(t, file, "hello world\n")
+
+	tool := NewEditTool()
+	resp, err := runEdit(t, tool, map[string]any{
+		"path":    file,
+		"oldText": "world",
+		"newText": "   \n\t  ",
+	})
+	if err != nil {
+		t.Fatalf("run edit: %v", err)
+	}
+	if !resp.IsError {
+		t.Fatalf("expected error response")
+	}
+	if !strings.Contains(resp.Content, "newText cannot be empty") {
+		t.Fatalf("unexpected error content: %q", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "proper context") {
+		t.Fatalf("expected advice about context in error: %q", resp.Content)
+	}
+}
