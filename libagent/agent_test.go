@@ -807,9 +807,7 @@ func TestAgent_Abort(t *testing.T) {
 	blockCh := make(chan struct{})
 	model := newMockModel(func(_ int) fantasy.StreamResponse {
 		return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
-			select {
-			case <-blockCh:
-			}
+			<-blockCh
 			// After abort, just return error finish.
 			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonError})
 		})

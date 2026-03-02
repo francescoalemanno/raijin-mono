@@ -547,7 +547,7 @@ func TestEditTool_RejectsEmptyOldText(t *testing.T) {
 	if !resp.IsError {
 		t.Fatalf("expected error response")
 	}
-	if !strings.Contains(resp.Content, "oldText cannot be empty") {
+	if !strings.Contains(resp.Content, "oldText and newText cannot be empty") {
 		t.Fatalf("unexpected error content: %q", resp.Content)
 	}
 	if !strings.Contains(resp.Content, "surrounding context") {
@@ -574,10 +574,10 @@ func TestEditTool_RejectsEmptyNewText(t *testing.T) {
 	if !resp.IsError {
 		t.Fatalf("expected error response")
 	}
-	if !strings.Contains(resp.Content, "newText cannot be empty") {
+	if !strings.Contains(resp.Content, "oldText and newText cannot be empty") {
 		t.Fatalf("unexpected error content: %q", resp.Content)
 	}
-	if !strings.Contains(resp.Content, "proper context") {
+	if !strings.Contains(resp.Content, "surrounding context") {
 		t.Fatalf("expected advice about context in error: %q", resp.Content)
 	}
 }
@@ -601,7 +601,7 @@ func TestEditTool_RejectsWhitespaceOnlyOldText(t *testing.T) {
 	if !resp.IsError {
 		t.Fatalf("expected error response")
 	}
-	if !strings.Contains(resp.Content, "oldText cannot be empty") {
+	if !strings.Contains(resp.Content, "oldText and newText cannot be empty") {
 		t.Fatalf("unexpected error content: %q", resp.Content)
 	}
 	if !strings.Contains(resp.Content, "surrounding context") {
@@ -628,10 +628,10 @@ func TestEditTool_RejectsWhitespaceOnlyNewText(t *testing.T) {
 	if !resp.IsError {
 		t.Fatalf("expected error response")
 	}
-	if !strings.Contains(resp.Content, "newText cannot be empty") {
+	if !strings.Contains(resp.Content, "oldText and newText cannot be empty") {
 		t.Fatalf("unexpected error content: %q", resp.Content)
 	}
-	if !strings.Contains(resp.Content, "proper context") {
+	if !strings.Contains(resp.Content, "surrounding context") {
 		t.Fatalf("expected advice about context in error: %q", resp.Content)
 	}
 }
