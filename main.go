@@ -11,6 +11,7 @@ import (
 
 	"github.com/francescoalemanno/raijin-mono/internal/chat"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
+	"github.com/francescoalemanno/raijin-mono/internal/profiling"
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
 	"github.com/francescoalemanno/raijin-mono/internal/version"
 )
@@ -19,6 +20,8 @@ func main() {
 	versionFlag := flag.Bool("version", false, "show version")
 	themeFlag := flag.String("theme", "dark", "color theme (dark, light)")
 	oneShotPrompt := flag.String("p", "", "run one-shot prompt in CLI mode")
+	profileDirFlag := flag.String("profile-dir", "", "write live profiling artifacts under this directory")
+	pprofAddrFlag := flag.String("pprof-addr", "", "serve runtime pprof on this address (for example 127.0.0.1:6060)")
 	flag.Parse()
 
 	if *versionFlag {
@@ -29,6 +32,28 @@ func main() {
 	if !theme.SetTheme(*themeFlag) {
 		fmt.Fprintf(os.Stderr, "error: unknown theme %q; available themes: %s\n", *themeFlag, strings.Join(theme.AvailableThemes(), ", "))
 		os.Exit(1)
+	}
+
+	profiler, err := profiling.Start(profiling.Options{
+		Dir:       strings.TrimSpace(*profileDirFlag),
+		PprofAddr: strings.TrimSpace(*pprofAddrFlag),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to start profiling: %v\n", err)
+		os.Exit(1)
+	}
+	if profiler.Enabled() {
+		if dir := profiler.Dir(); dir != "" {
+			fmt.Fprintf(os.Stderr, "profiling capture enabled: %s\n", dir)
+		}
+		if addr := profiler.PprofAddr(); addr != "" {
+			fmt.Fprintf(os.Stderr, "pprof endpoint enabled: http://%s/debug/pprof/\n", addr)
+		}
+		defer func() {
+			if stopErr := profiler.Stop(); stopErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to stop profiling cleanly: %v\n", stopErr)
+			}
+		}()
 	}
 
 	var runtimeModel libagent.RuntimeModel

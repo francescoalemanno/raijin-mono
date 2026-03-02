@@ -118,6 +118,36 @@ raijin "refactor this messy function"
 raijin -p "summarize TODOs and propose a plan"
 ```
 
+### Live profiling
+
+Raijin can capture full-session Go profiling artifacts while you use the TUI.
+
+```bash
+raijin -profile-dir ./profiles
+```
+
+This creates a timestamped folder like `./profiles/raijin-profile-YYYYMMDD-HHMMSS` containing:
+
+- `cpu.pprof` (continuous CPU profile for the full session)
+- `trace.out` (runtime trace for the full session)
+- `heap.pprof`, `goroutine.pprof`, `block.pprof`, `mutex.pprof` (end-of-session snapshots)
+- `memstats.json`
+
+For live, on-demand pprof capture during a session:
+
+```bash
+raijin -profile-dir ./profiles -pprof-addr 127.0.0.1:6060
+```
+
+Then inspect bottlenecks with:
+
+```bash
+go tool pprof -http=:0 ./raijin ./profiles/raijin-profile-*/cpu.pprof
+go tool trace ./profiles/raijin-profile-*/trace.out
+go tool pprof -http=:0 ./raijin http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+go tool pprof -http=:0 ./raijin http://127.0.0.1:6060/debug/pprof/heap
+```
+
 ## Development
 
 ```bash
