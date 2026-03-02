@@ -676,7 +676,7 @@ func toolPreferenceFor(name string) string {
 	case "write":
 		return "Use the write tool instead of shell redirection (>, >>, cat <<EOF) when creating or overwriting files."
 	case "bash":
-		return "Use the bash tool only when needed for commands that have no dedicated built-in tool equivalent."
+		return "Use the bash tool only when needed for commands that have no dedicated built-in tool equivalent. Never respond to the user via cat or similar shell tools — respond directly."
 	case "webfetch":
 		return "Use the webfetch tool instead of curl/wget in bash for retrieving web content."
 	default:
