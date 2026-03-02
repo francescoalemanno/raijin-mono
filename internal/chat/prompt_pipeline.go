@@ -71,8 +71,7 @@ func resolvePromptSubmission(ctx context.Context, raw string, mode promptMode) (
 		return resolvedPrompt{builtin: &builtinCommandCall{name: commandName, args: args, fields: fields}}, nil
 	}
 
-	result := prompts.Load()
-	tmpl, found := result.Find(commandName)
+	tmpl, found := prompts.Find(commandName)
 	if !found {
 		return resolvedPrompt{}, fmt.Errorf("unknown command: %s", commandName)
 	}

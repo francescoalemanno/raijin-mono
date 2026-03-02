@@ -3,7 +3,7 @@ description: Create or update a Raijin extension (skill, plugin tool, or prompt 
 ---
 The user wants to create or modify a Raijin extension. Their request is:
 
-$ARGUMENTS
+$@
 
 ## Your job
 

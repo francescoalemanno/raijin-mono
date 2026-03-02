@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
@@ -17,5 +18,5 @@ func RegisterDefaultTools(paths *PathRegistry) []libagent.Tool {
 	}
 
 	plugins := LoadPluginTools()
-	return mergeToolsByPrecedence(builtin, plugins)
+	return artifacts.Merge(func(t libagent.Tool) string { return t.Info().Name }, builtin, plugins)
 }

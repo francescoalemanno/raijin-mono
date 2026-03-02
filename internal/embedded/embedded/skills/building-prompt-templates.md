@@ -32,7 +32,7 @@ The body is the prompt sent to the LLM when the template is invoked. It supports
 
 | Placeholder | Expands to |
 |-------------|------------|
-| `\$ARGUMENTS` or `\$@` | All arguments passed after the template name |
+| `$@` | All arguments passed after the template name |
 | `$1`, `$2`, … | Individual positional arguments |
 | `{{PROJECT_PROMPTS_DIR}}` | `{{PROJECT_PROMPTS_DIR}}` |
 | `{{USER_PROMPTS_DIR}}` | `{{USER_PROMPTS_DIR}}` |
@@ -57,7 +57,7 @@ Review the code described below for correctness, style, and potential bugs.
 Be concise. List issues as a numbered list, most critical first.
 If there are no issues, say so explicitly.
 
-Task: $ARGUMENTS
+Task: $@
 ```
 
 ## Template Locations
@@ -91,7 +91,5 @@ Project templates override user templates, which override built-in templates.
 
 <golden_rules>
 - Keep the body prompt-shaped: write it as if you are addressing the LLM directly.
-- Use `$ARGUMENTS` when the task varies per invocation. Omit it for fixed-purpose templates.
-
-- Never add `\{{ARGUMENTS}}` (double-brace form) to the body — that is the skill substitution syntax, not the template syntax. Use `\$ARGUMENTS` instead.
+- Use `$@` when the task varies per invocation. Omit it for fixed-purpose templates.
 </golden_rules>

@@ -3,7 +3,6 @@ package skills
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
@@ -16,27 +15,23 @@ import (
 type Skill struct {
 	Name        string
 	Description string
-	Source      Source
+	Source      artifacts.Source
 	// LLMDescription overrides Description only for model-facing system prompt injection.
 	LLMDescription string
 	FilePath       string // path to the skill file (embedded://... for embedded, file path for external)
 }
-
-// Source identifies where a skill originated from.
-type Source string
-
-const (
-	SourceEmbedded Source = "embedded"
-	SourceUser     Source = "user"
-	SourceProject  Source = "project"
-)
 
 func init() {
 	artifacts.RegisterLoader(artifacts.KindSkill, loadSkillArtifacts)
 }
 
 func loadSkillArtifacts() ([]artifacts.Item, error) {
-	merged := mergeAllSkills()
+	merged := artifacts.Merge(
+		func(s Skill) string { return s.Name },
+		loadEmbeddedSkills(),
+		loadSkillsFromDir(paths.UserSkillsDir(), artifacts.SourceUser),
+		loadSkillsFromDir(filepath.Join(".", paths.ProjectSkillsDirRel), artifacts.SourceProject),
+	)
 	items := make([]artifacts.Item, 0, len(merged))
 	for _, skill := range merged {
 		items = append(items, artifacts.Item{
@@ -46,26 +41,6 @@ func loadSkillArtifacts() ([]artifacts.Item, error) {
 		})
 	}
 	return items, nil
-}
-
-func mergeAllSkills() []Skill {
-	m := make(map[string]Skill)
-
-	for _, s := range loadEmbeddedSkills() {
-		m[s.Name] = s
-	}
-	for _, s := range loadExternalSkillsMerged() {
-		m[s.Name] = s
-	}
-
-	out := make([]Skill, 0, len(m))
-	for _, s := range m {
-		out = append(out, s)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
-	})
-	return out
 }
 
 // GetSkills returns all available skills.
@@ -78,7 +53,7 @@ func GetExternalSkills() []Skill {
 	all := GetSkills()
 	out := make([]Skill, 0, len(all))
 	for _, skill := range all {
-		if skill.Source == SourceEmbedded {
+		if skill.Source == artifacts.SourceEmbedded {
 			continue
 		}
 		out = append(out, skill)
@@ -108,8 +83,7 @@ func loadEmbeddedSkills() []Skill {
 
 	var result []Skill
 	for _, file := range files {
-		name := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
-		name = strings.ToLower(name)
+		name := strings.ToLower(strings.TrimSuffix(file.Name(), filepath.Ext(file.Name())))
 		if name == "" {
 			continue
 		}
@@ -117,13 +91,11 @@ func loadEmbeddedSkills() []Skill {
 		if err != nil {
 			continue
 		}
-		rawContent := strings.TrimSpace(string(data))
-		description, llmDescription := parseSkillHeader(rawContent)
-
+		description, llmDescription := parseSkillHeader(strings.TrimSpace(string(data)))
 		result = append(result, Skill{
 			Name:           name,
 			Description:    description,
-			Source:         SourceEmbedded,
+			Source:         artifacts.SourceEmbedded,
 			LLMDescription: llmDescription,
 			FilePath:       embedded.Scheme + "skills/" + file.Name(),
 		})
@@ -131,7 +103,10 @@ func loadEmbeddedSkills() []Skill {
 	return result
 }
 
-func loadExternalSkillsFromDir(root string, source Source) []Skill {
+func loadSkillsFromDir(root string, source artifacts.Source) []Skill {
+	if root == "" {
+		return nil
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil
@@ -148,58 +123,22 @@ func loadExternalSkillsFromDir(root string, source Source) []Skill {
 		if err != nil {
 			continue
 		}
-		rawContent := strings.TrimSpace(string(data))
-		description, llmDescription := parseSkillHeader(rawContent)
-
-		skill := Skill{
+		description, llmDescription := parseSkillHeader(strings.TrimSpace(string(data)))
+		result = append(result, Skill{
 			Name:           skillName,
 			Description:    description,
 			Source:         source,
 			LLMDescription: llmDescription,
 			FilePath:       path,
-		}
-
-		result = append(result, skill)
+		})
 	}
 	return result
-}
-
-func loadProjectSkills() []Skill {
-	return loadExternalSkillsFromDir(filepath.Join(".", paths.ProjectSkillsDirRel), SourceProject)
-}
-
-func loadUserSkills() []Skill {
-	dir := paths.UserSkillsDir()
-	if dir == "" {
-		return nil
-	}
-	return loadExternalSkillsFromDir(dir, SourceUser)
-}
-
-func loadExternalSkillsMerged() []Skill {
-	m := make(map[string]Skill)
-	for _, s := range loadUserSkills() {
-		m[s.Name] = s
-	}
-	for _, s := range loadProjectSkills() {
-		m[s.Name] = s
-	}
-
-	out := make([]Skill, 0, len(m))
-	for _, s := range m {
-		out = append(out, s)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
-	})
-	return out
 }
 
 func parseSkillHeader(content string) (string, string) {
 	header, body, ok := frontmatter.Parse(content)
 	if !ok {
-		description := frontmatter.FirstNonEmptyLine(content)
-		return description, ""
+		return frontmatter.FirstNonEmptyLine(content), ""
 	}
 
 	description := frontmatter.StripOptionalQuotes(frontmatter.FirstValue(header, "description"))

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
 )
 
@@ -72,11 +73,14 @@ func writeSkillFile(t *testing.T, path, body string) {
 }
 
 func mergedSkillsForTest() map[string]Skill {
-	m := make(map[string]Skill)
-	for _, s := range loadEmbeddedSkills() {
-		m[s.Name] = s
-	}
-	for _, s := range loadExternalSkillsMerged() {
+	all := artifacts.Merge(
+		func(s Skill) string { return s.Name },
+		loadEmbeddedSkills(),
+		loadSkillsFromDir(paths.UserSkillsDir(), artifacts.SourceUser),
+		loadSkillsFromDir(filepath.Join(".", paths.ProjectSkillsDirRel), artifacts.SourceProject),
+	)
+	m := make(map[string]Skill, len(all))
+	for _, s := range all {
 		m[s.Name] = s
 	}
 	return m
@@ -98,7 +102,7 @@ func TestSkillPrecedence_ProjectOverUserOverEmbedded(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected commit skill")
 	}
-	if got.Source != SourceProject {
+	if got.Source != artifacts.SourceProject {
 		t.Fatalf("expected project source to win, got %q", got.Source)
 	}
 	if got.Description != "project commit" {
@@ -120,7 +124,7 @@ func TestSkillPrecedence_UserOverEmbedded(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected init skill")
 	}
-	if got.Source != SourceUser {
+	if got.Source != artifacts.SourceUser {
 		t.Fatalf("expected user source to win over embedded, got %q", got.Source)
 	}
 	if got.Description != "user init" {

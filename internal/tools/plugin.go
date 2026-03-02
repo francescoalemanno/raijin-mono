@@ -48,7 +48,7 @@ func loadPluginArtifacts() ([]artifacts.Item, error) {
 	projectPlugins, errs := discoverPluginArtifacts(localPluginsDir)
 	allErrs = append(allErrs, errs...)
 
-	merged := mergePluginArtifactsByPrecedence(userPlugins, projectPlugins)
+	merged := artifacts.Merge(func(p pluginArtifact) string { return p.meta.Name }, userPlugins, projectPlugins)
 	items := make([]artifacts.Item, 0, len(merged))
 	for _, plugin := range merged {
 		items = append(items, artifacts.Item{

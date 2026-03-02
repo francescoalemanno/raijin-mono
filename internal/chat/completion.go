@@ -23,7 +23,7 @@ func (app *ChatApp) setupAutocompleteProvider() {
 			Description: cmd.Desc,
 		})
 	}
-	for _, tmpl := range prompts.Load().Templates {
+	for _, tmpl := range prompts.GetTemplates() {
 		if _, blocked := reserved[tmpl.Name]; blocked {
 			continue
 		}

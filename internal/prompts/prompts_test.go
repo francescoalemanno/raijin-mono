@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
 )
 
@@ -33,6 +34,20 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
+func mergedTemplatesForTest() map[string]Template {
+	all := artifacts.Merge(
+		func(t Template) string { return t.Name },
+		loadEmbedded(),
+		loadFromDir(paths.UserPromptsDir(), artifacts.SourceUser),
+		loadFromDir(filepath.Join(".", paths.ProjectPromptsDirRel), artifacts.SourceProject),
+	)
+	m := make(map[string]Template, len(all))
+	for _, t := range all {
+		m[t.Name] = t
+	}
+	return m
+}
+
 func TestLoadPrecedenceProjectUserEmbedded(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -48,24 +63,24 @@ func TestLoadPrecedenceProjectUserEmbedded(t *testing.T) {
 		"---\ndescription: Project review\n---\nproject body",
 	)
 
-	res := Load()
-	review, ok := res.Find("review")
+	merged := mergedTemplatesForTest()
+	review, ok := merged["review"]
 	if !ok {
 		t.Fatalf("expected review template")
 	}
-	if review.Source != SourceProject {
-		t.Fatalf("review source = %q, want %q", review.Source, SourceProject)
+	if review.Source != artifacts.SourceProject {
+		t.Fatalf("review source = %q, want %q", review.Source, artifacts.SourceProject)
 	}
 	if !strings.Contains(review.Content, "project body") {
 		t.Fatalf("review content = %q, want project content", review.Content)
 	}
 
-	init, ok := res.Find("init")
+	init, ok := merged["init"]
 	if !ok {
 		t.Fatalf("expected embedded init template")
 	}
-	if init.Source != SourceEmbedded {
-		t.Fatalf("init source = %q, want %q", init.Source, SourceEmbedded)
+	if init.Source != artifacts.SourceEmbedded {
+		t.Fatalf("init source = %q, want %q", init.Source, artifacts.SourceEmbedded)
 	}
 }
 
@@ -80,13 +95,13 @@ func TestLoadPrecedenceUserOverEmbedded(t *testing.T) {
 		"---\ndescription: User init\n---\nuser init body",
 	)
 
-	res := Load()
-	init, ok := res.Find("init")
+	merged := mergedTemplatesForTest()
+	init, ok := merged["init"]
 	if !ok {
 		t.Fatalf("expected init template")
 	}
-	if init.Source != SourceUser {
-		t.Fatalf("init source = %q, want %q", init.Source, SourceUser)
+	if init.Source != artifacts.SourceUser {
+		t.Fatalf("init source = %q, want %q", init.Source, artifacts.SourceUser)
 	}
 	if !strings.Contains(init.Content, "user init body") {
 		t.Fatalf("init content = %q, want user content", init.Content)

@@ -3,14 +3,51 @@ package artifacts
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 )
+
+// Source identifies where an artifact originated from.
+type Source string
+
+const (
+	SourceEmbedded Source = "embedded"
+	SourceUser     Source = "user"
+	SourceProject  Source = "project"
+)
+
+// Merge combines layers left-to-right with later layers winning on name
+// collisions. name extracts the canonical key for each element.
+// The result is sorted by name.
+func Merge[T any](name func(T) string, layers ...[]T) []T {
+	merged := make([]T, 0)
+	indexByName := make(map[string]int)
+	for _, layer := range layers {
+		for _, item := range layer {
+			n := strings.ToLower(strings.TrimSpace(name(item)))
+			if n == "" {
+				continue
+			}
+			if idx, ok := indexByName[n]; ok {
+				merged[idx] = item
+				continue
+			}
+			indexByName[n] = len(merged)
+			merged = append(merged, item)
+		}
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return name(merged[i]) < name(merged[j])
+	})
+	return merged
+}
 
 // Kind identifies a cached artifact category.
 type Kind string
 
 const (
 	KindSkill   Kind = "skill"
+	KindPrompt  Kind = "prompt"
 	KindContext Kind = "context"
 	KindTools   Kind = "tools"
 )

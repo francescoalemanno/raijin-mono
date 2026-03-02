@@ -963,8 +963,8 @@ func (app *ChatApp) reloadFromScratch(editorText string) error {
 }
 
 func (app *ChatApp) showTemplates() {
-	result := prompts.Load()
-	if len(result.Templates) == 0 {
+	templates := prompts.GetTemplates()
+	if len(templates) == 0 {
 		app.appendSpacer()
 		app.appendMessage("no prompt templates loaded", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
@@ -973,7 +973,7 @@ func (app *ChatApp) showTemplates() {
 	reserved := builtinSlashCommands()
 	var b strings.Builder
 	b.WriteString("Prompt templates:\n")
-	for _, tmpl := range result.Templates {
+	for _, tmpl := range templates {
 		desc := strings.TrimSpace(tmpl.Description)
 		if desc == "" {
 			desc = "(no description)"
@@ -988,18 +988,7 @@ func (app *ChatApp) showTemplates() {
 		if _, blocked := reserved[tmpl.Name]; blocked {
 			b.WriteString(" (reserved command, not invokable)")
 		}
-
 		b.WriteString("\n")
-	}
-	if len(result.Diagnostics) > 0 {
-		b.WriteString("\nTemplate collisions:\n")
-		for _, d := range result.Diagnostics {
-			b.WriteString("- /")
-			b.WriteString(d.Name)
-			b.WriteString(": ")
-			b.WriteString(d.Message)
-			b.WriteString("\n")
-		}
 	}
 
 	app.appendSpacer()

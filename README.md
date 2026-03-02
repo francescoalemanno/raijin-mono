@@ -76,7 +76,7 @@ Raijin supports three template/skill layers with precedence:
 You can:
 
 - invoke templates as slash commands
-- pass template args (`$@`, `$1`, `${@:2}`, `{{ARGUMENTS}}`)
+- pass template args (`$@`, `$1`, `${@:2}`)
 - call skills from prompts via `$skill-name`
 
 Built-in templates include:
