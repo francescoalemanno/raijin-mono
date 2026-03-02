@@ -8,8 +8,6 @@ hide-from-llm: true
 Guide creation and editing of Raijin plugin tools — executable scripts that extend Raijin with new tools via the plugin protocol.
 </purpose>
 
-{{ARGUMENTS}}
-
 <instructions>
 
 ## Plugin Protocol

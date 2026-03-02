@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/francescoalemanno/raijin-mono/internal/embedded"
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
 	"github.com/francescoalemanno/raijin-mono/internal/input"
+	"github.com/francescoalemanno/raijin-mono/internal/substitution"
 	"github.com/francescoalemanno/raijin-mono/libagent"
 	"golang.org/x/text/unicode/norm"
 )
@@ -52,6 +55,11 @@ func NewReadTool() libagent.Tool {
 	handler := func(ctx context.Context, params readParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		if strings.TrimSpace(params.Path) == "" {
 			return readToolNudge("path is required"), nil
+		}
+
+		// Handle embedded:// paths
+		if isEmbeddedPath(params.Path) {
+			return handleEmbeddedRead(ctx, params)
 		}
 
 		resolvedPath := resolveReadPath(params.Path, cwd)
@@ -372,4 +380,196 @@ func tryCurlyQuoteVariant(filePath string) string {
 func fileExists(filePath string) bool {
 	_, err := os.Stat(filePath)
 	return err == nil
+}
+
+const embeddedPrefix = embedded.Scheme
+
+func isEmbeddedPath(path string) bool {
+	return strings.HasPrefix(path, embeddedPrefix)
+}
+
+func stripEmbeddedPrefix(path string) string {
+	return strings.TrimPrefix(path, embeddedPrefix)
+}
+
+func handleEmbeddedRead(ctx context.Context, params readParams) (libagent.ToolResponse, error) {
+	path := stripEmbeddedPrefix(params.Path)
+
+	// Try to read as file first
+	data, err := embedded.ReadFile(path)
+	if err == nil {
+		return handleEmbeddedFile(ctx, path, data, params)
+	}
+
+	// If not a file, try as directory
+	entries, err := embedded.List(path)
+	if err == nil {
+		return handleEmbeddedDir(ctx, path, entries, params)
+	}
+
+	return readToolNudge(fmt.Sprintf("embedded path not found: %s", params.Path)), nil
+}
+
+func handleEmbeddedFile(ctx context.Context, path string, data []byte, params readParams) (libagent.ToolResponse, error) {
+	ext := strings.TrimPrefix(filepath.Ext(path), ".")
+
+	// Handle images
+	if mediaType := input.ImageMediaType(ext); mediaType != "" {
+		if len(data) > input.MaxImageSize {
+			return readToolNudge(fmt.Sprintf("image too large (%d bytes); maximum is %d bytes", len(data), input.MaxImageSize)), nil
+		}
+		encoded := base64.StdEncoding.EncodeToString(data)
+		return libagent.NewMediaResponse([]byte(encoded), mediaType), nil
+	}
+
+	// Handle text files
+	content := string(data)
+	if !utf8.ValidString(content) {
+		return libagent.NewTextErrorResponse("file content is not valid UTF-8"), nil
+	}
+
+	result, details, err := readEmbeddedText(ctx, content, params)
+	if err != nil {
+		if ctx.Err() != nil {
+			return libagent.ToolResponse{}, ctx.Err()
+		}
+		return libagent.NewTextErrorResponse(err.Error()), nil
+	}
+
+	resp := libagent.NewTextResponse(result)
+	if details != nil {
+		resp = libagent.WithResponseMetadata(resp, details)
+	}
+	return resp, nil
+}
+
+func readEmbeddedText(ctx context.Context, content string, params readParams) (string, *readToolDetails, error) {
+	if ctx.Err() != nil {
+		return "", nil, ctx.Err()
+	}
+
+	// Apply variable expansion for embedded files (skills, templates)
+	content = substitution.ExpandAll(ctx, content, "", substitution.ArgModeText)
+
+	allLines := strings.Split(content, "\n")
+	totalFileLines := len(allLines)
+
+	startLine := readOffset(params.Offset)
+	startLineDisplay := startLine + 1
+	if startLine >= totalFileLines {
+		return "", nil, fmt.Errorf("offset %d is beyond end of file (%d lines total)", readOffsetDisplay(params.Offset), totalFileLines)
+	}
+
+	var selectedContent string
+	userLimitedLines := -1
+	if params.Limit != nil {
+		limit := max(0, *params.Limit)
+		endLine := min(startLine+limit, totalFileLines)
+		selectedContent = strings.Join(allLines[startLine:endLine], "\n")
+		userLimitedLines = endLine - startLine
+	} else {
+		selectedContent = strings.Join(allLines[startLine:], "\n")
+	}
+
+	truncation := TruncateHead(selectedContent, TruncationOptions{})
+	var outputText string
+	var details *readToolDetails
+
+	switch {
+	case truncation.FirstLineExceedsLimit:
+		firstLineSize := FormatSize(len(allLines[startLine]))
+		outputText = fmt.Sprintf(
+			"[Line %d is %s, exceeds %s limit. Use glob/read on smaller sections.]",
+			startLineDisplay,
+			firstLineSize,
+			FormatSize(DefaultMaxBytes),
+		)
+		details = detailsFromTruncation(truncation)
+	case truncation.Truncated:
+		endLineDisplay := startLineDisplay + truncation.OutputLines - 1
+		nextOffset := endLineDisplay + 1
+		outputText = truncation.Content
+		if truncation.TruncatedBy == "lines" {
+			outputText += fmt.Sprintf("\n\n[Showing lines %d-%d of %d. Use offset=%d to continue.]", startLineDisplay, endLineDisplay, totalFileLines, nextOffset)
+		} else {
+			outputText += fmt.Sprintf("\n\n[Showing lines %d-%d of %d (%s limit). Use offset=%d to continue.]", startLineDisplay, endLineDisplay, totalFileLines, FormatSize(DefaultMaxBytes), nextOffset)
+		}
+		details = detailsFromTruncation(truncation)
+	case userLimitedLines >= 0 && startLine+userLimitedLines < totalFileLines:
+		remaining := totalFileLines - (startLine + userLimitedLines)
+		nextOffset := startLine + userLimitedLines + 1
+		outputText = truncation.Content
+		outputText += fmt.Sprintf("\n\n[%d more lines in file. Use offset=%d to continue.]", remaining, nextOffset)
+	default:
+		outputText = truncation.Content
+	}
+
+	return outputText, details, nil
+}
+
+func handleEmbeddedDir(ctx context.Context, dirPath string, entries []fs.DirEntry, params readParams) (libagent.ToolResponse, error) {
+	totalEntries := len(entries)
+	start := readOffset(params.Offset)
+	if start >= totalEntries && totalEntries > 0 {
+		return readToolNudge(fmt.Sprintf("offset %d is beyond end of directory (%d entries total)", readOffsetDisplay(params.Offset), totalEntries)), nil
+	}
+
+	all := make([]string, 0, max(0, totalEntries-start))
+	for i := start; i < totalEntries; i++ {
+		if ctx.Err() != nil {
+			return libagent.ToolResponse{}, ctx.Err()
+		}
+		name := entries[i].Name()
+		if entries[i].IsDir() {
+			name += "/"
+		}
+		all = append(all, name)
+	}
+
+	selected := all
+	userLimitedEntries := -1
+	if params.Limit != nil {
+		limit := max(0, *params.Limit)
+		if limit < len(selected) {
+			selected = selected[:limit]
+		}
+		userLimitedEntries = len(selected)
+	}
+
+	raw := strings.Join(selected, "\n")
+	truncation := TruncateHead(raw, TruncationOptions{})
+	outputText := truncation.Content
+	var details *readToolDetails
+
+	switch {
+	case truncation.FirstLineExceedsLimit:
+		outputText = fmt.Sprintf("[Entry %d exceeds %s limit. Narrow your path and retry.]", start+1, FormatSize(DefaultMaxBytes))
+		details = detailsFromTruncation(truncation)
+	case truncation.Truncated:
+		endEntryDisplay := start + truncation.OutputLines
+		nextOffset := endEntryDisplay + 1
+		if truncation.TruncatedBy == "lines" {
+			outputText += fmt.Sprintf("\n\n[Showing entries %d-%d of %d. Use offset=%d to continue.]", start+1, endEntryDisplay, totalEntries, nextOffset)
+		} else {
+			outputText += fmt.Sprintf("\n\n[Showing entries %d-%d of %d (%s limit). Use offset=%d to continue.]", start+1, endEntryDisplay, totalEntries, FormatSize(DefaultMaxBytes), nextOffset)
+		}
+		details = detailsFromTruncation(truncation)
+	case userLimitedEntries >= 0 && start+userLimitedEntries < totalEntries:
+		remaining := totalEntries - (start + userLimitedEntries)
+		nextOffset := start + userLimitedEntries + 1
+		if outputText == "" {
+			outputText = "(empty directory)"
+		}
+		outputText += fmt.Sprintf("\n\n[%d more entries. Use offset=%d to continue.]", remaining, nextOffset)
+	}
+
+	if outputText == "" {
+		outputText = "(empty directory)"
+	}
+
+	resp := libagent.NewTextResponse(outputText)
+	if details != nil {
+		resp = libagent.WithResponseMetadata(resp, details)
+	}
+	return resp, nil
 }

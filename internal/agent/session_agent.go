@@ -25,7 +25,6 @@ type SessionAgentCall struct {
 	SessionID        string
 	Prompt           string
 	Attachments      []message.BinaryContent
-	Skills           []message.SkillContent
 	MaxOutputTokens  int64
 	Temperature      *float64
 	TopP             *float64
@@ -89,7 +88,7 @@ func (a *SessionAgent) EventCallback() func(libagent.AgentEvent) {
 // Run executes the agent with a user message.
 // Messages are stored via the message service; session usage is tracked via session service.
 func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
-	if call.Prompt == "" && len(call.Attachments) == 0 && len(call.Skills) == 0 {
+	if call.Prompt == "" && len(call.Attachments) == 0 {
 		return ErrEmptyPrompt
 	}
 	if call.SessionID == "" {
@@ -161,7 +160,6 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	prepared := message.PrepareUserRequest(message.UserRequest{
 		Prompt:      call.Prompt,
 		Attachments: call.Attachments,
-		Skills:      call.Skills,
 	})
 
 	promptMsg := &libagent.UserMessage{
@@ -440,7 +438,7 @@ func (a *SessionAgent) Cancel(sessionID string) {
 
 // Steer queues a user message into the active run for this session.
 func (a *SessionAgent) Steer(_ context.Context, call SessionAgentCall) error {
-	if call.Prompt == "" && len(call.Attachments) == 0 && len(call.Skills) == 0 {
+	if call.Prompt == "" && len(call.Attachments) == 0 {
 		return ErrEmptyPrompt
 	}
 	if call.SessionID == "" {
@@ -457,7 +455,6 @@ func (a *SessionAgent) Steer(_ context.Context, call SessionAgentCall) error {
 	prepared := message.PrepareUserRequest(message.UserRequest{
 		Prompt:      call.Prompt,
 		Attachments: call.Attachments,
-		Skills:      call.Skills,
 	})
 	ag.Steer(&libagent.UserMessage{
 		Role:      "user",
@@ -577,21 +574,12 @@ You are an expert coding agent, operating inside Raijin a coding-agent harness.
 
 	// Append available skills.
 	allSkills := skills.GetSkills()
-	hasVisible := false
-	for _, s := range allSkills {
-		if s.ShouldAdvertiseToLLM() {
-			hasVisible = true
-			break
-		}
-	}
-	if hasVisible {
+	if len(allSkills) > 0 {
 		sp += "\n\n<skills>\n"
-		sp += "- Load a skill via the \"skill\" tool when the user's request matches one listed above.\n"
-		sp += "- Wording that closely matches a skill name should be treated as an implicit request to load it.\n"
+		sp += "- Load a skill via the \"read\" tool when the user's request matches one listed above.\n"
+		sp += "- The user is requesting skill loading when either $skillname syntax is used or there is wording that closely matches a skill name or purpose.\n"
 		for _, s := range allSkills {
-			if s.ShouldAdvertiseToLLM() {
-				sp += "  <skill name=\"" + s.Name + "\">" + s.PromptDescription() + "</skill>\n"
-			}
+			sp += "  <skill name=\"" + s.Name + "\" path=\"" + s.FilePath + "\">" + s.PromptDescription() + "</skill>\n"
 		}
 		sp += "</skills>"
 	}
@@ -689,8 +677,6 @@ func toolPreferenceFor(name string) string {
 		return "Use the write tool instead of shell redirection (>, >>, cat <<EOF) when creating or overwriting files."
 	case "bash":
 		return "Use the bash tool only when needed for commands that have no dedicated built-in tool equivalent."
-	case "skill":
-		return "Use the skill tool to load reusable workflows instead of manually reproducing those steps in bash."
 	case "webfetch":
 		return "Use the webfetch tool instead of curl/wget in bash for retrieving web content."
 	default:

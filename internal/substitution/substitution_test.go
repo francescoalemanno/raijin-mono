@@ -12,12 +12,12 @@ func TestReplaceNamed(t *testing.T) {
 	t.Parallel()
 
 	got := ReplaceNamed(
-		`value={{ARGUMENTS}} literal=\{{ARGUMENTS}} dirs={{PROJECT_AGENTS_DIR}}/{{SCRIPTS_DIR}} prompts={{PROJECT_PROMPTS_DIR}}`,
+		`dirs={{PROJECT_AGENTS_DIR}}/{{PROJECT_SKILLS_DIR}} prompts={{PROJECT_PROMPTS_DIR}}`,
 		DefaultNamedValues("demo"),
 		BracesStyle(),
 	)
 
-	want := "value=demo literal={{ARGUMENTS}} dirs=.agents/scripts prompts=.agents/prompts"
+	want := "dirs=.agents/.agents/skills prompts=.agents/prompts"
 	if got != want {
 		t.Fatalf("ReplaceNamed() = %q, want %q", got, want)
 	}
@@ -46,8 +46,8 @@ func TestExpandArgRefsFromList(t *testing.T) {
 func TestExpandArgRefsFromText(t *testing.T) {
 	t.Parallel()
 
-	got := ExpandArgRefsFromText(`$ARGUMENTS | $@ | $1 | ${@:2} | \$@`, "fix all")
-	want := "fix all | fix all | $1 | ${@:2} | $@"
+	got := ExpandArgRefsFromText(`$@ | $1 | ${@:2} | \$@`, "fix all")
+	want := "fix all | $1 | ${@:2} | $@"
 	if got != want {
 		t.Fatalf("ExpandArgRefsFromText() = %q, want %q", got, want)
 	}

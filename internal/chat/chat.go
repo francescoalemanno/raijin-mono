@@ -798,8 +798,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) {
 		})
 		return
 	}
-	app.showLoadedSkills(prepared.loadedSkills)
-
 	// Run agent (blocking, off UI goroutine).
 	sessionID := app.session.ID()
 	maxTokens := app.modelCfg.MaxTokens
@@ -810,7 +808,6 @@ func (app *ChatApp) runOnce(current queuedPrompt) {
 		SessionID:       sessionID,
 		Prompt:          prepared.text,
 		Attachments:     prepared.attachments,
-		Skills:          prepared.skills,
 		MaxOutputTokens: maxTokens,
 	})
 
@@ -870,13 +867,11 @@ func (app *ChatApp) trySteer(current queuedPrompt) bool {
 		})
 		return true
 	}
-	app.showLoadedSkills(prepared.loadedSkills)
 
 	if err := app.session.Agent().Steer(context.Background(), agent.SessionAgentCall{
 		SessionID:   sessionID,
 		Prompt:      prepared.text,
 		Attachments: prepared.attachments,
-		Skills:      prepared.skills,
 	}); err != nil {
 		app.dispatchSync(func(_ tui.UIToken) {
 			app.appendMessage("failed to queue steering: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
@@ -903,17 +898,6 @@ func (app *ChatApp) trySteer(current queuedPrompt) bool {
 		app.appendMessage("↪ steering queued: "+preview, theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
 	})
 	return true
-}
-
-func (app *ChatApp) showLoadedSkills(names []string) {
-	if len(names) == 0 {
-		return
-	}
-	app.dispatchSync(func(_ tui.UIToken) {
-		for _, name := range names {
-			app.appendMessage("↪ "+name+" skill loaded", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Muted.Ansi24, false)
-		}
-	})
 }
 
 func (app *ChatApp) handleBuiltinCommand(cmd builtinCommandCall) {

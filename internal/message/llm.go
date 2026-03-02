@@ -30,7 +30,6 @@ func unixMilliToTime(ms int64) time.Time {
 type UserRequest struct {
 	Prompt      string
 	Attachments []BinaryContent
-	Skills      []SkillContent
 }
 
 // PreparedUserRequest is the normalized request payload for the agent.
@@ -41,7 +40,7 @@ type PreparedUserRequest struct {
 
 // PrepareUserRequest builds a prompt and file attachments from message input.
 func PrepareUserRequest(req UserRequest) PreparedUserRequest {
-	prompt := PromptWithUserAttachments(req.Prompt, req.Attachments, req.Skills)
+	prompt := PromptWithUserAttachments(req.Prompt, req.Attachments)
 	return PreparedUserRequest{
 		Prompt: prompt,
 		Files:  nonTextFiles(req.Attachments),
@@ -64,7 +63,7 @@ func ToAgentMessages(msg Message) []libagent.Message {
 
 func toUserAgentMessages(msg Message) []libagent.Message {
 	text := strings.TrimSpace(msg.Content().Text)
-	text = PromptWithUserAttachments(text, msg.BinaryContent(), msg.SkillContent())
+	text = PromptWithUserAttachments(text, msg.BinaryContent())
 	files := make([]libagent.FilePart, 0, len(msg.BinaryContent()))
 	for _, file := range msg.BinaryContent() {
 		if strings.HasPrefix(file.MIMEType, "text/") {
@@ -160,7 +159,7 @@ func nonTextFiles(attachments []BinaryContent) []libagent.FilePart {
 }
 
 // PromptWithUserAttachments injects structured attachment context in a user prompt.
-func PromptWithUserAttachments(prompt string, attachments []BinaryContent, skills []SkillContent) string {
+func PromptWithUserAttachments(prompt string, attachments []BinaryContent) string {
 	var sb strings.Builder
 	sb.WriteString(prompt)
 
@@ -222,23 +221,6 @@ func PromptWithUserAttachments(prompt string, attachments []BinaryContent, skill
 			sb.Write(content.Data)
 			sb.WriteString("\n</file>\n")
 		}
-	}
-
-	addedSkillHeader := false
-	for _, skill := range skills {
-		rendered := strings.TrimSpace(skill.Content)
-		if rendered == "" {
-			continue
-		}
-		if !addedSkillHeader {
-			sb.WriteString("\n<system_info>The skills below were explicitly loaded by the user for this request. Follow them while solving the task.</system_info>\n")
-			addedSkillHeader = true
-		}
-		sb.WriteString("<skill name=\"")
-		sb.WriteString(skill.Name)
-		sb.WriteString("\">\n\n")
-		sb.WriteString(rendered)
-		sb.WriteString("\n</skill>\n")
 	}
 
 	return sb.String()

@@ -8,8 +8,6 @@ hide-from-llm: true
 Guide creation and editing of Raijin skills — Markdown files that extend Raijin with reusable, callable instructions.
 </purpose>
 
-{{ARGUMENTS}}
-
 <instructions>
 
 ## Skill File Format
@@ -40,8 +38,6 @@ llm-description: "Optional: alternate wording optimised for model-facing discove
 What this skill does in one sentence.
 </purpose>
 
-{{ARGUMENTS}}
-
 <instructions>
 Step-by-step instructions.
 </instructions>
@@ -51,7 +47,6 @@ Step-by-step instructions.
 </golden_rules>
 ```
 
-- `{{ARGUMENTS}}` — replaced at runtime with caller-provided context. Always include it.
 - `<purpose>` — one-sentence summary.
 - `<instructions>` — actionable, step-by-step. Not explanations.
 - `<output_format>` — expected output shape (include when the skill produces structured output).
@@ -72,7 +67,7 @@ Project skills override user skills, which override built-in skills.
 
 ### Creating a new skill
 
-1. **Clarify** what the skill should do and what arguments it takes.
+1. **Clarify** what the skill should do.
 2. **Use the project-local directory** `{{PROJECT_SKILLS_DIR}}/` unless the user explicitly asks for a global skill (`{{USER_SKILLS_DIR}}/`).
 3. **Create the skill directory**: `mkdir -p {{PROJECT_SKILLS_DIR}}/<skill-name>/`.
 4. **Write `{{SKILL_FILE}}`** inside that directory using the body structure above.
@@ -88,27 +83,26 @@ Project skills override user skills, which override built-in skills.
 
 ## Scripts
 
-Use scripts when a skill needs to run multi-step shell logic:
+Use scripts when a skill needs to run multi-step shell logic. Store scripts in the skill's `scripts/` directory and reference them with relative paths from the skill's location:
 
-| Scope | Path | Always in PATH? |
-|-------|------|-----------------|
-| Project-level | `{{PROJECT_AGENTS_DIR}}/{{SCRIPTS_DIR}}/` | Yes |
-| Skill-level | `{{PROJECT_SKILLS_DIR}}/<skill-name>/{{SCRIPTS_DIR}}/` | Only when skill is loaded |
+| Scope | Path |
+|-------|------|
+| Project-level | `{{PROJECT_AGENTS_DIR}}/scripts/` |
+| Skill-level | `{{PROJECT_SKILLS_DIR}}/<skill-name>/scripts/` |
 
-Put logic in `my-script.sh` inside the skill's `{{SCRIPTS_DIR}}/` and reference it from instructions:
+Put logic in `my-script.sh` inside the skill's `scripts/` directory and reference it from instructions using the bash tool with a relative path:
 
 ```markdown
 <instructions>
-Run `my-script.sh <args>` to accomplish X.
+Use the bash tool to run `scripts/my-script.sh <args>` to accomplish X.
 </instructions>
 ```
 
-This keeps skill files short and execution fast.
+This keeps skill files short, execution fast, and skills relocatable.
 
 </instructions>
 
 <golden_rules>
-- Always include `{{ARGUMENTS}}` in the skill body.
 - The directory name MUST match the `name` field in frontmatter.
 - Write instructions as commands, not descriptions.
 - Define `<output_format>` whenever the skill produces structured output.

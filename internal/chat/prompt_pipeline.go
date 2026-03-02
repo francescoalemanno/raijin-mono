@@ -17,10 +17,8 @@ type promptRunOptions struct {
 }
 
 type preparedPromptInput struct {
-	text         string
-	attachments  []message.BinaryContent
-	skills       []message.SkillContent
-	loadedSkills []string
+	text        string
+	attachments []message.BinaryContent
 }
 
 type promptMode int
@@ -95,16 +93,14 @@ func resolvePromptSubmission(ctx context.Context, raw string, mode promptMode) (
 }
 
 func preparePromptInput(raw string, paths *tools.PathRegistry) (preparedPromptInput, error) {
-	text, files, loadedSkills, err := input.ParseAndLoadResources(raw)
+	text, files, err := input.ParseAndLoadResources(raw)
 	if err != nil {
 		return preparedPromptInput{}, err
 	}
 
 	out := preparedPromptInput{
-		text:         text,
-		attachments:  make([]message.BinaryContent, 0, len(files)),
-		skills:       make([]message.SkillContent, 0, len(loadedSkills)),
-		loadedSkills: make([]string, 0, len(loadedSkills)),
+		text:        text,
+		attachments: make([]message.BinaryContent, 0, len(files)),
 	}
 	for _, f := range files {
 		out.attachments = append(out.attachments, message.BinaryContent{
@@ -112,17 +108,6 @@ func preparePromptInput(raw string, paths *tools.PathRegistry) (preparedPromptIn
 			MIMEType: f.MediaType,
 			Data:     f.Data,
 		})
-	}
-
-	for _, loaded := range loadedSkills {
-		out.skills = append(out.skills, message.SkillContent{
-			Name:    loaded.Name,
-			Content: loaded.Content,
-		})
-		out.loadedSkills = append(out.loadedSkills, loaded.Name)
-		if paths != nil {
-			tools.RegisterSkillScriptsPath(paths, loaded.ScriptsDir)
-		}
 	}
 	return out, nil
 }
@@ -133,7 +118,7 @@ func templateNeedsArguments(content string) bool {
 		case '\\':
 			i++
 		case '$':
-			if strings.HasPrefix(content[i:], "$@") || strings.HasPrefix(content[i:], "$ARGUMENTS") || strings.HasPrefix(content[i:], "${@:") {
+			if strings.HasPrefix(content[i:], "$@") || strings.HasPrefix(content[i:], "${@:") {
 				return true
 			}
 			if i+1 < len(content) && content[i+1] >= '1' && content[i+1] <= '9' {
@@ -141,7 +126,7 @@ func templateNeedsArguments(content string) bool {
 			}
 		}
 	}
-	return unescapedToken(content, "{{ARGUMENTS}}")
+	return false
 }
 
 func unescapedToken(content, token string) bool {

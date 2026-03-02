@@ -8,9 +8,9 @@ type ArgMode int
 const (
 	// ArgModeNone skips argument expansion entirely.
 	ArgModeNone ArgMode = iota
-	// ArgModeText expands only $@ and $ARGUMENTS from a raw string.
+	// ArgModeText expands only $@ from a raw string.
 	ArgModeText
-	// ArgModeList parses args and expands $1, $@, $ARGUMENTS, ${@:N}, ${@:N:L}.
+	// ArgModeList parses args and expands $1, $2, ..., $@, ${@:N}, ${@:N:L}.
 	ArgModeList
 )
 

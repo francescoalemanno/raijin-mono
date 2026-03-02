@@ -34,4 +34,4 @@ Clear markdown sections. Use your judgment on structure based on what you find. 
 Only document what you actually observe. Never invent commands, patterns, or conventions. If you can't find something, don't include it.
 </golden_rule>
 
-$@
+{{ARGUMENTS}}

@@ -44,7 +44,7 @@ func TestLoadPrecedenceProjectUserEmbedded(t *testing.T) {
 		"---\ndescription: User review\n---\nuser body",
 	)
 	writeFile(t,
-		filepath.Join(project, projectPromptsDirRel, "review.md"),
+		filepath.Join(project, paths.ProjectPromptsDirRel, "review.md"),
 		"---\ndescription: Project review\n---\nproject body",
 	)
 

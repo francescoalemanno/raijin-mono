@@ -46,7 +46,6 @@ func RunOneShot(runtimeModel libagent.RuntimeModel, modelCfg libagent.ModelConfi
 		SessionID:       sess.ID(),
 		Prompt:          prepared.text,
 		Attachments:     prepared.attachments,
-		Skills:          prepared.skills,
 		MaxOutputTokens: maxTokens,
 	})
 	if err != nil {

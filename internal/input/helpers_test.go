@@ -3,7 +3,6 @@ package input
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -158,7 +157,7 @@ func TestParseAndLoadResourcesAttachments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotText, gotAttach, loadedSkills, err := ParseAndLoadResources(tt.input)
+			gotText, gotAttach, err := ParseAndLoadResources(tt.input)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseAndLoadResources() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -174,64 +173,7 @@ func TestParseAndLoadResourcesAttachments(t *testing.T) {
 					t.Errorf("ParseAndLoadResources() first media type = %q, want %q", gotAttach[0].MediaType, tt.wantFirstMediaType)
 				}
 			}
-			if len(loadedSkills) != 0 {
-				t.Errorf("ParseAndLoadResources() skills = %d, want 0", len(loadedSkills))
-			}
 		})
-	}
-}
-
-func TestParseAndLoadResourcesSkills(t *testing.T) {
-	t.Parallel()
-
-	text, files, loadedSkills, err := ParseAndLoadResources("$commit these changes")
-	if err != nil {
-		t.Fatalf("ParseAndLoadResources() unexpected error: %v", err)
-	}
-	if text != "$commit these changes" {
-		t.Fatalf("ParseAndLoadResources() text = %q, want unchanged", text)
-	}
-	if len(files) != 0 {
-		t.Fatalf("ParseAndLoadResources() files = %d, want 0", len(files))
-	}
-	if len(loadedSkills) != 1 {
-		t.Fatalf("ParseAndLoadResources() skills = %d, want 1", len(loadedSkills))
-	}
-	if loadedSkills[0].Name != "commit" {
-		t.Fatalf("loaded skill name = %q, want commit", loadedSkills[0].Name)
-	}
-	if loadedSkills[0].Content == "" {
-		t.Fatalf("loaded skill content should not be empty")
-	}
-}
-
-func TestParseAndLoadResourcesUnknownSkillIgnored(t *testing.T) {
-	t.Parallel()
-
-	text, files, loadedSkills, err := ParseAndLoadResources("$phpVar should stay")
-	if err != nil {
-		t.Fatalf("ParseAndLoadResources() unexpected error: %v", err)
-	}
-	if text != "$phpVar should stay" {
-		t.Fatalf("ParseAndLoadResources() text = %q, want unchanged", text)
-	}
-	if len(files) != 0 {
-		t.Fatalf("ParseAndLoadResources() files = %d, want 0", len(files))
-	}
-	if len(loadedSkills) != 0 {
-		t.Fatalf("ParseAndLoadResources() skills = %d, want 0", len(loadedSkills))
-	}
-}
-
-func TestParseAndLoadResourcesDedupSkills(t *testing.T) {
-	t.Parallel()
-
-	_, _, loadedSkills, err := ParseAndLoadResources("$commit now and $commit again")
-	if err != nil {
-		t.Fatalf("ParseAndLoadResources() unexpected error: %v", err)
-	}
-	if len(loadedSkills) != 1 {
-		t.Fatalf("ParseAndLoadResources() skills = %d, want 1", len(loadedSkills))
 	}
 }
 
@@ -252,7 +194,7 @@ func TestParseAndLoadResourcesDedupAttachments(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(wd) })
 
 	input := "review @dup.txt and @" + testTxt + " and @dup.txt again"
-	text, files, loadedSkills, err := ParseAndLoadResources(input)
+	text, files, err := ParseAndLoadResources(input)
 	if err != nil {
 		t.Fatalf("ParseAndLoadResources() unexpected error: %v", err)
 	}
@@ -264,165 +206,6 @@ func TestParseAndLoadResourcesDedupAttachments(t *testing.T) {
 	}
 	if text != input {
 		t.Fatalf("ParseAndLoadResources() text = %q, want %q", text, input)
-	}
-	if len(loadedSkills) != 0 {
-		t.Fatalf("ParseAndLoadResources() skills = %d, want 0", len(loadedSkills))
-	}
-}
-
-func TestParseAndLoadSkills(t *testing.T) {
-	t.Parallel()
-
-	loadedSkills, err := ParseAndLoadSkills("$commit now and $commit again and $phpVar")
-	if err != nil {
-		t.Fatalf("ParseAndLoadSkills() unexpected error: %v", err)
-	}
-	if len(loadedSkills) != 1 {
-		t.Fatalf("ParseAndLoadSkills() skills = %d, want 1", len(loadedSkills))
-	}
-	if loadedSkills[0].Name != "commit" {
-		t.Fatalf("loaded skill name = %q, want commit", loadedSkills[0].Name)
-	}
-	if loadedSkills[0].Content == "" {
-		t.Fatalf("loaded skill content should not be empty")
-	}
-}
-
-func TestParseAndLoadSkillsCaseInsensitiveDedup(t *testing.T) {
-	t.Parallel()
-
-	loadedSkills, err := ParseAndLoadSkills("$commit now and $COMMIT again")
-	if err != nil {
-		t.Fatalf("ParseAndLoadSkills() unexpected error: %v", err)
-	}
-	if len(loadedSkills) != 1 {
-		t.Fatalf("ParseAndLoadSkills() skills = %d, want 1", len(loadedSkills))
-	}
-	if loadedSkills[0].Name != "commit" {
-		t.Fatalf("loaded skill name = %q, want commit", loadedSkills[0].Name)
-	}
-}
-
-func TestExtractPromptMentions(t *testing.T) {
-	tmpDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tmpDir, "docs"), 0o755); err != nil {
-		t.Fatalf("failed to create docs dir: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(tmpDir, "pkg"), 0o755); err != nil {
-		t.Fatalf("failed to create pkg dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("# test\n"), 0o644); err != nil {
-		t.Fatalf("failed to create README.md: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "docs", "my file.txt"), []byte("notes\n"), 0o644); err != nil {
-		t.Fatalf("failed to create docs/my file.txt: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatalf("failed to create main.go: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "pkg", "file.txt"), []byte("x\n"), 0o644); err != nil {
-		t.Fatalf("failed to create pkg/file.txt: %v", err)
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get working dir: %v", err)
-	}
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("failed to chdir: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chdir(wd)
-	})
-
-	// resolve tmpDir through symlinks to match what resolveAttachmentFile returns
-	resolvedTmpDir, err := filepath.EvalSymlinks(tmpDir)
-	if err != nil {
-		t.Fatalf("failed to eval symlinks for tmpDir: %v", err)
-	}
-
-	abs := func(rel string) string { return filepath.Join(resolvedTmpDir, rel) }
-
-	tests := []struct {
-		name       string
-		input      string
-		wantFiles  []string
-		wantSkills []string
-	}{
-		{
-			name:       "files and known skill",
-			input:      `review @README.md and @"docs/my file.txt" with $commit and $phpVar`,
-			wantFiles:  []string{abs("README.md"), abs("docs/my file.txt")},
-			wantSkills: []string{"commit"},
-		},
-		{
-			name:       "ignore diff hunks and handle deduped skills",
-			input:      "@@ -1,2 +1,2 @@\n$commit then $COMMIT",
-			wantFiles:  []string{},
-			wantSkills: []string{"commit"},
-		},
-		{
-			name:       "only complete file-looking mentions",
-			input:      "hello @john and @pkg/file.txt and @main.go and @missing.go",
-			wantFiles:  []string{abs("pkg/file.txt"), abs("main.go")},
-			wantSkills: []string{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotFiles, gotSkills := ExtractPromptMentions(tt.input)
-			if !reflect.DeepEqual(gotFiles, tt.wantFiles) {
-				t.Fatalf("ExtractPromptMentions() files = %#v, want %#v", gotFiles, tt.wantFiles)
-			}
-			if !reflect.DeepEqual(gotSkills, tt.wantSkills) {
-				t.Fatalf("ExtractPromptMentions() skills = %#v, want %#v", gotSkills, tt.wantSkills)
-			}
-		})
-	}
-}
-
-func TestExtractPromptMentionsDedupFiles(t *testing.T) {
-	tmpDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tmpDir, "a.txt"), []byte("a\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	pngData := []byte{
-		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-		0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
-		0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
-		0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
-		0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
-		0x42, 0x60, 0x82,
-	}
-	imgPath := filepath.Join(tmpDir, "i.png")
-	if err := os.WriteFile(imgPath, pngData, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(wd) })
-
-	resolvedTmpDir, err := filepath.EvalSymlinks(tmpDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	files, skills := ExtractPromptMentions("check @a.txt @" + filepath.Join(tmpDir, "a.txt") + " @i.png @" + imgPath + " $commit")
-	wantFiles := []string{filepath.Join(resolvedTmpDir, "a.txt"), filepath.Join(resolvedTmpDir, "i.png")}
-	if !reflect.DeepEqual(files, wantFiles) {
-		t.Fatalf("ExtractPromptMentions() files = %#v, want %#v", files, wantFiles)
-	}
-	wantSkills := []string{"commit"}
-	if !reflect.DeepEqual(skills, wantSkills) {
-		t.Fatalf("ExtractPromptMentions() skills = %#v, want %#v", skills, wantSkills)
 	}
 }
 

@@ -1,17 +1,14 @@
 package skills
 
 import (
-	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
-	"github.com/francescoalemanno/raijin-mono/internal/substitution"
 )
 
-func TestParseSkillMarkdown_LLMDescription(t *testing.T) {
+func TestParseSkillHeader_LLMDescription(t *testing.T) {
 	t.Parallel()
 
 	content := `---
@@ -22,33 +19,12 @@ LLMDescription: Model-visible description
 # Heading
 Body`
 
-	desc, llmDesc, hideFromLLM, body := parseSkillMarkdown(content)
+	desc, llmDesc := parseSkillHeader(content)
 	if desc != "User-visible description" {
 		t.Fatalf("description = %q, want %q", desc, "User-visible description")
 	}
 	if llmDesc != "Model-visible description" {
 		t.Fatalf("llmDescription = %q, want %q", llmDesc, "Model-visible description")
-	}
-	if hideFromLLM {
-		t.Fatalf("hideFromLLM = true, want false")
-	}
-	if body != "# Heading\nBody" {
-		t.Fatalf("body = %q, want %q", body, "# Heading\nBody")
-	}
-}
-
-func TestParseSkillMarkdown_HideFromLLMTrue(t *testing.T) {
-	t.Parallel()
-
-	content := `---
-description: hidden
-hide-from-llm: true
----
-body`
-
-	_, _, hideFromLLM, _ := parseSkillMarkdown(content)
-	if !hideFromLLM {
-		t.Fatalf("hideFromLLM = false, want true")
 	}
 }
 
@@ -68,35 +44,6 @@ func TestSkillPromptDescription(t *testing.T) {
 	}
 	if got := withoutLLMDescription.PromptDescription(); got != "User-visible description" {
 		t.Fatalf("PromptDescription() = %q, want %q", got, "User-visible description")
-	}
-}
-
-func TestExpandAll_SkillArgModeText(t *testing.T) {
-	t.Parallel()
-
-	got := substitution.ExpandAll(context.Background(), "named={{ARGUMENTS}} dollar=$ARGUMENTS at=$@ idx=$1 slice=${@:2} escaped=\\$@ literal=\\{{ARGUMENTS}}", "commit all changes", substitution.ArgModeText)
-	want := "named=commit all changes dollar=commit all changes at=commit all changes idx=$1 slice=${@:2} escaped=$@ literal={{ARGUMENTS}}"
-	if got != want {
-		t.Fatalf("ExpandAll(ArgModeText) = %q, want %q", got, want)
-	}
-}
-
-func TestSkillShouldAdvertiseToLLM(t *testing.T) {
-	t.Parallel()
-
-	defaultSkill := Skill{}
-	if !defaultSkill.ShouldAdvertiseToLLM() {
-		t.Fatalf("default ShouldAdvertiseToLLM() = false, want true")
-	}
-
-	hidden := Skill{HideFromLLM: true}
-	if hidden.ShouldAdvertiseToLLM() {
-		t.Fatalf("hidden ShouldAdvertiseToLLM() = true, want false")
-	}
-
-	explicitShown := Skill{HideFromLLM: false}
-	if !explicitShown.ShouldAdvertiseToLLM() {
-		t.Fatalf("explicit shown ShouldAdvertiseToLLM() = false, want true")
 	}
 }
 
@@ -141,9 +88,9 @@ func TestSkillPrecedence_ProjectOverUserOverEmbedded(t *testing.T) {
 	project := t.TempDir()
 	withSkillCwd(t, project)
 
-	writeSkillFile(t, filepath.Join(paths.UserSkillsDir(), "commit", externalSkillFile),
+	writeSkillFile(t, filepath.Join(paths.UserSkillsDir(), "commit", paths.SkillFileName),
 		"---\ndescription: user commit\n---\nuser body")
-	writeSkillFile(t, filepath.Join(project, paths.ProjectSkillsDirRel, "commit", externalSkillFile),
+	writeSkillFile(t, filepath.Join(project, paths.ProjectSkillsDirRel, "commit", paths.SkillFileName),
 		"---\ndescription: project commit\n---\nproject body")
 
 	merged := mergedSkillsForTest()
@@ -151,8 +98,11 @@ func TestSkillPrecedence_ProjectOverUserOverEmbedded(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected commit skill")
 	}
-	if !strings.Contains(got.Content, "project body") {
-		t.Fatalf("expected project content to win, got %q", got.Content)
+	if got.Source != SourceProject {
+		t.Fatalf("expected project source to win, got %q", got.Source)
+	}
+	if got.Description != "project commit" {
+		t.Fatalf("expected project description, got %q", got.Description)
 	}
 }
 
@@ -162,7 +112,7 @@ func TestSkillPrecedence_UserOverEmbedded(t *testing.T) {
 	project := t.TempDir()
 	withSkillCwd(t, project)
 
-	writeSkillFile(t, filepath.Join(paths.UserSkillsDir(), "init", externalSkillFile),
+	writeSkillFile(t, filepath.Join(paths.UserSkillsDir(), "init", paths.SkillFileName),
 		"---\ndescription: user init\n---\nuser init body")
 
 	merged := mergedSkillsForTest()
@@ -170,7 +120,10 @@ func TestSkillPrecedence_UserOverEmbedded(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected init skill")
 	}
-	if !strings.Contains(got.Content, "user init body") {
-		t.Fatalf("expected user content to win over embedded, got %q", got.Content)
+	if got.Source != SourceUser {
+		t.Fatalf("expected user source to win over embedded, got %q", got.Source)
+	}
+	if got.Description != "user init" {
+		t.Fatalf("expected user description, got %q", got.Description)
 	}
 }

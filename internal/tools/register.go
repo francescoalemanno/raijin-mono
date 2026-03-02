@@ -13,7 +13,6 @@ func RegisterDefaultTools(paths *PathRegistry) []libagent.Tool {
 		NewEditTool(),
 		NewWriteTool(),
 		NewBashTool(paths),
-		NewSkillTool(paths),
 		NewWebFetchTool(),
 	}
 

@@ -1,21 +1,18 @@
 package prompts
 
 import (
-	"embed"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/francescoalemanno/raijin-mono/internal/embedded"
 	"github.com/francescoalemanno/raijin-mono/internal/frontmatter"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
 )
 
-//go:embed templates/*.md
-var templatesFS embed.FS
-
+// Source identifies where a template originated from.
 type Source string
 
 const (
@@ -24,10 +21,7 @@ const (
 	SourceProject  Source = "project"
 )
 
-const (
-	projectPromptsDirRel = paths.ProjectPromptsDirRel
-)
-
+// Template represents a prompt template.
 type Template struct {
 	Name        string
 	Description string
@@ -36,6 +30,7 @@ type Template struct {
 	FilePath    string
 }
 
+// Diagnostic records a collision between templates.
 type Diagnostic struct {
 	Name       string
 	WinnerPath string
@@ -43,11 +38,13 @@ type Diagnostic struct {
 	Message    string
 }
 
+// LoadResult holds the result of loading templates.
 type LoadResult struct {
 	Templates   []Template
 	Diagnostics []Diagnostic
 }
 
+// Find returns a template by name (case-insensitive).
 func (r LoadResult) Find(name string) (Template, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	for _, t := range r.Templates {
@@ -79,9 +76,9 @@ func Load() LoadResult {
 		}
 	}
 
-	addWithDiagnostics(loadEmbeddedTemplates())
-	addWithDiagnostics(loadUserTemplates())
-	addWithDiagnostics(loadProjectTemplates())
+	addWithDiagnostics(loadEmbedded())
+	addWithDiagnostics(loadFromDir(paths.UserPromptsDir(), SourceUser))
+	addWithDiagnostics(loadFromDir(filepath.Join(".", paths.ProjectPromptsDirRel), SourceProject))
 
 	result.Templates = make([]Template, 0, len(chosen))
 	for _, tmpl := range chosen {
@@ -93,23 +90,20 @@ func Load() LoadResult {
 	return result
 }
 
-func loadEmbeddedTemplates() []Template {
-	entries, err := fs.ReadDir(templatesFS, "templates")
+func loadEmbedded() []Template {
+	files, err := embedded.ListFiles("templates", ".md")
 	if err != nil {
 		return nil
 	}
 
 	var templates []Template
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
-			continue
-		}
-		filePath := filepath.Join("embedded://templates", entry.Name())
-		raw, err := fs.ReadFile(templatesFS, filepath.Join("templates", entry.Name()))
+	for _, file := range files {
+		filePath := "templates/" + file.Name()
+		raw, err := embedded.ReadFile(filePath)
 		if err != nil {
 			continue
 		}
-		tmpl := parseTemplateFile(entry.Name(), filePath, string(raw), SourceEmbedded)
+		tmpl := parseTemplateFile(file.Name(), embedded.Scheme+filePath, string(raw), SourceEmbedded)
 		if tmpl.Name == "" {
 			continue
 		}
@@ -118,19 +112,7 @@ func loadEmbeddedTemplates() []Template {
 	return templates
 }
 
-func loadUserTemplates() []Template {
-	dir := paths.UserPromptsDir()
-	if dir == "" {
-		return nil
-	}
-	return loadTemplatesFromDir(dir, SourceUser)
-}
-
-func loadProjectTemplates() []Template {
-	return loadTemplatesFromDir(filepath.Join(".", projectPromptsDirRel), SourceProject)
-}
-
-func loadTemplatesFromDir(root string, source Source) []Template {
+func loadFromDir(root string, source Source) []Template {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil

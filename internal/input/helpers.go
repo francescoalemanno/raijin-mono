@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
-	"github.com/francescoalemanno/raijin-mono/internal/skills"
 )
 
 const (
@@ -18,13 +17,9 @@ const (
 	MaxFileSize  = 5 * 1024 * 1024
 )
 
-var (
-	// Match @path at a word boundary (not after another @, as in diff hunks @@).
-	// Accept quoted paths or unquoted paths that look like files (contain . or /).
-	attachmentMentionRe = regexp.MustCompile(`(?:^|[^@])@("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|[^\s@]+(?:\.[a-zA-Z0-9]+|/[^\s]*))`)
-	// Match $skill-name at start or after whitespace.
-	skillMentionRe = regexp.MustCompile(`(?:^|\s)\$([A-Za-z][A-Za-z0-9_-]*)`)
-)
+// Match @path at a word boundary (not after another @, as in diff hunks @@).
+// Accept quoted paths or unquoted paths that look like files (contain . or /).
+var attachmentMentionRe = regexp.MustCompile(`(?:^|[^@])@("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|[^\s@]+(?:\.[a-zA-Z0-9]+|/[^\s]*))`)
 
 type promptAttachmentMention struct {
 	token string // Original matched token (without leading @), including quotes.
@@ -36,13 +31,6 @@ type Attachment struct {
 	Data      []byte
 	MediaType string
 	Path      string
-}
-
-// SkillAttachment represents a skill explicitly loaded by user input.
-type SkillAttachment struct {
-	Name       string
-	Content    string
-	ScriptsDir string
 }
 
 // ImageMediaType returns the image MIME type for a known image extension, or "".
@@ -69,31 +57,8 @@ func sniffTextMediaType(path string) string {
 	return ""
 }
 
-// ExtractPromptMentions returns normalized file and known-skill mentions present in the prompt.
-// It uses the same detection logic as ParseAndLoadResources / ParseAndLoadSkills.
-func ExtractPromptMentions(input string) (files []string, skills []string) {
-	fileMentions := extractAttachmentMentions(input)
-	files = make([]string, 0, len(fileMentions))
-	seen := make(map[string]struct{}, len(fileMentions))
-	for _, mention := range fileMentions {
-		path, mediaType, info, ok := resolveAttachmentFile(mention.path)
-		if !ok {
-			continue
-		}
-		if info.Size() > maxAttachmentSize(mediaType) {
-			continue
-		}
-		if !markSeen(seen, path) {
-			continue
-		}
-		files = append(files, path)
-	}
-	return files, extractKnownSkillMentions(input)
-}
-
-// ParseAndLoadResources extracts @path references and known $skill references.
-// Unknown $tokens are preserved as plain text.
-func ParseAndLoadResources(input string) (string, []Attachment, []SkillAttachment, error) {
+// ParseAndLoadResources extracts @path references from the input.
+func ParseAndLoadResources(input string) (string, []Attachment, error) {
 	matches := extractAttachmentMentions(input)
 	var attachments []Attachment
 	var errs []string
@@ -121,42 +86,10 @@ func ParseAndLoadResources(input string) (string, []Attachment, []SkillAttachmen
 		attachments = append(attachments, Attachment{Data: data, MediaType: mediaType, Path: pathStr})
 	}
 	if len(errs) > 0 {
-		return "", nil, nil, errors.New(strings.Join(errs, "\n"))
+		return "", nil, errors.New(strings.Join(errs, "\n"))
 	}
 
-	skillAttachments, err := ParseAndLoadSkills(input)
-	if err != nil {
-		return "", nil, nil, err
-	}
-
-	return strings.TrimSpace(input), attachments, skillAttachments, nil
-}
-
-// ParseAndLoadSkills extracts known $skill references and renders them as skill attachments.
-func ParseAndLoadSkills(input string) ([]SkillAttachment, error) {
-	fullPrompt := strings.TrimSpace(input)
-	if fullPrompt == "" {
-		return nil, nil
-	}
-
-	names := extractKnownSkillMentions(fullPrompt)
-	if len(names) == 0 {
-		return nil, nil
-	}
-
-	loaded := make([]SkillAttachment, 0, len(names))
-	for _, name := range names {
-		rendered, skill, err := skills.RenderSkillAttachment(name, fullPrompt)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load skill %q: %w", name, err)
-		}
-		loaded = append(loaded, SkillAttachment{
-			Name:       skill.Name,
-			Content:    rendered,
-			ScriptsDir: skill.ScriptsDir,
-		})
-	}
-	return loaded, nil
+	return strings.TrimSpace(input), attachments, nil
 }
 
 func extractAttachmentMentions(input string) []promptAttachmentMention {
@@ -172,35 +105,6 @@ func extractAttachmentMentions(input string) []promptAttachmentMention {
 		})
 	}
 	return mentions
-}
-
-func extractSkillMentions(input string) []string {
-	matches := skillMentionRe.FindAllStringSubmatch(input, -1)
-	mentions := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		mentions = append(mentions, match[1])
-	}
-	return mentions
-}
-
-func extractKnownSkillMentions(input string) []string {
-	mentions := extractSkillMentions(input)
-	seen := make(map[string]struct{}, len(mentions))
-	known := make([]string, 0, len(mentions))
-	for _, mention := range mentions {
-		name := strings.ToLower(mention)
-		if !markSeen(seen, name) {
-			continue
-		}
-		if _, ok := skills.GetSkill(name); !ok {
-			continue
-		}
-		known = append(known, name)
-	}
-	return known
 }
 
 func markSeen[K comparable](seen map[K]struct{}, key K) bool {

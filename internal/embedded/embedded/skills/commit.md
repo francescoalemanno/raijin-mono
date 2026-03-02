@@ -11,35 +11,34 @@ Make small, atomic commits with clear messages following Conventional Commits v1
 <workflow>
 1. If you don't already understand the changes, review them first using the dedicated tools:
 
-~~ git -P diff --stat
+```bash
+git -P diff --stat
+git -P status
+git -P diff
+```
+If needed run other batched more specific requests.
 
-~~ git -P status
+2. Make small, atomic commits—each commit should address one logical change. If your work spans multiple concerns (e.g., a refactor and a bug fix), break it into separate commits.
+3. Follow this strict loop for each logical change:
 
-~~ git -P diff
+```bash
+# Stage only the files for the FIRST logical change
+git add <files-for-first-commit>
+# Commit those files ONLY
+git commit -m "type(scope): description" -m "body"
+# Now stage files for the SECOND logical change
+git add <files-for-second-commit>
+# Commit those files ONLY
+git commit -m "type(scope): description" -m "body"
+```
 
-   - If needed run other batched more specific requests.
-1. Make small, atomic commits—each commit should address one logical change. If your work spans multiple concerns (e.g., a refactor and a bug fix), break it into separate commits.
-2. Follow this strict loop for each logical change:
-   ```bash
-   # Stage only the files for the FIRST logical change
-   git add <files-for-first-commit>
+IMPORTANT: Never stage all files at once before committing. Always follow the protocol.
 
-   # Commit those files ONLY
-   git commit -m "type(scope): description" -m "body"
-
-   # Now stage files for the SECOND logical change
-   git add <files-for-second-commit>
-
-   # Commit those files ONLY
-   git commit -m "type(scope): description" -m "body"
-   ```
-   IMPORTANT: Never stage all files at once before committing. Always stage, commit, then stage the next batch.
-
-   For finer control, stage specific hunks:
-   ```bash
-   git hunks list                            # List all hunks with IDs
-   git hunks add 'file:@-old,len+new,len'    # Stage specific hunks by ID
-   ```
+For finer control, stage specific hunks:
+```bash
+git hunks list                            # List all hunks with IDs
+git hunks add 'file:@-old,len+new,len'    # Stage specific hunks by ID
+```
 </workflow>
 
 <commit_message_format>

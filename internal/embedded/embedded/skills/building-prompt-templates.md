@@ -8,8 +8,6 @@ hide-from-llm: true
 Guide creation and editing of Raijin prompt templates — Markdown files that define reusable starting prompts invoked with `/template-name [args]`.
 </purpose>
 
-{{ARGUMENTS}}
-
 <instructions>
 
 ## Prompt Template Format
@@ -34,7 +32,7 @@ The body is the prompt sent to the LLM when the template is invoked. It supports
 
 | Placeholder | Expands to |
 |-------------|------------|
-| `$ARGUMENTS` or `$@` | All arguments passed after the template name |
+| `\$ARGUMENTS` or `\$@` | All arguments passed after the template name |
 | `$1`, `$2`, … | Individual positional arguments |
 | `{{PROJECT_PROMPTS_DIR}}` | `{{PROJECT_PROMPTS_DIR}}` |
 | `{{USER_PROMPTS_DIR}}` | `{{USER_PROMPTS_DIR}}` |
@@ -95,5 +93,5 @@ Project templates override user templates, which override built-in templates.
 - Keep the body prompt-shaped: write it as if you are addressing the LLM directly.
 - Use `$ARGUMENTS` when the task varies per invocation. Omit it for fixed-purpose templates.
 
-- Never add `{{ARGUMENTS}}` (double-brace form) to the body — that is the skill substitution syntax, not the template syntax. Use `$ARGUMENTS` instead.
+- Never add `\{{ARGUMENTS}}` (double-brace form) to the body — that is the skill substitution syntax, not the template syntax. Use `\$ARGUMENTS` instead.
 </golden_rules>

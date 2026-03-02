@@ -71,7 +71,7 @@ func ParseCommandArgs(argsString string) []string {
 }
 
 // ExpandArgRefsFromList expands shell-like argument references from a parsed arg list:
-// $1, $@, $ARGUMENTS, ${@:N}, ${@:N:L}.
+// $1, $2, ..., $@, ${@:N}, ${@:N:L}.
 // Replacement is non-recursive.
 func ExpandArgRefsFromList(content string, args []string) string {
 	return substituteArgRefs(content, argRefOptions{
@@ -82,7 +82,7 @@ func ExpandArgRefsFromList(content string, args []string) string {
 	})
 }
 
-// ExpandArgRefsFromText expands only $@ and $ARGUMENTS from a raw arguments string.
+// ExpandArgRefsFromText expands only $@ from a raw arguments string.
 // It intentionally leaves $1/$2/... and ${@:...} unchanged.
 func ExpandArgRefsFromText(content string, arguments string) string {
 	return substituteArgRefs(content, argRefOptions{
@@ -113,11 +113,6 @@ func substituteArgRefs(content string, opts argRefOptions) string {
 			continue
 		}
 
-		if strings.HasPrefix(content[i:], "$ARGUMENTS") {
-			out.WriteString(opts.allArgs)
-			i += len("$ARGUMENTS")
-			continue
-		}
 		if strings.HasPrefix(content[i:], "$@") {
 			out.WriteString(opts.allArgs)
 			i += 2

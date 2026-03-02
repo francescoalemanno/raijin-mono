@@ -12,12 +12,9 @@ func TestTemplateNeedsArguments(t *testing.T) {
 	}{
 		{name: "plain", content: "hello world", want: false},
 		{name: "all args", content: "task: $@", want: true},
-		{name: "named args", content: "task: $ARGUMENTS", want: true},
 		{name: "positional", content: "task: $1", want: true},
 		{name: "slice", content: "task: ${@:2}", want: true},
-		{name: "brace named", content: "task: {{ARGUMENTS}}", want: true},
 		{name: "escaped dollar", content: "task: \\$@", want: false},
-		{name: "escaped braces", content: "task: \\{{ARGUMENTS}}", want: false},
 	}
 
 	for _, tt := range tests {

@@ -11,7 +11,6 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	sessionstore "github.com/francescoalemanno/raijin-mono/internal/session"
-	"github.com/francescoalemanno/raijin-mono/internal/skills"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 )
 
@@ -32,10 +31,6 @@ func New(runtimeModel libagent.RuntimeModel) (*Session, error) {
 	paths := tools.NewPathRegistry()
 	s := &Session{
 		paths: paths,
-	}
-
-	for _, p := range skills.GetProjectScriptsPaths() {
-		s.paths.Add(p)
 	}
 
 	if store, err := persist.OpenStore(); err == nil {
@@ -110,9 +105,6 @@ func (s *Session) Clear(ctx context.Context) error {
 		return err
 	}
 	s.paths = tools.NewPathRegistry()
-	for _, p := range skills.GetProjectScriptsPaths() {
-		s.paths.Add(p)
-	}
 	s.refreshRuntime()
 	return nil
 }
