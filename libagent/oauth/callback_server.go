@@ -19,7 +19,6 @@ type callbackResult struct {
 type callbackServer struct {
 	server   *http.Server
 	resultCh chan callbackResult
-	cancelCh chan struct{}
 }
 
 // startCallbackServer starts a local HTTP server on addr (e.g. "127.0.0.1:8085")
@@ -28,7 +27,6 @@ type callbackServer struct {
 func startCallbackServer(addr, path string) (*callbackServer, error) {
 	cs := &callbackServer{
 		resultCh: make(chan callbackResult, 1),
-		cancelCh: make(chan struct{}),
 	}
 
 	mux := http.NewServeMux()
@@ -64,25 +62,15 @@ func startCallbackServer(addr, path string) (*callbackServer, error) {
 	return cs, nil
 }
 
-// waitForCode blocks until either the browser delivers the OAuth callback,
-// the caller cancels via cancelWait, or ctx is done.
-// Returns (result, true) on success, (zero, false) on cancellation/timeout.
+// waitForCode blocks until either the browser delivers the OAuth callback
+// or ctx is done. Returns (result, true) on success, (zero, false) on
+// cancellation/timeout.
 func (cs *callbackServer) waitForCode(ctx context.Context) (callbackResult, bool) {
 	select {
 	case r := <-cs.resultCh:
 		return r, true
-	case <-cs.cancelCh:
-		return callbackResult{}, false
 	case <-ctx.Done():
 		return callbackResult{}, false
-	}
-}
-
-// cancelWait unblocks any in-progress waitForCode call.
-func (cs *callbackServer) cancelWait() {
-	select {
-	case cs.cancelCh <- struct{}{}:
-	default:
 	}
 }
 

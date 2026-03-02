@@ -645,7 +645,7 @@ func FuzzInputRender(f *testing.F) {
 	f.Add("a very long input value that exceeds any reasonable display width", 15, 40)
 	f.Add("\x1b[200~pasted content\x1b[201~", 30, 0) // bracketed paste
 	f.Add("abc", 2, 1)                               // width smaller than prompt
-	f.Fuzz(func(t *testing.T, inputData string, width, cursor int) {
+	f.Fuzz(func(t *testing.T, inputData string, width, _ int) {
 		if width < 1 {
 			width = 1
 		}
@@ -654,14 +654,6 @@ func FuzzInputRender(f *testing.F) {
 		}
 		inp := components.NewInput()
 		inp.HandleInput(inputData)
-		// Clamp cursor into the valid range after HandleInput
-		val := inp.GetValue()
-		if cursor < 0 {
-			cursor = -cursor
-		}
-		if cursor > len(val) {
-			cursor = len(val)
-		}
 		lines := inp.Render(width)
 		if len(lines) != 1 {
 			t.Fatalf("Input.Render must always return exactly 1 line, got %d", len(lines))

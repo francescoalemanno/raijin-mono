@@ -127,16 +127,3 @@ func templateNeedsArguments(content string) bool {
 	}
 	return false
 }
-
-func unescapedToken(content, token string) bool {
-	for i := 0; i < len(content); i++ {
-		if content[i] == '\\' {
-			i++
-			continue
-		}
-		if strings.HasPrefix(content[i:], token) {
-			return true
-		}
-	}
-	return false
-}
