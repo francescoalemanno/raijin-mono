@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/ansi"
 	"github.com/rivo/uniseg"
@@ -25,16 +26,10 @@ func VisibleWidth(str string) int {
 		return 0
 	}
 
-	// Fast path: pure ASCII printable
-	isPureASCII := true
-	for _, r := range str {
-		if r < 32 || r > 126 {
-			isPureASCII = false
-			break
-		}
-	}
-	if isPureASCII {
-		return len(str)
+	// Fast path: ASCII-only content (including ANSI escapes and tabs/newlines),
+	// avoiding allocations and grapheme segmentation.
+	if width := visibleWidthASCIIOrNeg(str); width >= 0 {
+		return width
 	}
 
 	// Check cache
@@ -65,6 +60,47 @@ func VisibleWidth(str string) int {
 	cacheWidth(str, w)
 
 	return w
+}
+
+func visibleWidthASCIIOrNeg(str string) int {
+	width := 0
+	for i := 0; i < len(str); {
+		b := str[i]
+		if b == '\x1b' {
+			_, codeLen := ExtractAnsiCode(str, i)
+			if codeLen <= 0 {
+				return -1
+			}
+			i += codeLen
+			continue
+		}
+		if b >= utf8.RuneSelf {
+			return -1
+		}
+
+		switch b {
+		case '\t':
+			width += 3
+		case '\n', '\r':
+			// Zero visual width for line terminators.
+		default:
+			if b < 32 || b == 127 {
+				return -1
+			}
+			width++
+		}
+		i++
+	}
+	return width
+}
+
+func isASCIIString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 // cacheWidth adds a width to the cache, evicting oldest if full

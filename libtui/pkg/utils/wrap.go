@@ -128,6 +128,10 @@ func trimEnd(s string) string {
 
 // splitIntoTokensWithAnsi splits text into words while keeping ANSI codes attached
 func splitIntoTokensWithAnsi(text string) []string {
+	if isASCIIString(text) {
+		return splitIntoTokensWithAnsiASCII(text)
+	}
+
 	tokens := []string{}
 	current := ""
 	pendingAnsi := "" // ANSI codes waiting to be attached to next visible content
@@ -174,6 +178,49 @@ func splitIntoTokensWithAnsi(text string) []string {
 	return tokens
 }
 
+func splitIntoTokensWithAnsiASCII(text string) []string {
+	tokens := []string{}
+	current := ""
+	pendingAnsi := ""
+	inWhitespace := false
+	i := 0
+
+	for i < len(text) {
+		if code, codeLen := ExtractAnsiCode(text, i); codeLen > 0 {
+			pendingAnsi += code
+			i += codeLen
+			continue
+		}
+
+		char := text[i : i+1]
+		charIsSpace := char == " "
+
+		if charIsSpace != inWhitespace && current != "" {
+			tokens = append(tokens, current)
+			current = ""
+		}
+
+		if pendingAnsi != "" {
+			current += pendingAnsi
+			pendingAnsi = ""
+		}
+
+		inWhitespace = charIsSpace
+		current += char
+		i++
+	}
+
+	if pendingAnsi != "" {
+		current += pendingAnsi
+	}
+
+	if current != "" {
+		tokens = append(tokens, current)
+	}
+
+	return tokens
+}
+
 // updateTrackerFromText processes ANSI codes in text to update the tracker
 func updateTrackerFromText(text string, tracker *ansi.AnsiCodeTracker) {
 	i := 0
@@ -189,6 +236,10 @@ func updateTrackerFromText(text string, tracker *ansi.AnsiCodeTracker) {
 
 // breakLongWord breaks a long word into multiple lines
 func breakLongWord(word string, width int, tracker *ansi.AnsiCodeTracker) []string {
+	if isASCIIString(word) {
+		return breakLongWordASCII(word, width, tracker)
+	}
+
 	lines := []string{}
 	currentLine := tracker.GetActiveCodes()
 	currentWidth := 0
@@ -241,6 +292,43 @@ func breakLongWord(word string, width int, tracker *ansi.AnsiCodeTracker) []stri
 		lines = append(lines, currentLine)
 	}
 
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+func breakLongWordASCII(word string, width int, tracker *ansi.AnsiCodeTracker) []string {
+	lines := []string{}
+	currentLine := tracker.GetActiveCodes()
+	currentWidth := 0
+
+	for i := 0; i < len(word); {
+		if code, codeLen := ExtractAnsiCode(word, i); codeLen > 0 {
+			currentLine += code
+			tracker.Process(code)
+			i += codeLen
+			continue
+		}
+
+		if currentWidth+1 > width {
+			lineEndReset := tracker.GetLineEndReset()
+			if lineEndReset != "" {
+				currentLine += lineEndReset
+			}
+			lines = append(lines, currentLine)
+			currentLine = tracker.GetActiveCodes()
+			currentWidth = 0
+		}
+
+		currentLine += word[i : i+1]
+		currentWidth++
+		i++
+	}
+
+	if currentLine != "" {
+		lines = append(lines, currentLine)
+	}
 	if len(lines) == 0 {
 		return []string{""}
 	}
