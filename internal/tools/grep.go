@@ -70,7 +70,7 @@ func (rc *regexCache) get(pattern string) (*regexp.Regexp, error) {
 var searchRegexCache = newRegexCache()
 
 type grepParams struct {
-	Pattern     string `json:"pattern" description:"Search pattern (regex or literal string)"`
+	Pattern     string `json:"pattern" description:"Search pattern (regex or literal string). Use (?i) prefix for case-insensitive matching"`
 	Path        string `json:"path,omitempty" description:"Directory or file to search (default: current directory)"`
 	Include     string `json:"include,omitempty" description:"Filter files by glob pattern, e.g. '*.go' or '**/*.test.go'"`
 	LiteralText bool   `json:"literal_text,omitempty" description:"Treat pattern as literal string instead of regex (default: false)"`
