@@ -11,7 +11,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-const editDescription = "Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits."
+const editDescription = "Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Both oldText and newText must be non-empty. Use this for precise, surgical edits."
 
 type editParams struct {
 	Path    string `json:"path" description:"Path to the file to edit (relative or absolute)"`
@@ -30,11 +30,8 @@ func NewEditTool() libagent.Tool {
 
 func createEditTool(cwd string) libagent.Tool {
 	handler := func(ctx context.Context, params editParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
-		if strings.TrimSpace(params.OldText) == "" {
-			return libagent.NewTextErrorResponse("oldText cannot be empty. Provide the exact text to find and replace, including surrounding context to ensure uniqueness."), nil
-		}
-		if strings.TrimSpace(params.NewText) == "" {
-			return libagent.NewTextErrorResponse("newText cannot be empty. Provide the replacement text with proper context."), nil
+		if strings.TrimSpace(params.OldText) == "" || strings.TrimSpace(params.NewText) == "" {
+			return libagent.NewTextErrorResponse("oldText and newText cannot be empty. Provide the exact text to find and replace, including surrounding context to ensure uniqueness."), nil
 		}
 
 		absolutePath := fsutil.ResolveToCwd(params.Path, cwd)
