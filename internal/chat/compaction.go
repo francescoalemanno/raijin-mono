@@ -278,31 +278,49 @@ func isValidCompactionCutIndex(msgs []message.Message, cut int) bool {
 		return false
 	}
 
-	keptCallIDs := make(map[string]struct{})
-	for i := cut; i < len(msgs); i++ {
-		if msgs[i].Role != message.Assistant {
-			continue
-		}
-		for _, call := range msgs[i].ToolCalls() {
-			id := strings.TrimSpace(call.ID)
-			if id != "" {
-				keptCallIDs[id] = struct{}{}
+	return hasBijectiveToolCoupling(msgs[:cut]) && hasBijectiveToolCoupling(msgs[cut:])
+}
+
+func hasBijectiveToolCoupling(msgs []message.Message) bool {
+	callCounts := make(map[string]int)
+	resultCounts := make(map[string]int)
+
+	for _, msg := range msgs {
+		switch msg.Role {
+		case message.Assistant:
+			for _, call := range msg.ToolCalls() {
+				id := strings.TrimSpace(call.ID)
+				if id == "" {
+					return false
+				}
+				callCounts[id]++
+			}
+		case message.Tool:
+			results := msg.ToolResults()
+			if len(results) == 0 {
+				return false
+			}
+			for _, result := range results {
+				id := strings.TrimSpace(result.ToolCallID)
+				if id == "" {
+					return false
+				}
+				resultCounts[id]++
 			}
 		}
 	}
 
-	for i := cut; i < len(msgs); i++ {
-		if msgs[i].Role != message.Tool {
-			continue
+	if len(callCounts) != len(resultCounts) {
+		return false
+	}
+	for id, count := range callCounts {
+		if count != 1 || resultCounts[id] != 1 {
+			return false
 		}
-		for _, result := range msgs[i].ToolResults() {
-			id := strings.TrimSpace(result.ToolCallID)
-			if id == "" {
-				return false
-			}
-			if _, ok := keptCallIDs[id]; !ok {
-				return false
-			}
+	}
+	for id, count := range resultCounts {
+		if count != 1 || callCounts[id] != 1 {
+			return false
 		}
 	}
 	return true

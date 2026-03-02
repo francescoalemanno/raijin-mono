@@ -132,6 +132,9 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	}()
 
 	// Build history from stored messages.
+	// Sanitize persisted tool call/result coupling to avoid provider errors when
+	// historic sessions contain orphaned or duplicated tool ids.
+	msgs = sanitizeMessagesForModel(msgs)
 	history := make([]libagent.Message, 0, len(msgs))
 	for _, m := range msgs {
 		if isEmptyMessage(m) {
@@ -424,6 +427,75 @@ func isEmptyMessage(m message.Message) bool {
 		return true
 	}
 	return false
+}
+
+func sanitizeMessagesForModel(msgs []message.Message) []message.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+
+	callCounts := make(map[string]int)
+	resultCounts := make(map[string]int)
+
+	for _, msg := range msgs {
+		for _, call := range msg.ToolCalls() {
+			id := strings.TrimSpace(call.ID)
+			if id == "" {
+				continue
+			}
+			callCounts[id]++
+		}
+		for _, result := range msg.ToolResults() {
+			id := strings.TrimSpace(result.ToolCallID)
+			if id == "" {
+				continue
+			}
+			resultCounts[id]++
+		}
+	}
+
+	validIDs := make(map[string]struct{})
+	for id, calls := range callCounts {
+		if calls == 1 && resultCounts[id] == 1 {
+			validIDs[id] = struct{}{}
+		}
+	}
+	if len(validIDs) == len(callCounts) && len(validIDs) == len(resultCounts) {
+		return msgs
+	}
+
+	sanitized := make([]message.Message, 0, len(msgs))
+	for _, msg := range msgs {
+		clone := msg.Clone()
+		parts := make([]message.ContentPart, 0, len(clone.Parts))
+		for _, part := range clone.Parts {
+			switch p := part.(type) {
+			case message.ToolCall:
+				id := strings.TrimSpace(p.ID)
+				if id == "" {
+					continue
+				}
+				if _, ok := validIDs[id]; !ok {
+					continue
+				}
+				parts = append(parts, p)
+			case message.ToolResult:
+				id := strings.TrimSpace(p.ToolCallID)
+				if id == "" {
+					continue
+				}
+				if _, ok := validIDs[id]; !ok {
+					continue
+				}
+				parts = append(parts, p)
+			default:
+				parts = append(parts, part)
+			}
+		}
+		clone.Parts = parts
+		sanitized = append(sanitized, clone)
+	}
+	return sanitized
 }
 
 // Cancel cancels a running session.
