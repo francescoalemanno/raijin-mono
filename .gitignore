@@ -25,3 +25,5 @@ vendor/
 # OS
 .DS_Store
 Thumbs.db
+/raijin
+/bin

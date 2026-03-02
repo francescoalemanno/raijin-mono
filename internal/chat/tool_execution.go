@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/components"
@@ -16,7 +17,12 @@ import (
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-const toolPreviewLines = 10
+const (
+	toolPreviewLines                  = 10
+	toolStreamingRenderMinCheckpoint  = 10
+	toolStreamingRenderMinInterval    = 100 * time.Millisecond
+	toolStreamingRenderCheckpointByte = 640
+)
 
 // ToolExecutionComponent renders a tool call with background color that
 // reflects its lifecycle state (pending → success/error).
@@ -30,6 +36,9 @@ type ToolExecutionComponent struct {
 	tool libagent.Tool
 
 	status *StatusBlock
+
+	streamingInputBytes int
+	streamingRenderGate *renderGate
 }
 
 type toolResult struct {
@@ -46,6 +55,12 @@ func NewToolExecution(toolName string, args json.RawMessage, tool libagent.Tool,
 		args:     args,
 		tool:     tool,
 		status:   NewStatusBlock(ui, theme.Default.Accent.Ansi24, theme.Default.Muted.Ansi24, "running…"),
+		streamingRenderGate: newRenderGate(
+			toolStreamingRenderMinCheckpoint,
+			toolStreamingRenderCheckpointByte,
+			10,
+			toolStreamingRenderMinInterval,
+		),
 	}
 	t.updateContent()
 	return t
@@ -64,13 +79,15 @@ func (t *ToolExecutionComponent) MarkCancelled() {
 // UpdateArgs updates the tool arguments as they stream in.
 func (t *ToolExecutionComponent) UpdateArgs(args json.RawMessage) {
 	t.args = args
-	t.updateContent()
+	t.updateStreamingContent(true)
 }
 
 // AppendInputDelta appends a streaming delta to the accumulated raw input.
 func (t *ToolExecutionComponent) AppendInputDelta(delta string) {
+	wasEmpty := t.rawInput == ""
 	t.rawInput += delta
-	t.updateContent()
+	t.streamingInputBytes += len(delta)
+	t.updateStreamingContent(wasEmpty)
 }
 
 // UpdateResult sets the final result and stops the spinner.
@@ -119,6 +136,25 @@ func (t *ToolExecutionComponent) IsPending() bool {
 
 func (t *ToolExecutionComponent) updateContent() {
 	t.status.SetText(t.buildContent())
+}
+
+func (t *ToolExecutionComponent) updateStreamingContent(force bool) {
+	if t.result != nil {
+		t.updateContent()
+		return
+	}
+	if t.streamingRenderGate.shouldRender(t.streamingInputBytes, force) {
+		t.updateContent()
+	}
+}
+
+func streamingRenderInterval(totalBytes int) int {
+	return newRenderGate(
+		toolStreamingRenderMinCheckpoint,
+		toolStreamingRenderCheckpointByte,
+		10,
+		toolStreamingRenderMinInterval,
+	).interval(totalBytes)
 }
 
 func (t *ToolExecutionComponent) buildContent() string {

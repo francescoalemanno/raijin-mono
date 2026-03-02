@@ -51,6 +51,7 @@ type ChatApp struct {
 	runtimeModel libagent.RuntimeModel
 	modelCfg     libagent.ModelConfig
 	store        *modelconfig.ModelStore
+	workingDir   string
 
 	// Components
 	logo            *components.Text
@@ -126,6 +127,7 @@ func newChatApp(term terminal.Terminal, sess *chatsession.Session, runtimeModel 
 		pendingTools: make(map[string]*ToolExecutionComponent),
 		done:         make(chan struct{}),
 	}
+	app.workingDir = renderWorkingDir()
 
 	app.ui = tui.NewTUI(term)
 
@@ -256,7 +258,8 @@ func (app *ChatApp) refreshHeader() {
 
 	// Left side: cwd + context stats + warnings
 	var leftParts []string
-	if cwd := renderWorkingDir(); cwd != "" {
+	if app.workingDir != "" {
+		cwd := app.workingDir
 		leftParts = append(leftParts, cwd)
 	}
 

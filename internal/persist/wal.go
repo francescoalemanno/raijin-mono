@@ -7,6 +7,7 @@ package persist
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +57,14 @@ type walEntry struct {
 	Session   *walSession `json:"session,omitempty"`
 	Msg       *walMessage `json:"msg,omitempty"`
 	MsgID     string      `json:"mid,omitempty"`
+}
+
+// walSessionMetaEntry keeps only fields needed for session index replay.
+// Using this during startup avoids decoding large message payloads.
+type walSessionMetaEntry struct {
+	V       int         `json:"v"`
+	Typ     entryType   `json:"typ"`
+	Session *walSession `json:"session,omitempty"`
 }
 
 // walSession is the serialisable form of session.Session.
@@ -468,12 +477,19 @@ func replaySessionMeta(path string) (sessionstore.Session, error) {
 	scanner := bufio.NewScanner(f)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 10*1024*1024)
+	sessionTypeMarker := []byte(`"typ":"session.`)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
-		var entry walEntry
+		// Most WAL entries are msg.* and may carry large payloads. Skip them
+		// without JSON decoding to keep startup replay cheap.
+		if !bytes.Contains(line, sessionTypeMarker) {
+			continue
+		}
+
+		var entry walSessionMetaEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
 			continue // tolerate corrupt/partial lines (crash recovery)
 		}

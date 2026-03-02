@@ -511,11 +511,9 @@ func (t *TUI) handleInputDirect(data string) {
 
 const segmentReset = "\x1b[0m\x1b]8;;\x07"
 
-func (t *TUI) applyLineResets(lines []string) []string {
-	for i, line := range lines {
-		lines[i] = line + segmentReset
-	}
-	return lines
+func writeLineWithReset(buffer *strings.Builder, line string) {
+	buffer.WriteString(line)
+	buffer.WriteString(segmentReset)
 }
 
 // extractCursorPosition finds and extracts cursor position from rendered lines
@@ -588,8 +586,6 @@ func (t *TUI) doRender() {
 		}
 	}
 
-	newLines = t.applyLineResets(newLines)
-
 	// Width/height changed - need full re-render
 	widthChanged := t.previousWidth != 0 && t.previousWidth != width
 	heightChanged := t.previousHeight != 0 && t.previousHeight != height
@@ -606,7 +602,7 @@ func (t *TUI) doRender() {
 			if i > 0 {
 				buffer.WriteString("\r\n")
 			}
-			buffer.WriteString(line)
+			writeLineWithReset(&buffer, line)
 		}
 		buffer.WriteString("\x1b[?2026l") // End synchronized output
 		t.Terminal.Write(buffer.String())
@@ -810,7 +806,7 @@ func (t *TUI) doRender() {
 			buffer.WriteString("\r\n")
 		}
 		buffer.WriteString("\x1b[2K") // Clear current line
-		buffer.WriteString(newLines[i])
+		writeLineWithReset(&buffer, newLines[i])
 	}
 
 	finalCursorRow := renderEnd
