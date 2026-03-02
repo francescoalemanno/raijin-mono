@@ -123,7 +123,7 @@ type TUI struct {
 	clearOnShrink       bool
 	maxLinesRendered    int
 	previousViewportTop int
-	fullRedrawCount     int
+	fullRedrawCount     atomic.Int64
 	stopped             atomic.Bool
 
 	tasks  chan uiTask
@@ -159,7 +159,7 @@ func NewTUI(t terminal.Terminal, showHardwareCursor ...bool) *TUI {
 
 // FullRedraws returns the number of full redraws performed
 func (t *TUI) FullRedraws() int {
-	return t.fullRedrawCount
+	return int(t.fullRedrawCount.Load())
 }
 
 // GetShowHardwareCursor returns whether hardware cursor is shown
@@ -596,7 +596,7 @@ func (t *TUI) doRender() {
 
 	// Helper for full render
 	fullRender := func(clear bool) {
-		t.fullRedrawCount++
+		t.fullRedrawCount.Add(1)
 		var buffer strings.Builder
 		buffer.WriteString("\x1b[?2026h") // Begin synchronized output
 		if clear {
