@@ -71,15 +71,6 @@ var syntheticGeneratedModels = []ModelInfo{
 	},
 	{
 		ProviderID:       SyntheticProviderID,
-		ModelID:          "hf:deepseek-ai/DeepSeek-V3-0324",
-		Name:             "deepseek-ai/DeepSeek-V3-0324",
-		ContextWindow:    131072,
-		DefaultMaxTokens: 16384,
-		CostPer1MIn:      1.2,
-		CostPer1MOut:     1.2,
-	},
-	{
-		ProviderID:       SyntheticProviderID,
 		ModelID:          "hf:deepseek-ai/DeepSeek-V3.2",
 		Name:             "deepseek-ai/DeepSeek-V3.2",
 		ContextWindow:    162816,
@@ -93,8 +84,8 @@ var syntheticGeneratedModels = []ModelInfo{
 		Name:             "meta-llama/Llama-3.3-70B-Instruct",
 		ContextWindow:    131072,
 		DefaultMaxTokens: 16384,
-		CostPer1MIn:      0.9,
-		CostPer1MOut:     0.9,
+		CostPer1MIn:      0.88,
+		CostPer1MOut:     0.88,
 	},
 	{
 		ProviderID:       SyntheticProviderID,
