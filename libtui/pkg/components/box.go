@@ -173,8 +173,11 @@ func (b *Box) matchCache(width int, childLines []string, bgSample string) bool {
 }
 
 func (b *Box) applyBg(line string, width int) string {
-	line = utils.TruncateToWidth(line, width, "")
 	visLen := utils.VisibleWidth(line)
+	if visLen > width {
+		line = utils.TruncateToWidth(line, width, "")
+		visLen = width
+	}
 	padNeeded := width - visLen
 	if padNeeded < 0 {
 		padNeeded = 0

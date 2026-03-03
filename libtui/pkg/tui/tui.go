@@ -111,20 +111,21 @@ type TUI struct {
 	*Container
 	Terminal terminal.Terminal
 
-	previousLines       []string
-	previousWidth       int
-	previousHeight      int
-	focusedComponent    Component
-	inputListeners      []InputListener
-	onDebug             func()
-	cursorRow           int
-	hardwareCursorRow   int
-	showHardwareCursor  bool
-	clearOnShrink       bool
-	maxLinesRendered    int
-	previousViewportTop int
-	fullRedrawCount     atomic.Int64
-	stopped             atomic.Bool
+	previousLines        []string
+	previousWidth        int
+	previousHeight       int
+	focusedComponent     Component
+	inputListeners       []InputListener
+	onDebug              func()
+	cursorRow            int
+	hardwareCursorRow    int
+	showHardwareCursor   bool
+	clearOnShrink        bool
+	maxLinesRendered     int
+	previousViewportTop  int
+	fullRedrawCount      atomic.Int64
+	stopped              atomic.Bool
+	dynamicRenderDelayNS atomic.Int64
 
 	tasks  chan uiTask
 	stopCh chan struct{}
@@ -132,10 +133,14 @@ type TUI struct {
 
 	enqueueMu     sync.Mutex
 	renderPending bool
+	renderForce   bool
 
 	inputMu      sync.Mutex
 	inputQueue   []string
 	inputPending bool
+
+	lastRenderTime     time.Time
+	delayedRenderArmed atomic.Bool
 }
 
 // NewTUI creates a new TUI instance
@@ -216,7 +221,7 @@ func (t *TUI) Invalidate() {
 // Start starts the TUI
 func (t *TUI) Start() {
 	t.stopped.Store(false)
-	t.Terminal.Start(t.handleInput, func() { t.RequestRender() })
+	t.Terminal.Start(t.handleInput, func() { t.RequestRender(true) })
 	t.Terminal.HideCursor()
 	t.RequestRender()
 }
@@ -270,10 +275,13 @@ func (t *TUI) RequestRender(force ...bool) {
 	f := len(force) > 0 && force[0]
 	t.enqueueMu.Lock()
 	if t.renderPending {
+		// Coalesce-to-latest: overwrite pending render intent.
+		t.renderForce = f
 		t.enqueueMu.Unlock()
 		return
 	}
 	t.renderPending = true
+	t.renderForce = f
 	t.enqueueMu.Unlock()
 
 	task := uiTask{fn: nil, force: f}
@@ -283,6 +291,7 @@ func (t *TUI) RequestRender(force ...bool) {
 	case <-t.doneCh:
 		t.enqueueMu.Lock()
 		t.renderPending = false
+		t.renderForce = false
 		t.enqueueMu.Unlock()
 		return
 	default:
@@ -292,6 +301,7 @@ func (t *TUI) RequestRender(force ...bool) {
 		if !t.enqueueTask(task) {
 			t.enqueueMu.Lock()
 			t.renderPending = false
+			t.renderForce = false
 			t.enqueueMu.Unlock()
 		}
 	}()
@@ -372,10 +382,14 @@ func (t *TUI) enqueueTaskWithContext(ctx context.Context, task uiTask) bool {
 	}
 }
 
-func (t *TUI) onRenderTaskDequeued() {
+func (t *TUI) onRenderTaskDequeued(taskForce bool) bool {
 	t.enqueueMu.Lock()
+	_ = taskForce
+	force := t.renderForce
 	t.renderPending = false
+	t.renderForce = false
 	t.enqueueMu.Unlock()
+	return force
 }
 
 const maxTasksPerRenderCycle = 256
@@ -395,8 +409,7 @@ func (t *TUI) loop() {
 					next.fn()
 					return
 				}
-				t.onRenderTaskDequeued()
-				if next.force {
+				if t.onRenderTaskDequeued(next.force) {
 					forceRedraw = true
 				}
 			}
@@ -423,9 +436,55 @@ func (t *TUI) loop() {
 				t.maxLinesRendered = 0
 				t.previousViewportTop = 0
 			}
+			if shouldRender, delay := t.shouldRenderNow(forceRedraw); !shouldRender {
+				t.scheduleDelayedRender(delay)
+				continue
+			}
+			start := time.Now()
 			t.doRender()
+			t.lastRenderTime = time.Now()
+			t.dynamicRenderDelayNS.Store(int64(dynamicGateDelay(time.Since(start))))
 		}
 	}
+}
+
+func (t *TUI) shouldRenderNow(force bool) (bool, time.Duration) {
+	if force {
+		return true, 0
+	}
+	interval := time.Duration(t.dynamicRenderDelayNS.Load())
+	if interval <= 0 {
+		return true, 0
+	}
+	if t.lastRenderTime.IsZero() {
+		return true, 0
+	}
+	elapsed := time.Since(t.lastRenderTime)
+	if elapsed >= interval {
+		return true, 0
+	}
+	return false, interval - elapsed
+}
+
+func dynamicGateDelay(renderDuration time.Duration) time.Duration {
+	if renderDuration <= 0 {
+		return 0
+	}
+	return renderDuration + renderDuration/2
+}
+
+func (t *TUI) scheduleDelayedRender(delay time.Duration) {
+	if delay <= 0 {
+		t.RequestRender()
+		return
+	}
+	if !t.delayedRenderArmed.CompareAndSwap(false, true) {
+		return
+	}
+	time.AfterFunc(delay, func() {
+		t.delayedRenderArmed.Store(false)
+		t.RequestRender()
+	})
 }
 
 const maxInputEventsPerBatch = 128

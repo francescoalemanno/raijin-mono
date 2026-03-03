@@ -3,6 +3,7 @@ package components
 import (
 	"bytes"
 	"fmt"
+	"hash/maphash"
 	"strings"
 
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/utils"
@@ -59,7 +60,21 @@ type Markdown struct {
 
 	// Computed style prefix
 	defaultStylePrefix string
+
+	// Cache highlighted code blocks by block order and content hash so completed
+	// fenced blocks are not re-highlighted on subsequent renders.
+	codeBlockCounter int
+	codeBlockCache   map[int]codeBlockCacheEntry
 }
+
+type codeBlockCacheEntry struct {
+	lang        string
+	contentLen  int
+	contentHash uint64
+	lines       []string
+}
+
+var markdownCodeBlockHashSeed = maphash.MakeSeed()
 
 // NewMarkdown creates a new Markdown component
 func NewMarkdown(text string, paddingX, paddingY int, theme MarkdownTheme, defaultStyle *DefaultTextStyle) *Markdown {
@@ -75,11 +90,15 @@ func NewMarkdown(text string, paddingX, paddingY int, theme MarkdownTheme, defau
 		paddingY:         paddingY,
 		theme:            theme,
 		defaultTextStyle: defaultStyle,
+		codeBlockCache:   make(map[int]codeBlockCacheEntry),
 	}
 }
 
 // SetText updates the markdown text
 func (m *Markdown) SetText(text string) {
+	if m.text == text {
+		return
+	}
 	m.text = text
 	m.invalidate()
 }
@@ -121,9 +140,11 @@ func (m *Markdown) Render(width int) []string {
 
 	// Parse markdown
 	doc := m.parseMarkdown(normalizedText)
+	m.codeBlockCounter = 0
 
 	// Render tokens
 	renderedLines := m.renderDocument(doc, contentWidth, source)
+	m.pruneCodeBlockCache()
 
 	// Wrap lines
 	wrappedLines := m.wrapLines(renderedLines, contentWidth)
@@ -298,15 +319,23 @@ func (m *Markdown) renderCodeBlock(code *ast.FencedCodeBlock, source []byte) []s
 	lines = append(lines, m.theme.CodeBlockBorder(fmt.Sprintf("```%s", lang)))
 
 	content := m.getTextFromLines(code.Lines(), source)
-	lines = append(lines, m.renderCodeBlockContent(content, lang)...)
+	lines = append(lines, m.renderCodeBlockContent(m.nextCodeBlockIndex(), content, lang)...)
 
 	lines = append(lines, m.theme.CodeBlockBorder("```"), "")
 	return lines
 }
 
-func (m *Markdown) renderCodeBlockContent(content, lang string) []string {
+func (m *Markdown) renderCodeBlockContent(blockIndex int, content, lang string) []string {
 	if content == "" {
 		return []string{}
+	}
+
+	contentHash := hashString64(content)
+	if entry, ok := m.codeBlockCache[blockIndex]; ok &&
+		entry.lang == lang &&
+		entry.contentLen == len(content) &&
+		entry.contentHash == contentHash {
+		return entry.lines
 	}
 
 	indent := m.theme.CodeBlockIndent
@@ -317,6 +346,12 @@ func (m *Markdown) renderCodeBlockContent(content, lang string) []string {
 			for _, hlLine := range highlighted {
 				lines = append(lines, indent+hlLine)
 			}
+			m.codeBlockCache[blockIndex] = codeBlockCacheEntry{
+				lang:        lang,
+				contentLen:  len(content),
+				contentHash: contentHash,
+				lines:       lines,
+			}
 			return lines
 		}
 	}
@@ -325,6 +360,12 @@ func (m *Markdown) renderCodeBlockContent(content, lang string) []string {
 	lines := make([]string, 0, len(codeLines))
 	for _, codeLine := range codeLines {
 		lines = append(lines, indent+m.theme.CodeBlock(codeLine))
+	}
+	m.codeBlockCache[blockIndex] = codeBlockCacheEntry{
+		lang:        lang,
+		contentLen:  len(content),
+		contentHash: contentHash,
+		lines:       lines,
 	}
 	return lines
 }
@@ -446,7 +487,7 @@ func (m *Markdown) renderListItem(item *ast.ListItem, parentDepth int, source []
 			lang := string(n.Language(source))
 			lines = append(lines, m.theme.CodeBlockBorder(fmt.Sprintf("```%s", lang)))
 			content := m.getTextFromLines(n.Lines(), source)
-			lines = append(lines, m.renderCodeBlockContent(content, lang)...)
+			lines = append(lines, m.renderCodeBlockContent(m.nextCodeBlockIndex(), content, lang)...)
 			lines = append(lines, m.theme.CodeBlockBorder("```"))
 		default:
 			// Other token types - try to render as inline
@@ -458,6 +499,27 @@ func (m *Markdown) renderListItem(item *ast.ListItem, parentDepth int, source []
 	}
 
 	return lines
+}
+
+func (m *Markdown) nextCodeBlockIndex() int {
+	idx := m.codeBlockCounter
+	m.codeBlockCounter++
+	return idx
+}
+
+func (m *Markdown) pruneCodeBlockCache() {
+	for idx := range m.codeBlockCache {
+		if idx >= m.codeBlockCounter {
+			delete(m.codeBlockCache, idx)
+		}
+	}
+}
+
+func hashString64(s string) uint64 {
+	var h maphash.Hash
+	h.SetSeed(markdownCodeBlockHashSeed)
+	_, _ = h.WriteString(s)
+	return h.Sum64()
 }
 
 // renderInlineContent renders inline content from a node

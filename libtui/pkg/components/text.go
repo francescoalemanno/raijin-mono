@@ -108,7 +108,11 @@ func (t *Text) Render(width int) []string {
 
 		// Apply background if specified (this also pads to full width)
 		if t.customBgFn != nil {
-			contentLines = append(contentLines, utils.TruncateToWidth(utils.ApplyBackgroundToLine(lineWithMargins, width, t.customBgFn), width, ""))
+			lineWithBg := utils.ApplyBackgroundToLine(lineWithMargins, width, t.customBgFn)
+			if utils.VisibleWidth(lineWithBg) > width {
+				lineWithBg = utils.TruncateToWidth(lineWithBg, width, "")
+			}
+			contentLines = append(contentLines, lineWithBg)
 		} else {
 			// No background - just pad to width with spaces
 			visibleLen := utils.VisibleWidth(lineWithMargins)
@@ -120,7 +124,11 @@ func (t *Text) Render(width int) []string {
 			if t.fgColorFn != nil {
 				padding = t.fgColorFn(padding)
 			}
-			contentLines = append(contentLines, utils.TruncateToWidth(lineWithMargins+padding, width, ""))
+			lineWithPadding := lineWithMargins + padding
+			if visibleLen > width {
+				lineWithPadding = utils.TruncateToWidth(lineWithPadding, width, "")
+			}
+			contentLines = append(contentLines, lineWithPadding)
 		}
 	}
 

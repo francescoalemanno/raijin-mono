@@ -70,3 +70,43 @@ func TestDispatchSync_RespectsContextWhenQueueFull(t *testing.T) {
 		t.Fatal("DispatchSync returned true, want false on context timeout")
 	}
 }
+
+func TestRequestRender_LatestRequestWins_UpgradeToForce(t *testing.T) {
+	t.Parallel()
+
+	tuiInstance := &TUI{
+		tasks:  make(chan uiTask, 1),
+		doneCh: make(chan struct{}),
+	}
+
+	tuiInstance.RequestRender()
+	tuiInstance.RequestRender(true)
+
+	task := <-tuiInstance.tasks
+	if task.force {
+		t.Fatal("expected first queued marker to keep original non-force state")
+	}
+	if !tuiInstance.onRenderTaskDequeued(task.force) {
+		t.Fatal("expected pending render to be upgraded to force")
+	}
+}
+
+func TestRequestRender_LatestRequestWins_DowngradeToNonForce(t *testing.T) {
+	t.Parallel()
+
+	tuiInstance := &TUI{
+		tasks:  make(chan uiTask, 1),
+		doneCh: make(chan struct{}),
+	}
+
+	tuiInstance.RequestRender(true)
+	tuiInstance.RequestRender(false)
+
+	task := <-tuiInstance.tasks
+	if !task.force {
+		t.Fatal("expected first queued marker to keep original force state")
+	}
+	if tuiInstance.onRenderTaskDequeued(task.force) {
+		t.Fatal("expected pending render to be downgraded to non-force by latest request")
+	}
+}

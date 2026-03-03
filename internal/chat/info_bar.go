@@ -52,7 +52,11 @@ func (b *infoBar) Render(width int) []string {
 	// Theme the gap spaces with foreground color
 	gapSpaces := theme.Default.Foreground.Ansi24(strings.Repeat(" ", gap))
 	line := left + gapSpaces + right
-	return []string{utils.TruncateToWidth(padToWidth(line, width), width, "")}
+	lineWidth := leftW + gap + rightW
+	if lineWidth <= width {
+		return []string{padToWidth(line, width)}
+	}
+	return []string{utils.TruncateToWidth(line, width, "")}
 }
 
 func padToWidth(line string, width int) string {

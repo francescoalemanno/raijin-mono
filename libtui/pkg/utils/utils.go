@@ -267,6 +267,10 @@ func TruncateToWidthPadded(text string, maxWidth int, ellipsis string) string {
 
 // TruncateToWidth truncates text to fit within maxWidth, adding ellipsis if needed.
 func TruncateToWidth(text string, maxWidth int, ellipsis ...string) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+
 	ellipsisStr := "..."
 	if len(ellipsis) > 0 {
 		ellipsisStr = ellipsis[0]
@@ -284,58 +288,55 @@ func TruncateToWidth(text string, maxWidth int, ellipsis ...string) string {
 		return SliceByColumn(ellipsisStr, 0, maxWidth)
 	}
 
-	// Separate ANSI codes from visible content using grapheme segmentation
-	type segment struct {
-		isAnsi bool
-		value  string
-	}
-	var segments []segment
-
-	i := 0
-	for i < len(text) {
-		code, codeLen := ExtractAnsiCode(text, i)
-		if codeLen > 0 {
-			segments = append(segments, segment{isAnsi: true, value: code})
-			i += codeLen
-		} else {
-			// Find the next ANSI code or end of string
-			end := i
-			for end < len(text) {
-				if _, cl := ExtractAnsiCode(text, end); cl > 0 {
-					break
-				}
-				end++
-			}
-			// Segment this non-ANSI portion into graphemes
-			textPortion := text[i:end]
-			gr := uniseg.NewGraphemes(textPortion)
-			for gr.Next() {
-				segments = append(segments, segment{isAnsi: false, value: gr.Str()})
-			}
-			i = end
-		}
-	}
-
-	// Build truncated string from segments
+	// Single pass: keep ANSI sequences and consume graphemes with their widths,
+	// avoiding per-grapheme VisibleWidth calls.
 	var result strings.Builder
+	result.Grow(min(len(text)+len(ellipsisStr)+4, len(text)+16))
 	currentWidth := 0
-
-	for _, seg := range segments {
-		if seg.isAnsi {
-			result.WriteString(seg.value)
+	i := 0
+	state := 0
+	for i < len(text) {
+		if text[i] == '\x1b' {
+			code, codeLen := ExtractAnsiCode(text, i)
+			if codeLen > 0 {
+				result.WriteString(code)
+				i += codeLen
+				continue
+			}
+		}
+		if text[i] == '\t' {
+			if currentWidth+3 > targetWidth {
+				break
+			}
+			result.WriteByte('\t')
+			currentWidth += 3
+			i++
+			state = 0
 			continue
 		}
 
-		graphemeWidth := VisibleWidth(seg.value)
-		if currentWidth+graphemeWidth > targetWidth {
+		cluster, rest, w, newState := uniseg.FirstGraphemeClusterInString(text[i:], state)
+		if cluster == "" {
 			break
 		}
-
-		result.WriteString(seg.value)
-		currentWidth += graphemeWidth
+		if currentWidth+w > targetWidth {
+			break
+		}
+		result.WriteString(cluster)
+		currentWidth += w
+		state = newState
+		consumed := len(text[i:]) - len(rest)
+		if consumed <= 0 {
+			_, consumed = utf8.DecodeRuneInString(text[i:])
+			if consumed <= 0 {
+				break
+			}
+		}
+		i += consumed
 	}
 
-	// Add reset code before ellipsis to prevent styling leaking into it
+	// Add reset code before ellipsis to prevent styling leaking into it.
+	// Keep this behavior stable even for empty ellipsis.
 	result.WriteString("\x1b[0m")
 	result.WriteString(ellipsisStr)
 

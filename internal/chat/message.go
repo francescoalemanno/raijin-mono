@@ -19,6 +19,7 @@ type MessageComponent struct {
 	bodyColor   func(string) string
 	markdown    bool
 	mdTheme     components.MarkdownTheme
+	mdRenderer  *components.Markdown
 
 	cachedContent string
 	cachedWidth   int
@@ -37,6 +38,10 @@ func NewMessage(content string, borderChar string, borderColor, bodyColor func(s
 	}
 	if markdown {
 		m.mdTheme = defaultMarkdownTheme()
+		defaultStyle := &components.DefaultTextStyle{
+			Color: theme.Default.Foreground.Ansi24,
+		}
+		m.mdRenderer = components.NewMarkdown(content, 0, 0, m.mdTheme, defaultStyle)
 	}
 	return m
 }
@@ -77,11 +82,14 @@ func (m *MessageComponent) Render(width int) []string {
 
 	var contentLines []string
 	if m.markdown {
-		defaultStyle := &components.DefaultTextStyle{
-			Color: theme.Default.Foreground.Ansi24,
+		if m.mdRenderer == nil {
+			defaultStyle := &components.DefaultTextStyle{
+				Color: theme.Default.Foreground.Ansi24,
+			}
+			m.mdRenderer = components.NewMarkdown(m.content, 0, 0, m.mdTheme, defaultStyle)
 		}
-		md := components.NewMarkdown(m.content, 0, 0, m.mdTheme, defaultStyle)
-		contentLines = md.Render(contentWidth)
+		m.mdRenderer.SetText(m.content)
+		contentLines = m.mdRenderer.Render(contentWidth)
 	} else {
 		contentLines = utils.WrapTextWithAnsi(m.bodyColor(m.content), contentWidth)
 	}
@@ -92,13 +100,19 @@ func (m *MessageComponent) Render(width int) []string {
 
 	result := make([]string, len(contentLines))
 	for i, line := range contentLines {
-		pad := contentWidth - utils.VisibleWidth(line)
+		lineWidth := utils.VisibleWidth(line)
+		pad := contentWidth - lineWidth
 		if pad < 0 {
 			pad = 0
 		}
 		padding := theme.Default.Foreground.Ansi24(strings.Repeat(" ", pad))
 		full := borderPrefix + line + padding
-		result[i] = utils.TruncateToWidth(full, width, "")
+		fullWidth := borderWidth + lineWidth + pad
+		if fullWidth > width {
+			result[i] = utils.TruncateToWidth(full, width, "")
+		} else {
+			result[i] = full
+		}
 	}
 
 	m.cachedContent = m.content

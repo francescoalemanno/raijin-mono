@@ -87,7 +87,7 @@ func (t *TruncatedText) Render(width int) []string {
 	lineWithPadding := leftPadding + displayText + rightPadding
 
 	// Pad line to exactly width characters
-	finalLine := utils.TruncateToWidth(lineWithPadding, width, "")
+	finalLine := lineWithPadding
 	lineVisibleWidth := utils.VisibleWidth(finalLine)
 	paddingNeeded := width - lineVisibleWidth
 	if paddingNeeded < 0 {
