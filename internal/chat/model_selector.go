@@ -18,9 +18,10 @@ import (
 const modelSelectorMaxVisible = 10
 
 type modelItem struct {
-	name     string // key in ModelStore
-	provider string
-	model    string
+	name          string // key in ModelStore
+	provider      string
+	model         string
+	contextWindow int64
 }
 
 // ModelSelectorComponent renders a filterable model list with an Input for search.
@@ -107,18 +108,22 @@ func (m *ModelSelectorComponent) loadModels(store *modelconfig.ModelStore) {
 			continue
 		}
 		items = append(items, modelItem{
-			name:     name,
-			provider: cfg.Provider,
-			model:    cfg.Model,
+			name:          name,
+			provider:      cfg.Provider,
+			model:         cfg.Model,
+			contextWindow: cfg.ContextWindow,
 		})
 	}
-	// Sort: current model first, then alphabetically
-	sort.Slice(items, func(i, j int) bool {
+	// Sort: current model first, then by context window (larger first), then alphabetically
+	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].name == m.currentModel {
 			return true
 		}
 		if items[j].name == m.currentModel {
 			return false
+		}
+		if items[i].contextWindow != items[j].contextWindow {
+			return items[i].contextWindow > items[j].contextWindow
 		}
 		return items[i].name < items[j].name
 	})
