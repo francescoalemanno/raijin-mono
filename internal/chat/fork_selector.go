@@ -97,9 +97,7 @@ func (m *ForkSelectorComponent) updateList() {
 		return
 	}
 
-	startIndex := max(0,
-		min(m.selectedIndex-forkSelectorMaxVisible/2, len(m.filtered)-forkSelectorMaxVisible))
-	endIndex := min(startIndex+forkSelectorMaxVisible, len(m.filtered))
+	startIndex, endIndex := visibleRange(m.selectedIndex, len(m.filtered), forkSelectorMaxVisible)
 
 	for i := startIndex; i < endIndex; i++ {
 		item := m.filtered[i]
@@ -107,10 +105,7 @@ func (m *ForkSelectorComponent) updateList() {
 		m.listContainer.AddChild(components.NewText(line, 0, 0, nil))
 	}
 
-	if startIndex > 0 || endIndex < len(m.filtered) {
-		scrollInfo := theme.Default.Muted.Ansi24(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
-		m.listContainer.AddChild(components.NewText(scrollInfo, 0, 0, nil))
-	}
+	appendScrollInfo(m.listContainer, m.selectedIndex, len(m.filtered), startIndex, endIndex)
 }
 
 func (m *ForkSelectorComponent) renderLine(item forkCandidate, selected bool) string {
@@ -134,18 +129,7 @@ func (m *ForkSelectorComponent) confirmSelection() {
 }
 
 func (m *ForkSelectorComponent) Render(width int) []string {
-	var lines []string
-	lines = append(lines, m.borderTop.Render(width)...)
-	lines = append(lines, "")
-	lines = append(lines, m.titleText.Render(width)...)
-	lines = append(lines, "")
-	lines = append(lines, m.listContainer.Render(width)...)
-	lines = append(lines, "")
-	lines = append(lines, m.hintText.Render(width)...)
-	lines = append(lines, m.borderBottom.Render(width)...)
-	lines = append(lines, m.searchInput.Render(width)...)
-	lines = append(lines, m.borderBottom.Render(width)...)
-	return lines
+	return renderSelectorFrame(width, m.borderTop, m.borderBottom, m.titleText, m.listContainer, m.hintText, m.searchInput)
 }
 
 func (m *ForkSelectorComponent) HandleInput(data string) {

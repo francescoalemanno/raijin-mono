@@ -157,9 +157,7 @@ func (m *ModelAddComponent) updateList() {
 		return
 	}
 
-	startIndex := max(0,
-		min(m.selectedIndex-modelAddMaxVisible/2, len(m.filtered)-modelAddMaxVisible))
-	endIndex := min(startIndex+modelAddMaxVisible, len(m.filtered))
+	startIndex, endIndex := visibleRange(m.selectedIndex, len(m.filtered), modelAddMaxVisible)
 
 	currentProvider := ""
 	for i := startIndex; i < endIndex; i++ {
@@ -179,10 +177,7 @@ func (m *ModelAddComponent) updateList() {
 		m.listContainer.AddChild(components.NewText(line, 0, 0, nil))
 	}
 
-	if startIndex > 0 || endIndex < len(m.filtered) {
-		scrollInfo := theme.Default.Muted.Ansi24(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
-		m.listContainer.AddChild(components.NewText(scrollInfo, 0, 0, nil))
-	}
+	appendScrollInfo(m.listContainer, m.selectedIndex, len(m.filtered), startIndex, endIndex)
 }
 
 func (m *ModelAddComponent) renderCatalogLine(item catalogItem, selected bool) string {
@@ -265,27 +260,13 @@ func (m *ModelAddComponent) goBackToModelList() {
 // --- Component interface ---
 
 func (m *ModelAddComponent) Render(width int) []string {
-	var lines []string
-	lines = append(lines, m.borderTop.Render(width)...)
-	lines = append(lines, "")
-	lines = append(lines, m.titleText.Render(width)...)
-	lines = append(lines, "")
-
 	switch m.step {
 	case stepSelectModel:
-		lines = append(lines, m.listContainer.Render(width)...)
-		lines = append(lines, "")
-		lines = append(lines, m.hintText.Render(width)...)
-		lines = append(lines, m.borderBottom.Render(width)...)
-		lines = append(lines, m.searchInput.Render(width)...)
-		lines = append(lines, m.borderBottom.Render(width)...)
+		return renderSelectorFrame(width, m.borderTop, m.borderBottom, m.titleText, m.listContainer, m.hintText, m.searchInput)
 	case stepEnterAPIKey:
-		lines = append(lines, m.hintText.Render(width)...)
-		lines = append(lines, m.borderBottom.Render(width)...)
-		lines = append(lines, m.apiKeyInput.Render(width)...)
-		lines = append(lines, m.borderBottom.Render(width)...)
+		return renderPromptInputFrame(width, m.borderTop, m.borderBottom, m.titleText, m.hintText, m.apiKeyInput)
 	}
-	return lines
+	return nil
 }
 
 func (m *ModelAddComponent) HandleInput(data string) {

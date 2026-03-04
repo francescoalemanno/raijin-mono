@@ -161,9 +161,7 @@ func (m *ModelSelectorComponent) updateList() {
 		return
 	}
 
-	startIndex := max(0,
-		min(m.selectedIndex-modelSelectorMaxVisible/2, len(m.filtered)-modelSelectorMaxVisible))
-	endIndex := min(startIndex+modelSelectorMaxVisible, len(m.filtered))
+	startIndex, endIndex := visibleRange(m.selectedIndex, len(m.filtered), modelSelectorMaxVisible)
 
 	for i := startIndex; i < endIndex; i++ {
 		item := m.filtered[i]
@@ -171,10 +169,7 @@ func (m *ModelSelectorComponent) updateList() {
 		m.listContainer.AddChild(components.NewText(line, 0, 0, nil))
 	}
 
-	if startIndex > 0 || endIndex < len(m.filtered) {
-		scrollInfo := theme.Default.Muted.Ansi24(fmt.Sprintf("  (%d/%d)", m.selectedIndex+1, len(m.filtered)))
-		m.listContainer.AddChild(components.NewText(scrollInfo, 0, 0, nil))
-	}
+	appendScrollInfo(m.listContainer, m.selectedIndex, len(m.filtered), startIndex, endIndex)
 }
 
 func (m *ModelSelectorComponent) renderModelLine(item modelItem, selected bool) string {
@@ -256,18 +251,7 @@ func removeModelByName(slice []modelItem, name string) []modelItem {
 // --- Component interface ---
 
 func (m *ModelSelectorComponent) Render(width int) []string {
-	var lines []string
-	lines = append(lines, m.borderTop.Render(width)...)
-	lines = append(lines, "")
-	lines = append(lines, m.titleText.Render(width)...)
-	lines = append(lines, "")
-	lines = append(lines, m.listContainer.Render(width)...)
-	lines = append(lines, "")
-	lines = append(lines, m.hintText.Render(width)...)
-	lines = append(lines, m.borderBottom.Render(width)...)
-	lines = append(lines, m.searchInput.Render(width)...)
-	lines = append(lines, m.borderBottom.Render(width)...)
-	return lines
+	return renderSelectorFrame(width, m.borderTop, m.borderBottom, m.titleText, m.listContainer, m.hintText, m.searchInput)
 }
 
 func (m *ModelSelectorComponent) HandleInput(data string) {
