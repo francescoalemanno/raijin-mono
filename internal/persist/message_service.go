@@ -60,6 +60,7 @@ func (ms *MessageService) resolveLineageMessages(sessionID string) ([]message.Me
 		parentMsgs = nil
 	}
 	parentMsgs = append(parentMsgs, parentLocal...)
+	parentMsgs = message.SanitizeHistory(parentMsgs)
 
 	if sess.ForkedFromMessageID == "" {
 		return parentMsgs, nil
@@ -115,7 +116,9 @@ func (ms *MessageService) ensureLoaded(sessionID string) {
 	if hadDeleteAll {
 		msgs = nil
 	}
+	localMsgs = message.SanitizeHistory(localMsgs)
 	msgs = append(msgs, localMsgs...)
+	msgs = message.SanitizeHistory(msgs)
 
 	// Compact only local session messages. For forks, lineage is inherited and
 	// must not be copied into the child WAL.
