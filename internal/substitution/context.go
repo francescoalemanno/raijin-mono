@@ -1,8 +1,8 @@
 package substitution
 
 import (
-	"github.com/francescoalemanno/raijin-mono/internal/embedded"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
+	"github.com/francescoalemanno/raijin-mono/internal/vfs"
 )
 
 // DefaultNamedValues returns the standard placeholder values shared by skills and templates.
@@ -15,8 +15,8 @@ func DefaultNamedValues(_ string) map[string]string {
 		"USER_SKILLS_DIR":      paths.UserSkillsDir(),
 		"USER_PROMPTS_DIR":     paths.UserPromptsDir(),
 		"USER_PLUGINS_DIR":     paths.UserPluginsDir(),
-		"EMBEDDED_SKILLS_DIR":  embedded.Scheme + "skills",
-		"EMBEDDED_PROMPTS_DIR": embedded.Scheme + "templates",
+		"EMBEDDED_SKILLS_DIR":  vfs.Scheme + "skills",
+		"EMBEDDED_PROMPTS_DIR": vfs.Scheme + "templates",
 		"SKILL_FILE":           paths.SkillFileName,
 	}
 }

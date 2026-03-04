@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
-	"github.com/francescoalemanno/raijin-mono/internal/embedded"
 	"github.com/francescoalemanno/raijin-mono/internal/frontmatter"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
+	"github.com/francescoalemanno/raijin-mono/internal/vfs"
 )
 
 // Template represents a prompt template.
@@ -27,9 +27,9 @@ func init() {
 func loadPromptArtifacts() ([]artifacts.Item, error) {
 	merged := artifacts.Merge(
 		func(t Template) string { return t.Name },
-		loadEmbedded(),
-		loadFromDir(paths.UserPromptsDir(), artifacts.SourceUser),
-		loadFromDir(filepath.Join(".", paths.ProjectPromptsDirRel), artifacts.SourceProject),
+		loadTemplatesFromPath("embedded://templates", artifacts.SourceEmbedded),
+		loadTemplatesFromPath(paths.UserPromptsDir(), artifacts.SourceUser),
+		loadTemplatesFromPath(filepath.Join(".", paths.ProjectPromptsDirRel), artifacts.SourceProject),
 	)
 	items := make([]artifacts.Item, 0, len(merged))
 	for _, tmpl := range merged {
@@ -58,33 +58,13 @@ func Find(name string) (Template, bool) {
 	return Template{}, false
 }
 
-func loadEmbedded() []Template {
-	files, err := embedded.ListFiles("templates", ".md")
-	if err != nil {
-		return nil
-	}
-
-	var templates []Template
-	for _, file := range files {
-		filePath := "templates/" + file.Name()
-		raw, err := embedded.ReadFile(filePath)
-		if err != nil {
-			continue
-		}
-		tmpl := parseTemplateFile(file.Name(), embedded.Scheme+filePath, string(raw), artifacts.SourceEmbedded)
-		if tmpl.Name == "" {
-			continue
-		}
-		templates = append(templates, tmpl)
-	}
-	return templates
-}
-
-func loadFromDir(root string, source artifacts.Source) []Template {
+func loadTemplatesFromPath(root string, source artifacts.Source) []Template {
 	if root == "" {
 		return nil
 	}
-	entries, err := os.ReadDir(root)
+
+	v := vfs.NewFromWD()
+	entries, err := v.ReadDir(root)
 	if err != nil {
 		return nil
 	}
@@ -94,21 +74,20 @@ func loadFromDir(root string, source artifacts.Source) []Template {
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
 			continue
 		}
-		path := filepath.Join(root, entry.Name())
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			if stats, err := os.Stat(path); err != nil || !stats.Mode().IsRegular() {
+
+		filePath := vfs.Join(root, entry.Name())
+		if !vfs.IsEmbedded(root) && entry.Type()&os.ModeSymlink != 0 {
+			if stats, err := v.Stat(filePath); err != nil || !stats.Mode().IsRegular() {
 				continue
 			}
 		}
-		raw, err := os.ReadFile(path)
+
+		raw, err := v.ReadFile(filePath)
 		if err != nil {
 			continue
 		}
-		tmpl := parseTemplateFile(entry.Name(), path, string(raw), source)
+
+		tmpl := parseTemplateFile(entry.Name(), filePath, string(raw), source)
 		if tmpl.Name == "" {
 			continue
 		}

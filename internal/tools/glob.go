@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"sort"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
+	"github.com/francescoalemanno/raijin-mono/internal/vfs"
 	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
@@ -33,6 +33,8 @@ type globToolDetails struct {
 
 // NewGlobTool creates a glob tool for finding files by pattern.
 func NewGlobTool() libagent.Tool {
+	v := vfs.NewFromWD()
+
 	handler := func(ctx context.Context, params globParams, _ libagent.ToolCall) (libagent.ToolResponse, error) {
 		if params.Pattern == "" {
 			return libagent.NewTextErrorResponse("pattern is required"), nil
@@ -42,24 +44,16 @@ func NewGlobTool() libagent.Tool {
 		if searchPath == "" {
 			searchPath = "."
 		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return libagent.NewTextErrorResponse(fmt.Sprintf("resolving cwd: %v", err)), nil
-		}
-		searchPath = fsutil.ResolveToCwd(searchPath, cwd)
 
-		info, err := os.Stat(searchPath)
+		info, err := v.Stat(searchPath)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return libagent.NewTextErrorResponse(fmt.Sprintf("Path not found: %s", searchPath)), nil
-			}
-			return libagent.NewTextErrorResponse(fmt.Sprintf("accessing path: %s", err)), nil
+			return libagent.NewTextErrorResponse(vfs.DescribeAccessError(searchPath, err)), nil
 		}
 		if !info.IsDir() {
 			return libagent.NewTextErrorResponse(fmt.Sprintf("Path is not a directory: %s", searchPath)), nil
 		}
 
-		files, err := globWithDoubleStar(ctx, params.Pattern, searchPath)
+		files, err := globWithDoubleStar(ctx, v, params.Pattern, searchPath)
 		if err != nil {
 			if ctx.Err() != nil {
 				return libagent.ToolResponse{}, ctx.Err()
@@ -148,16 +142,21 @@ type fileInfo struct {
 	modTime int64
 }
 
-func globWithDoubleStar(ctx context.Context, pattern, searchPath string) ([]string, error) {
+func globWithDoubleStar(ctx context.Context, v vfs.FS, pattern, searchPath string) ([]string, error) {
 	pattern = fsutil.NormalizePath(pattern)
 
 	if _, err := doublestar.Match(pattern, ""); err != nil {
 		return nil, fmt.Errorf("invalid glob pattern: %w", err)
 	}
 
+	resolvedRoot, err := v.Resolve(searchPath)
+	if err != nil {
+		return nil, err
+	}
+
 	var found []fileInfo
-	err := filepath.WalkDir(searchPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
+	err = v.Walk(searchPath, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -165,14 +164,14 @@ func globWithDoubleStar(ctx context.Context, pattern, searchPath string) ([]stri
 		}
 
 		if d.IsDir() {
-			name := filepath.Base(path)
+			name := d.Name()
 			if fsutil.VCSDirs[name] || name == "node_modules" {
-				return filepath.SkipDir
+				return fs.SkipDir
 			}
 			return nil
 		}
 
-		relPath, err := filepath.Rel(searchPath, path)
+		relPath, err := vfs.RelToRoot(resolvedRoot, p)
 		if err != nil {
 			return nil
 		}
@@ -207,3 +206,5 @@ func globWithDoubleStar(ctx context.Context, pattern, searchPath string) ([]stri
 	}
 	return results, nil
 }
+
+// relative paths are resolved through vfs.RelToRoot inline at call sites.

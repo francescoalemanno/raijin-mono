@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
+	"github.com/francescoalemanno/raijin-mono/internal/vfs"
 	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
@@ -29,19 +30,22 @@ func NewEditTool() libagent.Tool {
 }
 
 func createEditTool(cwd string) libagent.Tool {
+	v := vfs.New(cwd)
+
 	handler := func(ctx context.Context, params editParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		if strings.TrimSpace(params.OldText) == "" || strings.TrimSpace(params.NewText) == "" {
-			return libagent.NewTextErrorResponse("oldText and newText cannot be empty. Provide the exact text to find and replace, including surrounding context to ensure uniqueness."), nil
+			return libagent.NewTextErrorResponse("oldText and newText cannot be empty. Provide the exact text to find and replace, including surrounding context to ensure uniqueness. To delete text, use:\n - old = lcontext + [text to delete] + rcontext\n - new = lcontext + rcontext"), nil
+		}
+
+		if vfs.IsEmbedded(params.Path) {
+			return libagent.NewTextErrorResponse(vfs.DescribeAccessError(params.Path, vfs.ErrReadOnly)), nil
 		}
 
 		absolutePath := fsutil.ResolveToCwd(params.Path, cwd)
 
-		buffer, err := os.ReadFile(absolutePath)
+		buffer, err := v.ReadFile(absolutePath)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return libagent.NewTextErrorResponse(fmt.Sprintf("File not found: %s", params.Path)), nil
-			}
-			return libagent.NewTextErrorResponse(err.Error()), nil
+			return libagent.NewTextErrorResponse(vfs.DescribeAccessError(params.Path, err)), nil
 		}
 		rawContent := string(buffer)
 
@@ -84,8 +88,8 @@ func createEditTool(cwd string) libagent.Tool {
 		}
 
 		finalContent := bom + restoreLineEndings(newContent, originalEnding)
-		if err := os.WriteFile(absolutePath, []byte(finalContent), defaultFilePerm); err != nil {
-			return libagent.NewTextErrorResponse(err.Error()), nil
+		if err := v.WriteFile(absolutePath, []byte(finalContent), defaultFilePerm); err != nil {
+			return libagent.NewTextErrorResponse(vfs.DescribeAccessError(params.Path, err)), nil
 		}
 
 		details := generateDiffString(baseContent, newContent, 4)

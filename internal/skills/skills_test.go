@@ -75,9 +75,9 @@ func writeSkillFile(t *testing.T, path, body string) {
 func mergedSkillsForTest() map[string]Skill {
 	all := artifacts.Merge(
 		func(s Skill) string { return s.Name },
-		loadEmbeddedSkills(),
-		loadSkillsFromDir(paths.UserSkillsDir(), artifacts.SourceUser),
-		loadSkillsFromDir(filepath.Join(".", paths.ProjectSkillsDirRel), artifacts.SourceProject),
+		loadSkillsFromPath("embedded://skills", artifacts.SourceEmbedded),
+		loadSkillsFromPath(paths.UserSkillsDir(), artifacts.SourceUser),
+		loadSkillsFromPath(filepath.Join(".", paths.ProjectSkillsDirRel), artifacts.SourceProject),
 	)
 	m := make(map[string]Skill, len(all))
 	for _, s := range all {

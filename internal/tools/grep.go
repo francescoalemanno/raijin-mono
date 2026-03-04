@@ -2,19 +2,22 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
+	"github.com/francescoalemanno/raijin-mono/internal/vfs"
 	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
@@ -86,6 +89,8 @@ type grepMatch struct {
 
 // NewGrepTool creates a grep tool for searching file contents.
 func NewGrepTool() libagent.Tool {
+	v := vfs.NewFromWD()
+
 	handler := func(ctx context.Context, params grepParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		if params.Pattern == "" {
 			return libagent.NewTextErrorResponse("pattern is required"), nil
@@ -100,12 +105,14 @@ func NewGrepTool() libagent.Tool {
 		if searchPath == "" {
 			searchPath = "."
 		}
-		searchPath = fsutil.ExpandPath(searchPath)
 
-		matches, err := searchFiles(ctx, searchPattern, searchPath, params.Include)
+		matches, err := searchFiles(ctx, v, searchPattern, searchPath, params.Include)
 		if err != nil {
 			if ctx.Err() != nil {
 				return libagent.ToolResponse{}, ctx.Err()
+			}
+			if errors.Is(err, vfs.ErrNotFound) || errors.Is(err, vfs.ErrInvalidPath) {
+				return libagent.NewTextErrorResponse(vfs.DescribeAccessError(searchPath, err)), nil
 			}
 			return libagent.NewTextErrorResponse(fmt.Sprintf("searching files: %s", err)), nil
 		}
@@ -136,7 +143,6 @@ func NewGrepTool() libagent.Tool {
 					fmt.Fprintf(&output, "  %s\n", match.path)
 				}
 			}
-
 		}
 
 		return libagent.NewTextResponse(output.String()), nil
@@ -169,8 +175,8 @@ func NewGrepTool() libagent.Tool {
 	)
 }
 
-func searchFiles(ctx context.Context, pattern, rootPath, include string) ([]grepMatch, error) {
-	matches, err := searchFilesWithRegex(ctx, pattern, rootPath, include)
+func searchFiles(ctx context.Context, v vfs.FS, pattern, rootPath, include string) ([]grepMatch, error) {
+	matches, err := searchFilesWithRegex(ctx, v, pattern, rootPath, include)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +188,7 @@ func searchFiles(ctx context.Context, pattern, rootPath, include string) ([]grep
 	return matches, nil
 }
 
-func searchFilesWithRegex(ctx context.Context, pattern, rootPath, include string) ([]grepMatch, error) {
+func searchFilesWithRegex(ctx context.Context, v vfs.FS, pattern, rootPath, include string) ([]grepMatch, error) {
 	var matches []grepMatch
 
 	regex, err := searchRegexCache.get(pattern)
@@ -190,38 +196,57 @@ func searchFilesWithRegex(ctx context.Context, pattern, rootPath, include string
 		return nil, fmt.Errorf("invalid regex pattern: %w", err)
 	}
 
-	err = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	rootResolved, err := v.Resolve(rootPath)
+	if err != nil {
+		return nil, err
+	}
+
+	err = v.Walk(rootPath, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
 			return nil
 		}
-
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		if info.IsDir() {
-			name := filepath.Base(path)
+		if d.IsDir() {
+			name := d.Name()
 			if fsutil.VCSDirs[name] {
-				return filepath.SkipDir
+				return fs.SkipDir
 			}
 			return nil
 		}
 
+		relPath, err := vfs.RelToRoot(rootResolved, p)
+		if err != nil {
+			return nil
+		}
+		relPath = fsutil.NormalizePath(relPath)
+
 		if include != "" {
-			matched, _ := doublestar.Match(fsutil.NormalizePath(include), fsutil.NormalizePath(path))
+			matched, _ := doublestar.Match(fsutil.NormalizePath(include), relPath)
 			if !matched {
 				return nil
 			}
 		}
 
-		match, lineNum, charNum, lineText, err := fileContainsPattern(path, regex)
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+
+		match, lineNum, charNum, lineText, err := fileContainsPattern(v, p, rootResolved.Backend, regex)
 		if err != nil {
 			return nil
 		}
 
 		if match {
+			displayPath := p
+			if rootResolved.Backend == vfs.BackendOS {
+				displayPath = relPath
+			}
 			matches = append(matches, grepMatch{
-				path:     path,
+				path:     displayPath,
 				modTime:  info.ModTime(),
 				lineNum:  lineNum,
 				charNum:  charNum,
@@ -238,18 +263,21 @@ func searchFilesWithRegex(ctx context.Context, pattern, rootPath, include string
 	return matches, nil
 }
 
-func fileContainsPattern(filePath string, pattern *regexp.Regexp) (bool, int, int, string, error) {
-	if !fsutil.IsTextFile(filePath) {
+func fileContainsPattern(v vfs.FS, filePath string, backend vfs.Backend, pattern *regexp.Regexp) (bool, int, int, string, error) {
+	if backend == vfs.BackendOS && !fsutil.IsTextFile(filePath) {
 		return false, 0, 0, "", nil
 	}
 
-	file, err := os.Open(filePath)
+	data, err := v.ReadFile(filePath)
 	if err != nil {
 		return false, 0, 0, "", err
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
+	if backend == vfs.BackendEmbedded && !utf8.Valid(data) {
+		return false, 0, 0, "", nil
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	buf := make([]byte, 0, defaultScannerBufferSize)
 	scanner.Buffer(buf, maxScannerBufferSize)
 	lineNum := 0
@@ -264,3 +292,5 @@ func fileContainsPattern(filePath string, pattern *regexp.Regexp) (bool, int, in
 
 	return false, 0, 0, "", scanner.Err()
 }
+
+// rel paths resolved through vfs.RelToRoot inline at call sites.

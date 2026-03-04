@@ -1,14 +1,13 @@
 package skills
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
-	"github.com/francescoalemanno/raijin-mono/internal/embedded"
 	"github.com/francescoalemanno/raijin-mono/internal/frontmatter"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
+	"github.com/francescoalemanno/raijin-mono/internal/vfs"
 )
 
 // Skill represents a loadable skill definition.
@@ -28,9 +27,9 @@ func init() {
 func loadSkillArtifacts() ([]artifacts.Item, error) {
 	merged := artifacts.Merge(
 		func(s Skill) string { return s.Name },
-		loadEmbeddedSkills(),
-		loadSkillsFromDir(paths.UserSkillsDir(), artifacts.SourceUser),
-		loadSkillsFromDir(filepath.Join(".", paths.ProjectSkillsDirRel), artifacts.SourceProject),
+		loadSkillsFromPath("embedded://skills", artifacts.SourceEmbedded),
+		loadSkillsFromPath(paths.UserSkillsDir(), artifacts.SourceUser),
+		loadSkillsFromPath(filepath.Join(".", paths.ProjectSkillsDirRel), artifacts.SourceProject),
 	)
 	items := make([]artifacts.Item, 0, len(merged))
 	for _, skill := range merged {
@@ -75,39 +74,13 @@ func GetSkill(name string) (Skill, bool) {
 	return Skill{}, false
 }
 
-func loadEmbeddedSkills() []Skill {
-	files, err := embedded.ListFiles("skills", ".md")
-	if err != nil {
-		return nil
-	}
-
-	var result []Skill
-	for _, file := range files {
-		name := strings.ToLower(strings.TrimSuffix(file.Name(), filepath.Ext(file.Name())))
-		if name == "" {
-			continue
-		}
-		data, err := embedded.ReadFile("skills/" + file.Name())
-		if err != nil {
-			continue
-		}
-		description, llmDescription := parseSkillHeader(strings.TrimSpace(string(data)))
-		result = append(result, Skill{
-			Name:           name,
-			Description:    description,
-			Source:         artifacts.SourceEmbedded,
-			LLMDescription: llmDescription,
-			FilePath:       embedded.Scheme + "skills/" + file.Name(),
-		})
-	}
-	return result
-}
-
-func loadSkillsFromDir(root string, source artifacts.Source) []Skill {
+func loadSkillsFromPath(root string, source artifacts.Source) []Skill {
 	if root == "" {
 		return nil
 	}
-	entries, err := os.ReadDir(root)
+
+	v := vfs.NewFromWD()
+	entries, err := v.ReadDir(root)
 	if err != nil {
 		return nil
 	}
@@ -118,8 +91,11 @@ func loadSkillsFromDir(root string, source artifacts.Source) []Skill {
 			continue
 		}
 		skillName := strings.ToLower(entry.Name())
-		path := filepath.Join(root, entry.Name(), paths.SkillFileName)
-		data, err := os.ReadFile(path)
+		if skillName == "" {
+			continue
+		}
+		filePath := vfs.Join(root, entry.Name(), paths.SkillFileName)
+		data, err := v.ReadFile(filePath)
 		if err != nil {
 			continue
 		}
@@ -129,7 +105,7 @@ func loadSkillsFromDir(root string, source artifacts.Source) []Skill {
 			Description:    description,
 			Source:         source,
 			LLMDescription: llmDescription,
-			FilePath:       path,
+			FilePath:       filePath,
 		})
 	}
 	return result

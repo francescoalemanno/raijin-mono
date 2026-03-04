@@ -151,7 +151,7 @@ func TestEditTool_FileNotFound(t *testing.T) {
 	if !resp.IsError {
 		t.Fatalf("expected error response")
 	}
-	if !strings.Contains(resp.Content, "File not found") {
+	if !strings.Contains(resp.Content, "Path not found") {
 		t.Fatalf("unexpected error content: %q", resp.Content)
 	}
 }

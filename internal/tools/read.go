@@ -9,16 +9,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/francescoalemanno/raijin-mono/internal/embedded"
-	"github.com/francescoalemanno/raijin-mono/internal/fsutil"
 	"github.com/francescoalemanno/raijin-mono/internal/input"
 	"github.com/francescoalemanno/raijin-mono/internal/substitution"
+	"github.com/francescoalemanno/raijin-mono/internal/vfs"
 	"github.com/francescoalemanno/raijin-mono/libagent"
-	"golang.org/x/text/unicode/norm"
 )
 
 var readDescription = fmt.Sprintf(
@@ -26,10 +23,6 @@ var readDescription = fmt.Sprintf(
 	DefaultMaxLines,
 	DefaultMaxBytes/1024,
 )
-
-var readAMPMVariantRe = regexp.MustCompile(` (AM|PM)\.`)
-
-const narrowNoBreakSpace = "\u202F"
 
 type readParams struct {
 	Path   string `json:"path" description:"Path to the file or directory to read (relative or absolute)"`
@@ -51,28 +44,22 @@ func NewReadTool() libagent.Tool {
 	if err != nil {
 		cwd = "."
 	}
+	v := vfs.New(cwd)
 
 	handler := func(ctx context.Context, params readParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		if strings.TrimSpace(params.Path) == "" {
 			return readToolNudge("path is required"), nil
 		}
 
-		// Handle embedded:// paths
-		if isEmbeddedPath(params.Path) {
-			return handleEmbeddedRead(ctx, params)
-		}
+		queryPath := params.Path
 
-		resolvedPath := resolveReadPath(params.Path, cwd)
-		fileInfo, err := os.Stat(resolvedPath)
+		fileInfo, err := v.Stat(queryPath)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return readToolNudge(fileNotFoundError(resolvedPath)), nil
-			}
-			return readToolNudge(fmt.Sprintf("accessing path: %s", err)), nil
+			return readToolNudge(vfs.DescribeAccessError(queryPath, err)), nil
 		}
 
 		if fileInfo.IsDir() {
-			result, details, err := readDirectory(ctx, resolvedPath, params)
+			result, details, err := readDirectory(ctx, v, queryPath, params)
 			if err != nil {
 				if ctx.Err() != nil {
 					return libagent.ToolResponse{}, ctx.Err()
@@ -86,12 +73,12 @@ func NewReadTool() libagent.Tool {
 			return resp, nil
 		}
 
-		ext := strings.TrimPrefix(filepath.Ext(resolvedPath), ".")
+		ext := strings.TrimPrefix(filepath.Ext(queryPath), ".")
 		if mediaType := input.ImageMediaType(ext); mediaType != "" {
 			if fileInfo.Size() > input.MaxImageSize {
 				return readToolNudge(fmt.Sprintf("image too large (%d bytes); maximum is %d bytes", fileInfo.Size(), input.MaxImageSize)), nil
 			}
-			data, err := os.ReadFile(resolvedPath)
+			data, err := v.ReadFile(queryPath)
 			if err != nil {
 				return readToolNudge(fmt.Sprintf("reading image: %s", err)), nil
 			}
@@ -99,7 +86,7 @@ func NewReadTool() libagent.Tool {
 			return libagent.NewMediaResponse([]byte(encoded), mediaType), nil
 		}
 
-		result, details, err := readText(ctx, resolvedPath, params)
+		result, details, err := readText(ctx, v, queryPath, params)
 		if err != nil {
 			if ctx.Err() != nil {
 				return libagent.ToolResponse{}, ctx.Err()
@@ -147,8 +134,8 @@ func NewReadTool() libagent.Tool {
 	)
 }
 
-func readDirectory(ctx context.Context, dirPath string, params readParams) (string, *readToolDetails, error) {
-	entries, err := os.ReadDir(dirPath)
+func readDirectory(ctx context.Context, v vfs.FS, dirPath string, params readParams) (string, *readToolDetails, error) {
+	entries, err := v.ReadDir(dirPath)
 	if err != nil {
 		return "", nil, fmt.Errorf("reading directory: %w", err)
 	}
@@ -222,12 +209,12 @@ func renderDirectoryEntries(ctx context.Context, entries []fs.DirEntry, params r
 	return outputText, details, nil
 }
 
-func readText(ctx context.Context, path string, params readParams) (string, *readToolDetails, error) {
+func readText(ctx context.Context, v vfs.FS, filePath string, params readParams) (string, *readToolDetails, error) {
 	if ctx.Err() != nil {
 		return "", nil, ctx.Err()
 	}
 
-	buffer, err := os.ReadFile(path)
+	buffer, err := v.ReadFile(filePath)
 	if err != nil {
 		return "", nil, fmt.Errorf("opening file: %w", err)
 	}
@@ -235,6 +222,12 @@ func readText(ctx context.Context, path string, params readParams) (string, *rea
 	content := string(buffer)
 	if !utf8.ValidString(content) {
 		return "", nil, errors.New("file content is not valid UTF-8")
+	}
+
+	resolved, err := v.Resolve(filePath)
+	if err == nil && resolved.Backend == vfs.BackendEmbedded {
+		content = substitution.ExpandAll(ctx, content, "", substitution.ArgModeText)
+		return renderTextContent(content, params, embeddedReadLineExceedsLimitMessage)
 	}
 
 	return renderTextContent(content, params, fileReadLineExceedsLimitMessage)
@@ -333,164 +326,4 @@ func readOffsetDisplay(offset *int) int {
 		return 1
 	}
 	return *offset
-}
-
-func fileNotFoundError(filePath string) string {
-	dir := filepath.Dir(filePath)
-	base := filepath.Base(filePath)
-
-	dirEntries, dirErr := os.ReadDir(dir)
-	if dirErr == nil {
-		var suggestions []string
-		for _, entry := range dirEntries {
-			if strings.Contains(strings.ToLower(entry.Name()), strings.ToLower(base)) ||
-				strings.Contains(strings.ToLower(base), strings.ToLower(entry.Name())) {
-				suggestions = append(suggestions, filepath.Join(dir, entry.Name()))
-				if len(suggestions) >= 3 {
-					break
-				}
-			}
-		}
-
-		if len(suggestions) > 0 {
-			return fmt.Sprintf("File not found: %s\n\nDid you mean one of these?\n%s",
-				filePath, strings.Join(suggestions, "\n"))
-		}
-	}
-
-	return fmt.Sprintf("File not found: %s", filePath)
-}
-
-func resolveReadPath(filePath, cwd string) string {
-	resolved := fsutil.ResolveToCwd(filePath, cwd)
-	if fileExists(resolved) {
-		return resolved
-	}
-
-	amPmVariant := tryMacOSScreenshotPath(resolved)
-	if amPmVariant != resolved && fileExists(amPmVariant) {
-		return amPmVariant
-	}
-
-	nfdVariant := tryNFDVariant(resolved)
-	if nfdVariant != resolved && fileExists(nfdVariant) {
-		return nfdVariant
-	}
-
-	curlyVariant := tryCurlyQuoteVariant(resolved)
-	if curlyVariant != resolved && fileExists(curlyVariant) {
-		return curlyVariant
-	}
-
-	nfdCurlyVariant := tryCurlyQuoteVariant(nfdVariant)
-	if nfdCurlyVariant != resolved && fileExists(nfdCurlyVariant) {
-		return nfdCurlyVariant
-	}
-
-	return resolved
-}
-
-func tryMacOSScreenshotPath(filePath string) string {
-	return readAMPMVariantRe.ReplaceAllString(filePath, narrowNoBreakSpace+"$1.")
-}
-
-func tryNFDVariant(filePath string) string {
-	return norm.NFD.String(filePath)
-}
-
-func tryCurlyQuoteVariant(filePath string) string {
-	return strings.ReplaceAll(filePath, "'", "\u2019")
-}
-
-func fileExists(filePath string) bool {
-	_, err := os.Stat(filePath)
-	return err == nil
-}
-
-const embeddedPrefix = embedded.Scheme
-
-func isEmbeddedPath(path string) bool {
-	return strings.HasPrefix(path, embeddedPrefix)
-}
-
-func stripEmbeddedPrefix(path string) string {
-	return strings.TrimPrefix(path, embeddedPrefix)
-}
-
-func handleEmbeddedRead(ctx context.Context, params readParams) (libagent.ToolResponse, error) {
-	path := stripEmbeddedPrefix(params.Path)
-
-	// Try to read as file first
-	data, err := embedded.ReadFile(path)
-	if err == nil {
-		return handleEmbeddedFile(ctx, path, data, params)
-	}
-
-	// If not a file, try as directory
-	entries, err := embedded.List(path)
-	if err == nil {
-		return handleEmbeddedDir(ctx, path, entries, params)
-	}
-
-	return readToolNudge(fmt.Sprintf("embedded path not found: %s", params.Path)), nil
-}
-
-func handleEmbeddedFile(ctx context.Context, path string, data []byte, params readParams) (libagent.ToolResponse, error) {
-	ext := strings.TrimPrefix(filepath.Ext(path), ".")
-
-	// Handle images
-	if mediaType := input.ImageMediaType(ext); mediaType != "" {
-		if len(data) > input.MaxImageSize {
-			return readToolNudge(fmt.Sprintf("image too large (%d bytes); maximum is %d bytes", len(data), input.MaxImageSize)), nil
-		}
-		encoded := base64.StdEncoding.EncodeToString(data)
-		return libagent.NewMediaResponse([]byte(encoded), mediaType), nil
-	}
-
-	// Handle text files
-	content := string(data)
-	if !utf8.ValidString(content) {
-		return libagent.NewTextErrorResponse("file content is not valid UTF-8"), nil
-	}
-
-	result, details, err := readEmbeddedText(ctx, content, params)
-	if err != nil {
-		if ctx.Err() != nil {
-			return libagent.ToolResponse{}, ctx.Err()
-		}
-		return libagent.NewTextErrorResponse(err.Error()), nil
-	}
-
-	resp := libagent.NewTextResponse(result)
-	if details != nil {
-		resp = libagent.WithResponseMetadata(resp, details)
-	}
-	return resp, nil
-}
-
-func readEmbeddedText(ctx context.Context, content string, params readParams) (string, *readToolDetails, error) {
-	if ctx.Err() != nil {
-		return "", nil, ctx.Err()
-	}
-
-	// Apply variable expansion for embedded files (skills, templates)
-	content = substitution.ExpandAll(ctx, content, "", substitution.ArgModeText)
-
-	return renderTextContent(content, params, embeddedReadLineExceedsLimitMessage)
-}
-
-func handleEmbeddedDir(ctx context.Context, dirPath string, entries []fs.DirEntry, params readParams) (libagent.ToolResponse, error) {
-	outputText, details, err := renderDirectoryEntries(ctx, entries, params)
-	if err != nil {
-		if ctx.Err() != nil {
-			return libagent.ToolResponse{}, ctx.Err()
-		}
-		return readToolNudge(err.Error()), nil
-	}
-
-	resp := libagent.NewTextResponse(outputText)
-	if details != nil {
-		resp = libagent.WithResponseMetadata(resp, details)
-	}
-	return resp, nil
 }

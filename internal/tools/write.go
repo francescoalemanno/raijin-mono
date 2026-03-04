@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/francescoalemanno/raijin-mono/internal/vfs"
 	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
@@ -18,6 +18,8 @@ func NewWriteTool() libagent.Tool {
 		Content string `json:"content" description:"Content to write to the file"`
 	}
 
+	v := vfs.NewFromWD()
+
 	handler := func(ctx context.Context, params writeToolParams, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		if params.Path == "" {
 			return libagent.NewTextErrorResponse("path is required"), nil
@@ -27,12 +29,12 @@ func NewWriteTool() libagent.Tool {
 			return libagent.ToolResponse{}, ctx.Err()
 		}
 
-		if err := os.MkdirAll(filepath.Dir(params.Path), defaultDirPerm); err != nil {
-			return libagent.NewTextErrorResponse(fmt.Sprintf("creating directories: %s", err)), nil
+		if err := v.MkdirAll(filepath.Dir(params.Path), defaultDirPerm); err != nil {
+			return libagent.NewTextErrorResponse(vfs.DescribeAccessError(params.Path, err)), nil
 		}
 
-		if err := os.WriteFile(params.Path, []byte(params.Content), defaultFilePerm); err != nil {
-			return libagent.NewTextErrorResponse(fmt.Sprintf("writing file: %s", err)), nil
+		if err := v.WriteFile(params.Path, []byte(params.Content), defaultFilePerm); err != nil {
+			return libagent.NewTextErrorResponse(vfs.DescribeAccessError(params.Path, err)), nil
 		}
 		resp := libagent.NewTextResponse(fmt.Sprintf("Successfully created file %s.", params.Path))
 		return resp, nil

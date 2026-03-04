@@ -37,9 +37,9 @@ func writeFile(t *testing.T, path, body string) {
 func mergedTemplatesForTest() map[string]Template {
 	all := artifacts.Merge(
 		func(t Template) string { return t.Name },
-		loadEmbedded(),
-		loadFromDir(paths.UserPromptsDir(), artifacts.SourceUser),
-		loadFromDir(filepath.Join(".", paths.ProjectPromptsDirRel), artifacts.SourceProject),
+		loadTemplatesFromPath("embedded://templates", artifacts.SourceEmbedded),
+		loadTemplatesFromPath(paths.UserPromptsDir(), artifacts.SourceUser),
+		loadTemplatesFromPath(filepath.Join(".", paths.ProjectPromptsDirRel), artifacts.SourceProject),
 	)
 	m := make(map[string]Template, len(all))
 	for _, t := range all {
