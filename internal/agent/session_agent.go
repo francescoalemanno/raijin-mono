@@ -132,9 +132,7 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	}()
 
 	// Build history from stored messages.
-	// Sanitize persisted tool call/result coupling to avoid provider errors when
-	// historic sessions contain orphaned or duplicated tool ids.
-	msgs = sanitizeMessagesForModel(msgs)
+	msgs = message.SanitizeHistory(msgs)
 	history := make([]libagent.Message, 0, len(msgs))
 	for _, m := range msgs {
 		if isEmptyMessage(m) {
@@ -206,7 +204,6 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 		call:                call,
 		model:               model,
 		genCtx:              genCtx,
-		transientIDs:        make([]string, 0, 4),
 		initialUserNotified: false,
 	}
 
@@ -238,23 +235,26 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 
 	if promptErr != nil {
 		if errors.Is(promptErr, context.Canceled) {
-			for i := len(rs.transientIDs) - 1; i >= 0; i-- {
-				_ = a.messages.Delete(ctx, rs.transientIDs[i])
-			}
-		} else if rs.currentAssistant != nil {
-			if persisted, err := a.messages.Get(ctx, rs.currentAssistant.ID); err == nil {
-				rs.currentAssistant = &persisted
-				rs.currentAssistant.FinishThinking()
-				rs.currentAssistant.AddFinish(message.FinishReasonError, promptErr.Error(), "")
-				_ = a.messages.Update(ctx, *rs.currentAssistant)
+			return promptErr
+		}
+		if rs.currentAssistant != nil {
+			rs.currentAssistant.FinishThinking()
+			rs.currentAssistant.AddFinish(message.FinishReasonError, promptErr.Error(), "")
+			if err := rs.persistAssistant(ctx); err != nil {
+				return err
 			}
 		}
 		return promptErr
 	}
 	if rs.loopErr != nil {
 		if errors.Is(rs.loopErr, context.Canceled) {
-			for i := len(rs.transientIDs) - 1; i >= 0; i-- {
-				_ = a.messages.Delete(ctx, rs.transientIDs[i])
+			return rs.loopErr
+		}
+		if rs.currentAssistant != nil {
+			rs.currentAssistant.FinishThinking()
+			rs.currentAssistant.AddFinish(message.FinishReasonError, rs.loopErr.Error(), "")
+			if err := rs.persistAssistant(ctx); err != nil {
+				return err
 			}
 		}
 		return rs.loopErr
@@ -271,7 +271,6 @@ type runState struct {
 	genCtx context.Context
 
 	currentAssistant    *message.Message
-	transientIDs        []string
 	textStarted         bool
 	initialUserNotified bool
 	loopErr             error
@@ -280,19 +279,14 @@ type runState struct {
 func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) error {
 	switch event.Type {
 	case libagent.AgentEventTypeMessageStart:
-		if am, ok := event.Message.(*libagent.AssistantMessage); ok {
-			_ = am
-			assistantMsg, err := rs.agent.messages.Create(ctx, rs.call.SessionID, message.CreateParams{
-				Role:     message.Assistant,
-				Parts:    []message.ContentPart{},
-				Model:    rs.model.ModelCfg.Model,
-				Provider: rs.model.ModelCfg.Provider,
-			})
-			if err != nil {
-				return err
+		if _, ok := event.Message.(*libagent.AssistantMessage); ok {
+			rs.currentAssistant = &message.Message{
+				Role:      message.Assistant,
+				SessionID: rs.call.SessionID,
+				Parts:     []message.ContentPart{},
+				Model:     rs.model.ModelCfg.Model,
+				Provider:  rs.model.ModelCfg.Provider,
 			}
-			rs.currentAssistant = &assistantMsg
-			rs.transientIDs = append(rs.transientIDs, assistantMsg.ID)
 			rs.textStarted = false
 		}
 
@@ -304,19 +298,11 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 		if delta == nil {
 			return nil
 		}
-		// Use a non-cancellable context for streaming delta persistence so that
-		// transient WAL write failures do not abort the in-flight LLM stream.
-		// The authoritative final commit happens at MessageEnd using rs.genCtx.
-		persistCtx := context.WithoutCancel(rs.genCtx)
 		switch delta.Type {
 		case "reasoning_delta":
 			rs.currentAssistant.AppendReasoningContent(delta.Delta)
-			_ = rs.agent.messages.Update(persistCtx, *rs.currentAssistant)
-
 		case "reasoning_end":
 			rs.currentAssistant.FinishThinking()
-			_ = rs.agent.messages.Update(persistCtx, *rs.currentAssistant)
-
 		case "text_delta":
 			text := delta.Delta
 			if !rs.textStarted {
@@ -324,12 +310,8 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 				rs.textStarted = true
 			}
 			rs.currentAssistant.AppendContent(text)
-			_ = rs.agent.messages.Update(persistCtx, *rs.currentAssistant)
-
 		case "tool_input_start":
 			rs.currentAssistant.AddToolCall(message.ToolCall{ID: delta.ID, Name: delta.ToolName, Finished: false})
-			_ = rs.agent.messages.Update(persistCtx, *rs.currentAssistant)
-
 		case "tool_input_delta":
 			rs.currentAssistant.AppendToolCallInput(delta.ID, delta.Delta)
 		}
@@ -338,16 +320,6 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 		if am, ok := event.Message.(*libagent.AssistantMessage); ok {
 			if rs.currentAssistant == nil {
 				return nil
-			}
-			// Mark tool calls as finished and update usage.
-			for _, c := range am.Content {
-				if tc, ok2 := c.(interface {
-					GetToolCallID() string
-					GetToolName() string
-					GetInput() string
-				}); ok2 {
-					_ = tc
-				}
 			}
 			finishReason := message.FinishReasonUnknown
 			finishMessage := ""
@@ -368,22 +340,18 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 				}
 			}
 			rs.currentAssistant.AddFinish(finishReason, finishMessage, "")
-
-			if err := rs.agent.messages.Update(rs.genCtx, *rs.currentAssistant); err != nil {
+			if err := rs.persistAssistant(rs.genCtx); err != nil {
 				return err
 			}
-			rs.transientIDs = rs.transientIDs[:0]
 		}
 		if trm, ok := event.Message.(*libagent.ToolResultMessage); ok {
 			toolResult := message.FromAgentToolResult(trm)
-			created, err := rs.agent.messages.Create(rs.genCtx, rs.call.SessionID, message.CreateParams{
+			if _, err := rs.agent.messages.Create(rs.genCtx, rs.call.SessionID, message.CreateParams{
 				Role:  message.Tool,
 				Parts: []message.ContentPart{toolResult},
-			})
-			if err != nil {
+			}); err != nil {
 				return err
 			}
-			rs.transientIDs = append(rs.transientIDs, created.ID)
 		}
 
 		if um, ok := event.Message.(*libagent.UserMessage); ok {
@@ -429,73 +397,25 @@ func isEmptyMessage(m message.Message) bool {
 	return false
 }
 
-func sanitizeMessagesForModel(msgs []message.Message) []message.Message {
-	if len(msgs) == 0 {
-		return msgs
+func (rs *runState) persistAssistant(ctx context.Context) error {
+	if rs.currentAssistant == nil {
+		return nil
 	}
-
-	callCounts := make(map[string]int)
-	resultCounts := make(map[string]int)
-
-	for _, msg := range msgs {
-		for _, call := range msg.ToolCalls() {
-			id := strings.TrimSpace(call.ID)
-			if id == "" {
-				continue
-			}
-			callCounts[id]++
-		}
-		for _, result := range msg.ToolResults() {
-			id := strings.TrimSpace(result.ToolCallID)
-			if id == "" {
-				continue
-			}
-			resultCounts[id]++
-		}
+	toStore := rs.currentAssistant.Clone()
+	if len(toStore.Parts) == 0 {
+		rs.currentAssistant = nil
+		return nil
 	}
-
-	validIDs := make(map[string]struct{})
-	for id, calls := range callCounts {
-		if calls == 1 && resultCounts[id] == 1 {
-			validIDs[id] = struct{}{}
-		}
+	if _, err := rs.agent.messages.Create(ctx, rs.call.SessionID, message.CreateParams{
+		Role:     message.Assistant,
+		Parts:    toStore.Parts,
+		Model:    toStore.Model,
+		Provider: toStore.Provider,
+	}); err != nil {
+		return err
 	}
-	if len(validIDs) == len(callCounts) && len(validIDs) == len(resultCounts) {
-		return msgs
-	}
-
-	sanitized := make([]message.Message, 0, len(msgs))
-	for _, msg := range msgs {
-		clone := msg.Clone()
-		parts := make([]message.ContentPart, 0, len(clone.Parts))
-		for _, part := range clone.Parts {
-			switch p := part.(type) {
-			case message.ToolCall:
-				id := strings.TrimSpace(p.ID)
-				if id == "" {
-					continue
-				}
-				if _, ok := validIDs[id]; !ok {
-					continue
-				}
-				parts = append(parts, p)
-			case message.ToolResult:
-				id := strings.TrimSpace(p.ToolCallID)
-				if id == "" {
-					continue
-				}
-				if _, ok := validIDs[id]; !ok {
-					continue
-				}
-				parts = append(parts, p)
-			default:
-				parts = append(parts, part)
-			}
-		}
-		clone.Parts = parts
-		sanitized = append(sanitized, clone)
-	}
-	return sanitized
+	rs.currentAssistant = nil
+	return nil
 }
 
 // Cancel cancels a running session.
