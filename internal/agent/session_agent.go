@@ -314,6 +314,19 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 			if rs.currentAssistant == nil {
 				return nil
 			}
+			if len(am.Content) > 0 {
+				rs.currentAssistant.Content = append(rs.currentAssistant.Content[:0], am.Content...)
+			}
+			if len(rs.currentAssistant.ToolCalls) == 0 {
+				for _, tc := range am.Content.ToolCalls() {
+					rs.currentAssistant.ToolCalls = append(rs.currentAssistant.ToolCalls, libagent.ToolCallItem{
+						ID:               tc.ToolCallID,
+						Name:             tc.ToolName,
+						Input:            tc.Input,
+						ProviderExecuted: tc.ProviderExecuted,
+					})
+				}
+			}
 			rs.currentAssistant.Completed = true
 			rs.currentAssistant.CompleteReason = string(am.FinishReason)
 			if am.Error != nil {
