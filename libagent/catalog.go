@@ -78,6 +78,10 @@ type ModelInfo struct {
 	CostPer1MIn float64
 	// CostPer1MOut is the cost per 1M output tokens in USD.
 	CostPer1MOut float64
+	// CostPer1MInCached is the cost per 1M cached input tokens in USD.
+	CostPer1MInCached float64
+	// CostPer1MOutCached is the cost per 1M cached output tokens in USD.
+	CostPer1MOutCached float64
 }
 
 // HasCapability reports whether the model advertises a capability.
@@ -246,6 +250,7 @@ func DefaultCatalog() *Catalog {
 	c.AddCustomProvider(CodexProvider())
 	c.AddCustomProvider(SyntheticProvider())
 	c.AddCustomProvider(ZenProvider())
+	c.AddCustomProvider(ZenGoProvider())
 	return c
 }
 
