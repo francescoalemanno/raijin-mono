@@ -91,7 +91,7 @@ func NewAgent(opts AgentOptions) *Agent {
 		opts.FollowUpMode = QueueModeOneAtATime
 	}
 	if opts.ConvertToLLM == nil {
-		opts.ConvertToLLM = DefaultConvertToLLM
+		opts.ConvertToLLM = defaultConvertToLLMForRuntime(opts.RuntimeModel.ProviderType, opts.ProviderOptions)
 	}
 	opts.RuntimeModel.ModelInfo = normalizeModelInfo(opts.RuntimeModel.ModelInfo)
 	a := &Agent{
