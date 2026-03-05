@@ -8,7 +8,6 @@ import (
 
 	"github.com/francescoalemanno/raijin-mono/internal/agent"
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
-	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	sessionstore "github.com/francescoalemanno/raijin-mono/internal/session"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
@@ -55,7 +54,7 @@ func (s *Session) Tools() []libagent.Tool     { return s.agentTools }
 func (s *Session) Paths() *tools.PathRegistry { return s.paths }
 
 // ListMessages returns all stored messages for the current backend session.
-func (s *Session) ListMessages(ctx context.Context) ([]message.Message, error) {
+func (s *Session) ListMessages(ctx context.Context) ([]libagent.Message, error) {
 	if s.agent == nil || s.id == "" {
 		return nil, nil
 	}
@@ -73,7 +72,7 @@ func (s *Session) SetEventCallback(cb func(libagent.AgentEvent)) {
 // Reconfigure rebuilds the agent from a RuntimeModel while preserving service state.
 func (s *Session) Reconfigure(runtimeModel libagent.RuntimeModel) error {
 	var sessSvc sessionstore.Service
-	var msgSvc message.Service
+	var msgSvc libagent.MessageService
 	if s.agent != nil {
 		sessSvc = s.agent.Sessions()
 		msgSvc = s.agent.Messages()
@@ -110,7 +109,7 @@ func (s *Session) Clear(ctx context.Context) error {
 }
 
 // ForkTo creates a new durable child session pre-populated with msgs and switches to it.
-func (s *Session) ForkTo(ctx context.Context, parentSessionID, forkedFromMessageID string, msgs []message.Message) error {
+func (s *Session) ForkTo(ctx context.Context, parentSessionID, forkedFromMessageID string, msgs []libagent.Message) error {
 	if s.agent == nil {
 		return nil
 	}

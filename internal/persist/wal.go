@@ -22,9 +22,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
 	sessionstore "github.com/francescoalemanno/raijin-mono/internal/session"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 const (
@@ -77,34 +77,50 @@ type walSession struct {
 	UpdatedAt           int64  `json:"updated_at"`
 }
 
-// walMessage is the serialisable form of message.Message.
+// walMessage is the serialisable form of runtime libagent messages.
+// It also retains legacy fields for backward-compatible decode.
 type walMessage struct {
-	ID        string              `json:"id"`
-	Role      message.MessageRole `json:"role"`
-	SessionID string              `json:"session_id"`
-	Parts     []walPart           `json:"parts"`
-	Model     string              `json:"model,omitempty"`
-	Provider  string              `json:"provider,omitempty"`
-	CreatedAt int64               `json:"created_at"`
-	UpdatedAt int64               `json:"updated_at"`
+	Kind       string                `json:"kind,omitempty"`
+	User       *libagent.UserMessage `json:"user,omitempty"`
+	Assistant  *libagent.AssistantMessage `json:"assistant,omitempty"`
+	ToolResult *libagent.ToolResultMessage `json:"tool_result,omitempty"`
+
+	// Legacy v1 fields
+	ID         string            `json:"id,omitempty"`
+	Role       string            `json:"role,omitempty"`
+	SessionID  string            `json:"session_id,omitempty"`
+	Parts      []json.RawMessage `json:"parts,omitempty"`
+	Completion *walCompletion    `json:"completion,omitempty"`
+	Model      string            `json:"model,omitempty"`
+	Provider   string            `json:"provider,omitempty"`
+	CreatedAt  int64             `json:"created_at,omitempty"`
+	UpdatedAt  int64             `json:"updated_at,omitempty"`
 }
 
-type walPartType string
+type walCompletion struct {
+	Reason   string `json:"reason"`
+	Time     int64  `json:"time"`
+	Finished bool   `json:"finished"`
+	Message  string `json:"message,omitempty"`
+	Details  string `json:"details,omitempty"`
+}
+
+type legacyWalPartType string
 
 const (
-	walPartText       walPartType = "text"
-	walPartReasoning  walPartType = "reasoning"
-	walPartToolCall   walPartType = "tool_call"
-	walPartToolResult walPartType = "tool_result"
-	walPartFinish     walPartType = "finish"
-	walPartBinary     walPartType = "binary"
-	walPartSkill      walPartType = "skill"
+	legacyWalPartText       legacyWalPartType = "text"
+	legacyWalPartReasoning  legacyWalPartType = "reasoning"
+	legacyWalPartToolCall   legacyWalPartType = "tool_call"
+	legacyWalPartToolResult legacyWalPartType = "tool_result"
+	legacyWalPartFinish     legacyWalPartType = "finish"
+	legacyWalPartBinary     legacyWalPartType = "binary"
+	legacyWalPartSkill      legacyWalPartType = "skill"
 )
 
-// walPart encodes a single ContentPart as tagged JSON.
-type walPart struct {
-	T    walPartType     `json:"t"`
-	Data json.RawMessage `json:"d"`
+// legacyWalPart encodes historical part records used in WAL v1.
+type legacyWalPart struct {
+	T    legacyWalPartType `json:"t"`
+	Data json.RawMessage   `json:"d"`
 }
 
 // SessionSummary is the information exposed to the /sessions selector.
@@ -156,8 +172,8 @@ func OpenStore() (*Store, error) {
 // Sessions returns the session.Service backed by this store.
 func (st *Store) Sessions() sessionstore.Service { return st.sessSvc }
 
-// Messages returns the message.Service backed by this store.
-func (st *Store) Messages() message.Service { return st.msgSvc }
+// Messages returns the runtime message service backed by this store.
+func (st *Store) Messages() libagent.MessageService { return st.msgSvc }
 
 // ListSessionSummaries returns summaries of all known sessions, newest first.
 func (st *Store) ListSessionSummaries() []SessionSummary {
@@ -194,7 +210,7 @@ func (st *Store) CreateEphemeral() (sessionstore.Session, error) {
 // ForkSession creates a new durable child session linked to a parent session
 // and to the parent message where the fork starts. The child WAL starts with
 // session metadata only; ancestor messages are resolved at read time.
-func (st *Store) ForkSession(parentSessionID, forkedFromMessageID string, msgs []message.Message) (sessionstore.Session, error) {
+func (st *Store) ForkSession(parentSessionID, forkedFromMessageID string, msgs []libagent.Message) (sessionstore.Session, error) {
 	now := time.Now().Unix()
 	sess := sessionstore.Session{
 		ID:                  uuid.New().String(),
@@ -516,7 +532,7 @@ func replaySessionMeta(path string) (sessionstore.Session, error) {
 // compactWAL rewrites the WAL file for a session to contain only the minimal
 // entries needed to reconstruct current state: one session header entry and
 // one msg.create entry per surviving message. This prevents unbounded growth.
-func (st *Store) compactWAL(sessionID string, msgs []message.Message) {
+func (st *Store) compactWAL(sessionID string, msgs []libagent.Message) {
 	path := st.walPath(sessionID)
 
 	// Read the latest session metadata from the existing WAL.
@@ -548,9 +564,10 @@ func (st *Store) compactWAL(sessionID string, msgs []message.Message) {
 	lines = append(lines, headerLine)
 	for _, m := range msgs {
 		wm := messageToWalMsg(m)
+		meta := libagent.MessageMetaOf(m)
 		entry := walEntry{
 			V:         walVersion,
-			T:         m.CreatedAt,
+			T:         meta.CreatedAt,
 			Typ:       entryMsgCreate,
 			SessionID: sessionID,
 			Msg:       &wm,
@@ -588,7 +605,7 @@ func (st *Store) compactWAL(sessionID string, msgs []message.Message) {
 
 // replayMessages reads a WAL file and reconstructs the ordered message list.
 // The returned bool is true when at least one msg.delete_all entry was seen.
-func replayMessages(path string) ([]message.Message, bool, error) {
+func replayMessages(path string) ([]libagent.Message, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -598,7 +615,7 @@ func replayMessages(path string) ([]message.Message, bool, error) {
 	}
 	defer f.Close()
 
-	msgs := make(map[string]message.Message)
+	msgs := make(map[string]libagent.Message)
 	order := make([]string, 0)
 	hadDeleteAll := false
 
@@ -622,17 +639,31 @@ func replayMessages(path string) ([]message.Message, bool, error) {
 			if entry.Msg == nil {
 				continue
 			}
-			m := walMsgToMessage(*entry.Msg)
-			if _, seen := msgs[m.ID]; !seen {
-				order = append(order, m.ID)
+			m, ok := walMsgToMessage(*entry.Msg)
+			if !ok {
+				continue
 			}
-			msgs[m.ID] = m
+			id := libagent.MessageID(m)
+			if id == "" {
+				continue
+			}
+			if _, seen := msgs[id]; !seen {
+				order = append(order, id)
+			}
+			msgs[id] = m
 		case entryMsgUpdate:
 			if entry.Msg == nil {
 				continue
 			}
-			m := walMsgToMessage(*entry.Msg)
-			msgs[m.ID] = m
+			m, ok := walMsgToMessage(*entry.Msg)
+			if !ok {
+				continue
+			}
+			id := libagent.MessageID(m)
+			if id == "" {
+				continue
+			}
+			msgs[id] = m
 		case entryMsgDelete:
 			if entry.MsgID == "" {
 				continue
@@ -646,7 +677,7 @@ func replayMessages(path string) ([]message.Message, bool, error) {
 			}
 		case entryMsgDeleteAll:
 			hadDeleteAll = true
-			msgs = make(map[string]message.Message)
+			msgs = make(map[string]libagent.Message)
 			order = order[:0]
 		}
 	}
@@ -654,7 +685,7 @@ func replayMessages(path string) ([]message.Message, bool, error) {
 		return nil, hadDeleteAll, err
 	}
 
-	result := make([]message.Message, 0, len(order))
+	result := make([]libagent.Message, 0, len(order))
 	for _, id := range order {
 		if m, ok := msgs[id]; ok {
 			result = append(result, m)
@@ -705,119 +736,3 @@ func TitleFromFirstUserMessage(text string) string {
 	return string(runes[:titleMaxLen-1]) + "…"
 }
 
-// ---------------------------------------------------------------------------
-// Part serialisation helpers
-// ---------------------------------------------------------------------------
-
-func messageToWalMsg(m message.Message) walMessage {
-	wm := walMessage{
-		ID:        m.ID,
-		Role:      m.Role,
-		SessionID: m.SessionID,
-		CreatedAt: m.CreatedAt,
-		UpdatedAt: m.UpdatedAt,
-		Model:     m.Model,
-		Provider:  m.Provider,
-	}
-	for _, part := range m.Parts {
-		wp, ok := encodeWalPart(part)
-		if ok {
-			wm.Parts = append(wm.Parts, wp)
-		}
-	}
-	return wm
-}
-
-func walMsgToMessage(wm walMessage) message.Message {
-	m := message.Message{
-		ID:        wm.ID,
-		Role:      wm.Role,
-		SessionID: wm.SessionID,
-		CreatedAt: wm.CreatedAt,
-		UpdatedAt: wm.UpdatedAt,
-		Model:     wm.Model,
-		Provider:  wm.Provider,
-	}
-	for _, wp := range wm.Parts {
-		part, ok := decodeWalPart(wp)
-		if ok {
-			m.Parts = append(m.Parts, part)
-		}
-	}
-	return m
-}
-
-func encodeWalPart(part message.ContentPart) (walPart, bool) {
-	var t walPartType
-	switch part.(type) {
-	case message.TextContent:
-		t = walPartText
-	case message.ReasoningContent:
-		t = walPartReasoning
-	case message.ToolCall:
-		t = walPartToolCall
-	case message.ToolResult:
-		t = walPartToolResult
-	case message.Finish:
-		t = walPartFinish
-	case message.BinaryContent:
-		t = walPartBinary
-	case message.SkillContent:
-		t = walPartSkill
-	default:
-		return walPart{}, false
-	}
-	data, err := json.Marshal(part)
-	if err != nil {
-		return walPart{}, false
-	}
-	return walPart{T: t, Data: data}, true
-}
-
-func decodeWalPart(wp walPart) (message.ContentPart, bool) {
-	switch wp.T {
-	case walPartText:
-		var v message.TextContent
-		if json.Unmarshal(wp.Data, &v) != nil {
-			return nil, false
-		}
-		return v, true
-	case walPartReasoning:
-		var v message.ReasoningContent
-		if json.Unmarshal(wp.Data, &v) != nil {
-			return nil, false
-		}
-		return v, true
-	case walPartToolCall:
-		var v message.ToolCall
-		if json.Unmarshal(wp.Data, &v) != nil {
-			return nil, false
-		}
-		return v, true
-	case walPartToolResult:
-		var v message.ToolResult
-		if json.Unmarshal(wp.Data, &v) != nil {
-			return nil, false
-		}
-		return v, true
-	case walPartFinish:
-		var v message.Finish
-		if json.Unmarshal(wp.Data, &v) != nil {
-			return nil, false
-		}
-		return v, true
-	case walPartBinary:
-		var v message.BinaryContent
-		if json.Unmarshal(wp.Data, &v) != nil {
-			return nil, false
-		}
-		return v, true
-	case walPartSkill:
-		var v message.SkillContent
-		if json.Unmarshal(wp.Data, &v) != nil {
-			return nil, false
-		}
-		return v, true
-	}
-	return nil, false
-}

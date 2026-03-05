@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func TestReplaySessionMeta_UsesOnlySessionEntries(t *testing.T) {
@@ -43,17 +45,12 @@ func TestReplaySessionMeta_UsesOnlySessionEntries(t *testing.T) {
 	writeEntry(walEntry{
 		Typ: entryMsgUpdate,
 		Msg: &walMessage{
-			ID:        "m1",
-			Role:      "assistant",
-			SessionID: "s1",
-			Parts: []walPart{
-				{
-					T:    walPartText,
-					Data: json.RawMessage(`{"text":"` + strings.Repeat("x", 128*1024) + `"}`),
-				},
+			Kind: "assistant",
+			Assistant: &libagent.AssistantMessage{
+				Role: "assistant",
+				Text: strings.Repeat("x", 128*1024),
+				Meta: libagent.MessageMeta{ID: "m1", SessionID: "s1", CreatedAt: 2, UpdatedAt: 2},
 			},
-			CreatedAt: 2,
-			UpdatedAt: 2,
 		},
 	})
 

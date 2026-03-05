@@ -3,19 +3,19 @@ package chat
 import (
 	"testing"
 
-	"github.com/francescoalemanno/raijin-mono/internal/message"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func TestCollectForkCandidates_NewestFirstAndUserOnly(t *testing.T) {
 	t.Parallel()
 
-	msgs := []message.Message{
-		{ID: "u1", Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: "first prompt"}}},
-		{ID: "a1", Role: message.Assistant, Parts: []message.ContentPart{message.TextContent{Text: "answer"}}},
-		{ID: "u2", Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: "second\n prompt"}}},
-		{ID: "t1", Role: message.Tool, Parts: []message.ContentPart{message.ToolResult{Name: "read", Content: "ok"}}},
-		{ID: "u3", Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: "third"}}},
-		{ID: "u-empty", Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: "   "}}},
+	msgs := []libagent.Message{
+		&libagent.UserMessage{Meta: libagent.MessageMeta{ID: "u1"}, Role: "user", Content: "first prompt"},
+		&libagent.AssistantMessage{Meta: libagent.MessageMeta{ID: "a1"}, Role: "assistant", Text: "answer", Completed: true},
+		&libagent.UserMessage{Meta: libagent.MessageMeta{ID: "u2"}, Role: "user", Content: "second\n prompt"},
+		&libagent.ToolResultMessage{Meta: libagent.MessageMeta{ID: "t1"}, Role: "toolResult", ToolName: "read", Content: "ok"},
+		&libagent.UserMessage{Meta: libagent.MessageMeta{ID: "u3"}, Role: "user", Content: "third"},
+		&libagent.UserMessage{Meta: libagent.MessageMeta{ID: "u-empty"}, Role: "user", Content: "   "},
 	}
 
 	candidates := collectForkCandidates(msgs)

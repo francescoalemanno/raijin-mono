@@ -10,7 +10,6 @@ import (
 
 	"github.com/francescoalemanno/raijin-mono/internal/agent"
 	chatsession "github.com/francescoalemanno/raijin-mono/internal/chat/session"
-	"github.com/francescoalemanno/raijin-mono/internal/message"
 )
 
 // RunOneShot executes a single prompt turn in non-interactive CLI mode and
@@ -57,10 +56,11 @@ func RunOneShot(runtimeModel libagent.RuntimeModel, modelCfg libagent.ModelConfi
 		return "", err
 	}
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != message.Assistant {
+		am, ok := msgs[i].(*libagent.AssistantMessage)
+		if !ok {
 			continue
 		}
-		text := msgs[i].Content().Text
+		text := am.Text
 		if strings.TrimSpace(text) == "" {
 			continue
 		}

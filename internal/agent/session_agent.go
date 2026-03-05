@@ -14,7 +14,6 @@ import (
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 
 	"github.com/francescoalemanno/raijin-mono/internal/core"
-	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/session"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
@@ -24,7 +23,7 @@ import (
 type SessionAgentCall struct {
 	SessionID        string
 	Prompt           string
-	Attachments      []message.BinaryContent
+	Attachments      []libagent.FilePart
 	MaxOutputTokens  int64
 	Temperature      *float64
 	TopP             *float64
@@ -43,7 +42,7 @@ type SessionAgent struct {
 	activeRequests map[string]context.CancelFunc
 	activeAgents   map[string]*libagent.Agent
 
-	messages message.Service
+	messages libagent.MessageService
 	sessions session.Service
 }
 
@@ -52,7 +51,7 @@ type SessionAgentOptions struct {
 	Model        libagent.RuntimeModel
 	SystemPrompt string
 	Tools        []libagent.Tool
-	Messages     message.Service
+	Messages     libagent.MessageService
 	Sessions     session.Service
 }
 
@@ -132,13 +131,13 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	}()
 
 	// Build history from stored messages.
-	msgs = message.SanitizeHistory(msgs)
+	msgs = libagent.SanitizeHistory(msgs)
 	history := make([]libagent.Message, 0, len(msgs))
 	for _, m := range msgs {
 		if isEmptyMessage(m) {
 			continue
 		}
-		history = append(history, message.ToAgentMessages(m)...)
+		history = append(history, libagent.CloneMessage(m))
 	}
 
 	// Resolve effective max output tokens.
@@ -158,17 +157,7 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	}
 
 	// Prepare the user prompt message for the agent.
-	prepared := message.PrepareUserRequest(message.UserRequest{
-		Prompt:      call.Prompt,
-		Attachments: call.Attachments,
-	})
-
-	promptMsg := &libagent.UserMessage{
-		Role:      "user",
-		Content:   prepared.Prompt,
-		Files:     prepared.Files,
-		Timestamp: time.Now(),
-	}
+	promptMsg := toRuntimeUserMessage(call.Prompt, call.Attachments)
 
 	// Build provider options (thinking level, reasoning config, Codex instructions, etc.).
 	providerOpts := model.BuildCallProviderOptions(systemPrompt)
@@ -238,8 +227,9 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 			return promptErr
 		}
 		if rs.currentAssistant != nil {
-			rs.currentAssistant.FinishThinking()
-			rs.currentAssistant.AddFinish(message.FinishReasonError, promptErr.Error(), "")
+			rs.currentAssistant.Completed = true
+			rs.currentAssistant.CompleteReason = "error"
+			rs.currentAssistant.CompleteMessage = promptErr.Error()
 			if err := rs.persistAssistant(ctx); err != nil {
 				return err
 			}
@@ -251,8 +241,9 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 			return rs.loopErr
 		}
 		if rs.currentAssistant != nil {
-			rs.currentAssistant.FinishThinking()
-			rs.currentAssistant.AddFinish(message.FinishReasonError, rs.loopErr.Error(), "")
+			rs.currentAssistant.Completed = true
+			rs.currentAssistant.CompleteReason = "error"
+			rs.currentAssistant.CompleteMessage = rs.loopErr.Error()
 			if err := rs.persistAssistant(ctx); err != nil {
 				return err
 			}
@@ -270,7 +261,7 @@ type runState struct {
 	model  libagent.RuntimeModel
 	genCtx context.Context
 
-	currentAssistant    *message.Message
+	currentAssistant    *libagent.AssistantMessage
 	textStarted         bool
 	initialUserNotified bool
 	loopErr             error
@@ -280,10 +271,9 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 	switch event.Type {
 	case libagent.AgentEventTypeMessageStart:
 		if _, ok := event.Message.(*libagent.AssistantMessage); ok {
-			rs.currentAssistant = &message.Message{
-				Role:      message.Assistant,
+			rs.currentAssistant = libagent.NewAssistantMessage("", "", nil, time.Now())
+			rs.currentAssistant.Meta = libagent.MessageMeta{
 				SessionID: rs.call.SessionID,
-				Parts:     []message.ContentPart{},
 				Model:     rs.model.ModelCfg.Model,
 				Provider:  rs.model.ModelCfg.Provider,
 			}
@@ -300,20 +290,23 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 		}
 		switch delta.Type {
 		case "reasoning_delta":
-			rs.currentAssistant.AppendReasoningContent(delta.Delta)
-		case "reasoning_end":
-			rs.currentAssistant.FinishThinking()
+			rs.currentAssistant.Reasoning += delta.Delta
 		case "text_delta":
 			text := delta.Delta
 			if !rs.textStarted {
 				text = strings.TrimPrefix(text, "\n")
 				rs.textStarted = true
 			}
-			rs.currentAssistant.AppendContent(text)
+			rs.currentAssistant.Text += text
 		case "tool_input_start":
-			rs.currentAssistant.AddToolCall(message.ToolCall{ID: delta.ID, Name: delta.ToolName, Finished: false})
+			rs.currentAssistant.ToolCalls = append(rs.currentAssistant.ToolCalls, libagent.ToolCallItem{ID: delta.ID, Name: delta.ToolName})
 		case "tool_input_delta":
-			rs.currentAssistant.AppendToolCallInput(delta.ID, delta.Delta)
+			for i := range rs.currentAssistant.ToolCalls {
+				if rs.currentAssistant.ToolCalls[i].ID == delta.ID {
+					rs.currentAssistant.ToolCalls[i].Input += delta.Delta
+					break
+				}
+			}
 		}
 
 	case libagent.AgentEventTypeMessageEnd:
@@ -321,61 +314,52 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 			if rs.currentAssistant == nil {
 				return nil
 			}
-			finishReason := message.FinishReasonUnknown
-			finishMessage := ""
-			switch am.FinishReason {
-			case "length":
-				finishReason = message.FinishReasonMaxTokens
-			case "stop":
-				finishReason = message.FinishReasonEndTurn
-			case "tool-calls":
-				finishReason = message.FinishReasonToolUse
-			case "error":
-				finishReason = message.FinishReasonError
-				if am.Error != nil {
-					finishMessage = am.Error.Error()
-					if rs.loopErr == nil {
-						rs.loopErr = am.Error
-					}
+			rs.currentAssistant.Completed = true
+			rs.currentAssistant.CompleteReason = string(am.FinishReason)
+			if am.Error != nil {
+				rs.currentAssistant.CompleteMessage = am.Error.Error()
+				if rs.loopErr == nil {
+					rs.loopErr = am.Error
 				}
 			}
-			rs.currentAssistant.AddFinish(finishReason, finishMessage, "")
 			if err := rs.persistAssistant(rs.genCtx); err != nil {
 				return err
 			}
 		}
 		if trm, ok := event.Message.(*libagent.ToolResultMessage); ok {
-			toolResult := message.FromAgentToolResult(trm)
-			if _, err := rs.agent.messages.Create(rs.genCtx, rs.call.SessionID, message.CreateParams{
-				Role:  message.Tool,
-				Parts: []message.ContentPart{toolResult},
-			}); err != nil {
+			sessionID := rs.call.SessionID
+			if strings.TrimSpace(trm.Meta.SessionID) != "" {
+				sessionID = trm.Meta.SessionID
+			}
+			stored := libagent.CloneMessage(trm)
+			meta := libagent.MessageMetaOf(stored)
+			if meta.SessionID == "" {
+				meta.SessionID = sessionID
+			}
+			libagent.SetMessageMeta(stored, meta)
+			if _, err := rs.agent.messages.Create(rs.genCtx, sessionID, stored); err != nil {
 				return err
 			}
 		}
 
 		if um, ok := event.Message.(*libagent.UserMessage); ok {
-			parts := make([]message.ContentPart, 0, 1+len(um.Files))
-			if um.Content != "" {
-				parts = append(parts, message.TextContent{Text: um.Content})
-			}
-			for _, f := range um.Files {
-				parts = append(parts, message.BinaryContent{
-					Path:     f.Filename,
-					MIMEType: f.MediaType,
-					Data:     append([]byte(nil), f.Data...),
-				})
-			}
-			if len(parts) > 0 {
-				created, err := rs.agent.messages.Create(rs.genCtx, rs.call.SessionID, message.CreateParams{
-					Role:  message.User,
-					Parts: parts,
-				})
+			if strings.TrimSpace(um.Content) != "" || len(um.Files) > 0 {
+				sessionID := rs.call.SessionID
+				if strings.TrimSpace(um.Meta.SessionID) != "" {
+					sessionID = um.Meta.SessionID
+				}
+				stored := libagent.CloneMessage(um)
+				meta := libagent.MessageMetaOf(stored)
+				if meta.SessionID == "" {
+					meta.SessionID = sessionID
+				}
+				libagent.SetMessageMeta(stored, meta)
+				created, err := rs.agent.messages.Create(rs.genCtx, sessionID, stored)
 				if err != nil {
 					return err
 				}
 				if !rs.initialUserNotified && rs.call.OnMessageCreated != nil {
-					rs.call.OnMessageCreated(created.ID)
+					rs.call.OnMessageCreated(libagent.MessageID(created))
 					rs.initialUserNotified = true
 				}
 			}
@@ -387,31 +371,38 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 	return nil
 }
 
-func isEmptyMessage(m message.Message) bool {
-	if len(m.Parts) == 0 {
+func isEmptyMessage(m libagent.Message) bool {
+	switch msg := m.(type) {
+	case *libagent.UserMessage:
+		return strings.TrimSpace(msg.Content) == "" && len(msg.Files) == 0
+	case *libagent.AssistantMessage:
+		return !msg.Completed || (strings.TrimSpace(msg.Text) == "" && strings.TrimSpace(msg.Reasoning) == "" && len(msg.ToolCalls) == 0)
+	case *libagent.ToolResultMessage:
+		return strings.TrimSpace(msg.ToolCallID) == "" || strings.TrimSpace(msg.ToolName) == ""
+	default:
 		return true
 	}
-	if m.Role == message.Assistant && len(m.ToolCalls()) == 0 && m.Content().Text == "" && m.ReasoningContent().Thinking == "" {
-		return true
+}
+
+func toRuntimeUserMessage(text string, attachments []libagent.FilePart) *libagent.UserMessage {
+	return &libagent.UserMessage{
+		Role:      "user",
+		Content:   libagent.PromptWithUserAttachments(strings.TrimSpace(text), attachments),
+		Files:     libagent.NonTextFiles(attachments),
+		Timestamp: time.Now(),
 	}
-	return false
 }
 
 func (rs *runState) persistAssistant(ctx context.Context) error {
 	if rs.currentAssistant == nil {
 		return nil
 	}
-	toStore := rs.currentAssistant.Clone()
-	if len(toStore.Parts) == 0 {
+	toStore := libagent.CloneMessage(rs.currentAssistant)
+	if isEmptyMessage(toStore) {
 		rs.currentAssistant = nil
 		return nil
 	}
-	if _, err := rs.agent.messages.Create(ctx, rs.call.SessionID, message.CreateParams{
-		Role:     message.Assistant,
-		Parts:    toStore.Parts,
-		Model:    toStore.Model,
-		Provider: toStore.Provider,
-	}); err != nil {
+	if _, err := rs.agent.messages.Create(ctx, rs.call.SessionID, toStore); err != nil {
 		return err
 	}
 	rs.currentAssistant = nil
@@ -444,16 +435,7 @@ func (a *SessionAgent) Steer(_ context.Context, call SessionAgentCall) error {
 		return errors.New("session is not running")
 	}
 
-	prepared := message.PrepareUserRequest(message.UserRequest{
-		Prompt:      call.Prompt,
-		Attachments: call.Attachments,
-	})
-	ag.Steer(&libagent.UserMessage{
-		Role:      "user",
-		Content:   prepared.Prompt,
-		Files:     prepared.Files,
-		Timestamp: time.Now(),
-	})
+	ag.Steer(toRuntimeUserMessage(call.Prompt, call.Attachments))
 	return nil
 }
 
@@ -525,7 +507,7 @@ func (a *SessionAgent) SetTools(t []libagent.Tool) {
 }
 
 // Messages returns the message service.
-func (a *SessionAgent) Messages() message.Service {
+func (a *SessionAgent) Messages() libagent.MessageService {
 	return a.messages
 }
 
@@ -535,7 +517,7 @@ func (a *SessionAgent) Sessions() session.Service {
 }
 
 // NewSessionAgentFromConfig creates a SessionAgent from a RuntimeModel, optionally reusing existing services.
-func NewSessionAgentFromConfig(runtimeModel libagent.RuntimeModel, msgService message.Service, sessService session.Service) (*SessionAgent, error) {
+func NewSessionAgentFromConfig(runtimeModel libagent.RuntimeModel, msgService libagent.MessageService, sessService session.Service) (*SessionAgent, error) {
 	if runtimeModel.Model == nil {
 		return nil, ErrNoModelConfigured
 	}
@@ -543,7 +525,7 @@ func NewSessionAgentFromConfig(runtimeModel libagent.RuntimeModel, msgService me
 	systemPrompt := BuildSystemPrompt()
 
 	if msgService == nil {
-		msgService = message.NewInMemoryService()
+		msgService = libagent.NewInMemoryMessageService()
 	}
 	if sessService == nil {
 		sessService = session.NewInMemoryService()

@@ -1,12 +1,11 @@
 package chat
 
 import (
-	"encoding/base64"
 	"testing"
 
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/tui"
 
-	"github.com/francescoalemanno/raijin-mono/internal/message"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func TestAppendStoredMessage_AssistantReasoningRendersThinkingBlock(t *testing.T) {
@@ -15,9 +14,10 @@ func TestAppendStoredMessage_AssistantReasoningRendersThinkingBlock(t *testing.T
 		pendingTools: make(map[string]*ToolExecutionComponent),
 	}
 
-	app.appendStoredMessage(message.Message{
-		Role:  message.Assistant,
-		Parts: []message.ContentPart{message.ReasoningContent{Thinking: "step one\nstep two"}},
+	app.appendStoredMessage(&libagent.AssistantMessage{
+		Role:      "assistant",
+		Reasoning: "step one\nstep two",
+		Completed: true,
 	})
 
 	if len(app.items) != 2 {
@@ -34,13 +34,13 @@ func TestAppendStoredMessage_AssistantUnfinishedToolCallRehydratesAsCancelledOnF
 		pendingTools: make(map[string]*ToolExecutionComponent),
 	}
 
-	app.appendStoredMessage(message.Message{
-		Role: message.Assistant,
-		Parts: []message.ContentPart{message.ToolCall{
-			ID:       "tool-1",
-			Name:     "read",
-			Input:    `{"path":"README.md"}`,
-			Finished: false,
+	app.appendStoredMessage(&libagent.AssistantMessage{
+		Role:      "assistant",
+		Completed: true,
+		ToolCalls: []libagent.ToolCallItem{{
+			ID:    "tool-1",
+			Name:  "read",
+			Input: `{"path":"README.md"}`,
 		}},
 	})
 
@@ -80,15 +80,13 @@ func TestAppendStoredMessage_ToolResultWithImageRehydratesMediaMetadata(t *testi
 		pendingTools: make(map[string]*ToolExecutionComponent),
 	}
 
-	app.appendStoredMessage(message.Message{
-		Role: message.Tool,
-		Parts: []message.ContentPart{message.ToolResult{
-			ToolCallID: "tool-1",
-			Name:       "read",
-			Content:    "Loaded image/png content",
-			Data:       base64.StdEncoding.EncodeToString(pngData),
-			MIMEType:   "image/png",
-		}},
+	app.appendStoredMessage(&libagent.ToolResultMessage{
+		Role:       "toolResult",
+		ToolCallID: "tool-1",
+		ToolName:   "read",
+		Content:    "Loaded image/png content",
+		Data:       pngData,
+		MIMEType:   "image/png",
 	})
 
 	if len(app.items) != 1 {

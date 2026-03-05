@@ -3,13 +3,13 @@ package agent
 import (
 	"testing"
 
-	"github.com/francescoalemanno/raijin-mono/internal/message"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func TestPersistAssistant_NoIDOnBufferedMessage(t *testing.T) {
 	rs := &runState{}
-	rs.currentAssistant = &message.Message{Role: message.Assistant}
-	if rs.currentAssistant.ID != "" {
+	rs.currentAssistant = &libagent.AssistantMessage{Role: "assistant"}
+	if rs.currentAssistant.Meta.ID != "" {
 		t.Fatalf("buffered assistant should not have an ID before persistence")
 	}
 }

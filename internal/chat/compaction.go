@@ -6,7 +6,6 @@ import (
 	"math"
 	"strings"
 
-	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/tui"
@@ -88,9 +87,6 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`
 
-// compactConversation rewrites the current session history to:
-// 1) a summary message
-// 2) the most recent kept tail
 func (app *ChatApp) compactConversation(customInstructions string) error {
 	var canRun bool
 	app.dispatchSync(func(_ tui.UIToken) {
@@ -141,10 +137,7 @@ func (app *ChatApp) compactConversation(customInstructions string) error {
 	}
 
 	summaryText := "[Context checkpoint created by /compact]\n\n" + strings.TrimSpace(summary)
-	if _, err := msgSvc.Create(context.Background(), sessionID, message.CreateParams{
-		Role:  message.User,
-		Parts: []message.ContentPart{message.TextContent{Text: summaryText}},
-	}); err != nil {
+	if _, err := msgSvc.Create(context.Background(), sessionID, &libagent.UserMessage{Role: "user", Content: summaryText}); err != nil {
 		if rollbackErr := restoreMessages(context.Background(), msgSvc, sessionID, msgs); rollbackErr != nil {
 			return fmt.Errorf("failed to store compaction summary: %w (rollback failed: %v)", err, rollbackErr)
 		}
@@ -152,13 +145,7 @@ func (app *ChatApp) compactConversation(customInstructions string) error {
 	}
 
 	for _, msg := range kept {
-		clone := msg.Clone()
-		if _, err := msgSvc.Create(context.Background(), sessionID, message.CreateParams{
-			Role:     clone.Role,
-			Parts:    clone.Parts,
-			Model:    clone.Model,
-			Provider: clone.Provider,
-		}); err != nil {
+		if _, err := msgSvc.Create(context.Background(), sessionID, libagent.CloneMessage(msg)); err != nil {
 			if rollbackErr := restoreMessages(context.Background(), msgSvc, sessionID, msgs); rollbackErr != nil {
 				return fmt.Errorf("failed to restore kept history: %w (rollback failed: %v)", err, rollbackErr)
 			}
@@ -181,7 +168,7 @@ func (app *ChatApp) compactConversation(customInstructions string) error {
 	return nil
 }
 
-func generateCompactionSummary(ctx context.Context, model libagent.RuntimeModel, msgs []message.Message, customInstructions string) (string, error) {
+func generateCompactionSummary(ctx context.Context, model libagent.RuntimeModel, msgs []libagent.Message, customInstructions string) (string, error) {
 	conversation := serializeConversationForCompaction(msgs)
 	if strings.TrimSpace(conversation) == "" {
 		return "", fmt.Errorf("no content to summarize")
@@ -217,25 +204,19 @@ func generateCompactionSummary(ctx context.Context, model libagent.RuntimeModel,
 	return summary, nil
 }
 
-func restoreMessages(ctx context.Context, msgSvc message.Service, sessionID string, msgs []message.Message) error {
+func restoreMessages(ctx context.Context, msgSvc libagent.MessageService, sessionID string, msgs []libagent.Message) error {
 	if err := msgSvc.DeleteAll(ctx, sessionID); err != nil {
 		return err
 	}
 	for _, msg := range msgs {
-		clone := msg.Clone()
-		if _, err := msgSvc.Create(ctx, sessionID, message.CreateParams{
-			Role:     clone.Role,
-			Parts:    clone.Parts,
-			Model:    clone.Model,
-			Provider: clone.Provider,
-		}); err != nil {
+		if _, err := msgSvc.Create(ctx, sessionID, libagent.CloneMessage(msg)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func findCompactionCutIndex(msgs []message.Message, keepRecentTokens int64) int {
+func findCompactionCutIndex(msgs []libagent.Message, keepRecentTokens int64) int {
 	base := findTokenBudgetCutIndex(msgs, keepRecentTokens)
 	if base <= 0 || base >= len(msgs) {
 		return 0
@@ -254,7 +235,7 @@ func findCompactionCutIndex(msgs []message.Message, keepRecentTokens int64) int 
 	return 0
 }
 
-func findTokenBudgetCutIndex(msgs []message.Message, keepRecentTokens int64) int {
+func findTokenBudgetCutIndex(msgs []libagent.Message, keepRecentTokens int64) int {
 	if len(msgs) == 0 || keepRecentTokens <= 0 {
 		return 0
 	}
@@ -270,43 +251,36 @@ func findTokenBudgetCutIndex(msgs []message.Message, keepRecentTokens int64) int
 	return cut
 }
 
-func isValidCompactionCutIndex(msgs []message.Message, cut int) bool {
+func isValidCompactionCutIndex(msgs []libagent.Message, cut int) bool {
 	if cut <= 0 || cut >= len(msgs) {
 		return false
 	}
-	if msgs[cut].Role == message.Tool {
+	if _, ok := msgs[cut].(*libagent.ToolResultMessage); ok {
 		return false
 	}
-
 	return hasBijectiveToolCoupling(msgs[:cut]) && hasBijectiveToolCoupling(msgs[cut:])
 }
 
-func hasBijectiveToolCoupling(msgs []message.Message) bool {
+func hasBijectiveToolCoupling(msgs []libagent.Message) bool {
 	callCounts := make(map[string]int)
 	resultCounts := make(map[string]int)
 
 	for _, msg := range msgs {
-		switch msg.Role {
-		case message.Assistant:
-			for _, call := range msg.ToolCalls() {
+		switch m := msg.(type) {
+		case *libagent.AssistantMessage:
+			for _, call := range m.ToolCalls {
 				id := strings.TrimSpace(call.ID)
 				if id == "" {
 					return false
 				}
 				callCounts[id]++
 			}
-		case message.Tool:
-			results := msg.ToolResults()
-			if len(results) == 0 {
+		case *libagent.ToolResultMessage:
+			id := strings.TrimSpace(m.ToolCallID)
+			if id == "" {
 				return false
 			}
-			for _, result := range results {
-				id := strings.TrimSpace(result.ToolCallID)
-				if id == "" {
-					return false
-				}
-				resultCounts[id]++
-			}
+			resultCounts[id]++
 		}
 	}
 
@@ -326,27 +300,27 @@ func hasBijectiveToolCoupling(msgs []message.Message) bool {
 	return true
 }
 
-func estimateMessageTokens(msg message.Message) int64 {
+func estimateMessageTokens(msg libagent.Message) int64 {
 	var chars int64
-	for _, part := range msg.Parts {
-		switch p := part.(type) {
-		case message.TextContent:
-			chars += int64(len(p.Text))
-		case message.ReasoningContent:
-			chars += int64(len(p.Thinking))
-		case message.ToolCall:
-			chars += int64(len(p.Name) + len(p.Input) + len(p.ID))
-		case message.ToolResult:
-			chars += int64(len(p.Content) + len(p.Metadata) + len(p.Name))
-			if p.Data != "" {
+	switch m := msg.(type) {
+	case *libagent.UserMessage:
+		chars += int64(len(m.Content))
+		for _, f := range m.Files {
+			if strings.HasPrefix(f.MediaType, "text/") {
+				chars += int64(len(f.Data))
+			} else {
 				chars += 4_800
 			}
-		case message.BinaryContent:
+		}
+	case *libagent.AssistantMessage:
+		chars += int64(len(m.Text) + len(m.Reasoning) + len(m.CompleteReason) + len(m.CompleteMessage) + len(m.CompleteDetails))
+		for _, tc := range m.ToolCalls {
+			chars += int64(len(tc.ID) + len(tc.Name) + len(tc.Input))
+		}
+	case *libagent.ToolResultMessage:
+		chars += int64(len(m.Content) + len(m.ToolName) + len(m.Metadata))
+		if len(m.Data) > 0 {
 			chars += 4_800
-		case message.SkillContent:
-			chars += int64(len(p.Name) + len(p.Content))
-		case message.Finish:
-			chars += int64(len(p.Message) + len(p.Details) + len(p.Reason))
 		}
 	}
 	if chars <= 0 {
@@ -355,26 +329,25 @@ func estimateMessageTokens(msg message.Message) int64 {
 	return int64(math.Ceil(float64(chars) / 4.0))
 }
 
-func serializeConversationForCompaction(msgs []message.Message) string {
+func serializeConversationForCompaction(msgs []libagent.Message) string {
 	parts := make([]string, 0, len(msgs))
 	for _, msg := range msgs {
-		switch msg.Role {
-		case message.User:
-			text := strings.TrimSpace(msg.Content().Text)
+		switch m := msg.(type) {
+		case *libagent.UserMessage:
+			text := strings.TrimSpace(m.Content)
 			if text != "" {
 				parts = append(parts, "[User]: "+text)
 			}
-		case message.Assistant:
-			if thinking := strings.TrimSpace(msg.ReasoningContent().Thinking); thinking != "" {
+		case *libagent.AssistantMessage:
+			if thinking := strings.TrimSpace(m.Reasoning); thinking != "" {
 				parts = append(parts, "[Assistant thinking]: "+thinking)
 			}
-			if text := strings.TrimSpace(msg.Content().Text); text != "" {
+			if text := strings.TrimSpace(m.Text); text != "" {
 				parts = append(parts, "[Assistant]: "+text)
 			}
-			calls := msg.ToolCalls()
-			if len(calls) > 0 {
-				callParts := make([]string, 0, len(calls))
-				for _, c := range calls {
+			if len(m.ToolCalls) > 0 {
+				callParts := make([]string, 0, len(m.ToolCalls))
+				for _, c := range m.ToolCalls {
 					input := strings.TrimSpace(c.Input)
 					if input == "" {
 						input = "{}"
@@ -383,15 +356,12 @@ func serializeConversationForCompaction(msgs []message.Message) string {
 				}
 				parts = append(parts, "[Assistant tool calls]: "+strings.Join(callParts, "; "))
 			}
-		case message.Tool:
-			results := msg.ToolResults()
-			for _, r := range results {
-				text := strings.TrimSpace(r.Content)
-				if text == "" {
-					continue
-				}
-				parts = append(parts, "[Tool result]: "+text)
+		case *libagent.ToolResultMessage:
+			text := strings.TrimSpace(m.Content)
+			if text == "" {
+				continue
 			}
+			parts = append(parts, "[Tool result]: "+text)
 		}
 	}
 	return strings.Join(parts, "\n\n")

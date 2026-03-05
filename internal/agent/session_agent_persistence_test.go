@@ -4,12 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/francescoalemanno/raijin-mono/internal/message"
-
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-func newRunStateForTest(msgSvc message.Service) *runState {
+func newRunStateForTest(msgSvc libagent.MessageService) *runState {
 	ag := &SessionAgent{messages: msgSvc}
 	return &runState{
 		agent: ag,
@@ -23,7 +21,7 @@ func newRunStateForTest(msgSvc message.Service) *runState {
 }
 
 func TestRunState_DoesNotPersistAssistantBeforeMessageEnd(t *testing.T) {
-	msgSvc := message.NewInMemoryService()
+	msgSvc := libagent.NewInMemoryMessageService()
 	rs := newRunStateForTest(msgSvc)
 
 	if err := rs.handleEvent(context.Background(), libagent.AgentEvent{
@@ -50,7 +48,7 @@ func TestRunState_DoesNotPersistAssistantBeforeMessageEnd(t *testing.T) {
 }
 
 func TestRunState_PersistsAssistantOnlyAtMessageEnd(t *testing.T) {
-	msgSvc := message.NewInMemoryService()
+	msgSvc := libagent.NewInMemoryMessageService()
 	rs := newRunStateForTest(msgSvc)
 
 	if err := rs.handleEvent(context.Background(), libagent.AgentEvent{
@@ -82,10 +80,14 @@ func TestRunState_PersistsAssistantOnlyAtMessageEnd(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("persisted messages=%d want 1", len(msgs))
 	}
-	if msgs[0].Role != message.Assistant {
-		t.Fatalf("role=%s want assistant", msgs[0].Role)
+	am, ok := msgs[0].(*libagent.AssistantMessage)
+	if !ok {
+		t.Fatalf("message type=%T want *libagent.AssistantMessage", msgs[0])
 	}
-	if msgs[0].Content().Text != "hello" {
-		t.Fatalf("assistant text=%q want %q", msgs[0].Content().Text, "hello")
+	if am.GetRole() != "assistant" {
+		t.Fatalf("role=%s want assistant", am.GetRole())
+	}
+	if am.Text != "hello" {
+		t.Fatalf("assistant text=%q want %q", am.Text, "hello")
 	}
 }

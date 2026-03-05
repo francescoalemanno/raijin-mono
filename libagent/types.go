@@ -48,12 +48,24 @@ type Message interface {
 	GetTimestamp() time.Time
 }
 
+// MessageMeta carries persistence metadata so runtime messages can be stored
+// directly without sidecar structs.
+type MessageMeta struct {
+	ID        string
+	SessionID string
+	Model     string
+	Provider  string
+	CreatedAt int64
+	UpdatedAt int64
+}
+
 // UserMessage is a standard user message.
 type UserMessage struct {
 	Role      string
 	Content   string
 	Files     []FilePart
 	Timestamp time.Time
+	Meta      MessageMeta
 }
 
 func (m *UserMessage) GetRole() string         { return "user" }
@@ -62,11 +74,19 @@ func (m *UserMessage) GetTimestamp() time.Time { return m.Timestamp }
 // AssistantMessage is a completed assistant response.
 type AssistantMessage struct {
 	Role         string
+	Text         string
+	Reasoning    string
+	ToolCalls    []ToolCallItem
+	Completed    bool
+	CompleteReason string
+	CompleteMessage string
+	CompleteDetails string
 	Content      fantasy.ResponseContent
 	FinishReason fantasy.FinishReason
 	Usage        fantasy.Usage
 	Error        error
 	Timestamp    time.Time
+	Meta         MessageMeta
 }
 
 func (m *AssistantMessage) GetRole() string         { return "assistant" }
@@ -83,6 +103,7 @@ type ToolResultMessage struct {
 	MIMEType   string
 	Metadata   string
 	Timestamp  time.Time
+	Meta       MessageMeta
 }
 
 func (m *ToolResultMessage) GetRole() string         { return "toolResult" }
@@ -108,6 +129,9 @@ func NewAssistantMessage(text, reasoning string, toolCalls []ToolCallItem, ts ti
 	}
 	return &AssistantMessage{
 		Role:      "assistant",
+		Text:      text,
+		Reasoning: reasoning,
+		ToolCalls: append([]ToolCallItem(nil), toolCalls...),
 		Content:   content,
 		Timestamp: ts,
 	}

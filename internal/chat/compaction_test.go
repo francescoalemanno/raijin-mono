@@ -3,17 +3,17 @@ package chat
 import (
 	"testing"
 
-	"github.com/francescoalemanno/raijin-mono/internal/message"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func TestIsValidCompactionCutIndex_BijectiveOnBothSides(t *testing.T) {
-	msgs := []message.Message{
-		{Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: "q"}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.ToolCall{ID: "call-1", Name: "tool"}}},
-		{Role: message.Tool, Parts: []message.ContentPart{message.ToolResult{ToolCallID: "call-1", Name: "tool", Content: "ok"}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.TextContent{Text: "a"}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.ToolCall{ID: "call-2", Name: "tool"}}},
-		{Role: message.Tool, Parts: []message.ContentPart{message.ToolResult{ToolCallID: "call-2", Name: "tool", Content: "ok"}}},
+	msgs := []libagent.Message{
+		&libagent.UserMessage{Role: "user", Content: "q"},
+		&libagent.AssistantMessage{Role: "assistant", Completed: true, ToolCalls: []libagent.ToolCallItem{{ID: "call-1", Name: "tool"}}},
+		&libagent.ToolResultMessage{Role: "toolResult", ToolCallID: "call-1", ToolName: "tool", Content: "ok"},
+		&libagent.AssistantMessage{Role: "assistant", Completed: true, Text: "a"},
+		&libagent.AssistantMessage{Role: "assistant", Completed: true, ToolCalls: []libagent.ToolCallItem{{ID: "call-2", Name: "tool"}}},
+		&libagent.ToolResultMessage{Role: "toolResult", ToolCallID: "call-2", ToolName: "tool", Content: "ok"},
 	}
 
 	if !isValidCompactionCutIndex(msgs, 3) {
@@ -22,11 +22,11 @@ func TestIsValidCompactionCutIndex_BijectiveOnBothSides(t *testing.T) {
 }
 
 func TestIsValidCompactionCutIndex_RejectsCrossBoundaryToolPair(t *testing.T) {
-	msgs := []message.Message{
-		{Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: "q"}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.ToolCall{ID: "call-1", Name: "tool"}}},
-		{Role: message.Tool, Parts: []message.ContentPart{message.ToolResult{ToolCallID: "call-1", Name: "tool", Content: "ok"}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.TextContent{Text: "a"}}},
+	msgs := []libagent.Message{
+		&libagent.UserMessage{Role: "user", Content: "q"},
+		&libagent.AssistantMessage{Role: "assistant", Completed: true, ToolCalls: []libagent.ToolCallItem{{ID: "call-1", Name: "tool"}}},
+		&libagent.ToolResultMessage{Role: "toolResult", ToolCallID: "call-1", ToolName: "tool", Content: "ok"},
+		&libagent.AssistantMessage{Role: "assistant", Completed: true, Text: "a"},
 	}
 
 	if isValidCompactionCutIndex(msgs, 2) {
@@ -35,12 +35,12 @@ func TestIsValidCompactionCutIndex_RejectsCrossBoundaryToolPair(t *testing.T) {
 }
 
 func TestIsValidCompactionCutIndex_RejectsDuplicateToolCallIDs(t *testing.T) {
-	msgs := []message.Message{
-		{Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: "q"}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.ToolCall{ID: "dup", Name: "tool"}}},
-		{Role: message.Tool, Parts: []message.ContentPart{message.ToolResult{ToolCallID: "dup", Name: "tool", Content: "ok"}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.ToolCall{ID: "dup", Name: "tool"}}},
-		{Role: message.Tool, Parts: []message.ContentPart{message.ToolResult{ToolCallID: "dup", Name: "tool", Content: "ok"}}},
+	msgs := []libagent.Message{
+		&libagent.UserMessage{Role: "user", Content: "q"},
+		&libagent.AssistantMessage{Role: "assistant", Completed: true, ToolCalls: []libagent.ToolCallItem{{ID: "dup", Name: "tool"}}},
+		&libagent.ToolResultMessage{Role: "toolResult", ToolCallID: "dup", ToolName: "tool", Content: "ok"},
+		&libagent.AssistantMessage{Role: "assistant", Completed: true, ToolCalls: []libagent.ToolCallItem{{ID: "dup", Name: "tool"}}},
+		&libagent.ToolResultMessage{Role: "toolResult", ToolCallID: "dup", ToolName: "tool", Content: "ok"},
 	}
 
 	if isValidCompactionCutIndex(msgs, 1) {
@@ -49,13 +49,13 @@ func TestIsValidCompactionCutIndex_RejectsDuplicateToolCallIDs(t *testing.T) {
 }
 
 func TestIsValidCompactionCutIndex_RejectsDuplicateToolResultIDs(t *testing.T) {
-	msgs := []message.Message{
-		{Role: message.User, Parts: []message.ContentPart{message.TextContent{Text: "q"}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.TextContent{Text: "a"}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.ToolCall{ID: "call-1", Name: "tool"}}},
-		{Role: message.Assistant, Parts: []message.ContentPart{message.ToolCall{ID: "call-2", Name: "tool"}}},
-		{Role: message.Tool, Parts: []message.ContentPart{message.ToolResult{ToolCallID: "call-1", Name: "tool", Content: "ok"}}},
-		{Role: message.Tool, Parts: []message.ContentPart{message.ToolResult{ToolCallID: "call-1", Name: "tool", Content: "ok-again"}}},
+	msgs := []libagent.Message{
+		&libagent.UserMessage{Role: "user", Content: "q"},
+		&libagent.AssistantMessage{Role: "assistant", Completed: true, Text: "a"},
+		&libagent.AssistantMessage{Role: "assistant", Completed: true, ToolCalls: []libagent.ToolCallItem{{ID: "call-1", Name: "tool"}}},
+		&libagent.AssistantMessage{Role: "assistant", Completed: true, ToolCalls: []libagent.ToolCallItem{{ID: "call-2", Name: "tool"}}},
+		&libagent.ToolResultMessage{Role: "toolResult", ToolCallID: "call-1", ToolName: "tool", Content: "ok"},
+		&libagent.ToolResultMessage{Role: "toolResult", ToolCallID: "call-1", ToolName: "tool", Content: "ok-again"},
 	}
 
 	if isValidCompactionCutIndex(msgs, 2) {

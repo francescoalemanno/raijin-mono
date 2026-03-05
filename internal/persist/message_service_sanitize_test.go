@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/francescoalemanno/raijin-mono/internal/message"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func TestReplayMessages_SanitizeDropsOrphanToolArtifacts(t *testing.T) {
@@ -44,41 +44,33 @@ func TestReplayMessages_SanitizeDropsOrphanToolArtifacts(t *testing.T) {
 	})
 	write(walEntry{
 		Typ: entryMsgCreate,
-		Msg: &walMessage{
-			ID:        "u1",
-			Role:      message.User,
-			SessionID: sid,
-			Parts:     []walPart{{T: walPartText, Data: json.RawMessage(`{"text":"hello"}`)}},
-			CreatedAt: 1,
-			UpdatedAt: 1,
-		},
+		Msg: &walMessage{Kind: "user", User: &libagent.UserMessage{
+			Role:      "user",
+			Content:   "hello",
+			Timestamp: libagent.UnixMilliToTime(1),
+			Meta:      libagent.MessageMeta{ID: "u1", SessionID: sid, CreatedAt: 1, UpdatedAt: 1},
+		}},
 	})
 	write(walEntry{
 		Typ: entryMsgCreate,
-		Msg: &walMessage{
-			ID:        "a1",
-			Role:      message.Assistant,
-			SessionID: sid,
-			Parts: []walPart{
-				{T: walPartToolCall, Data: json.RawMessage(`{"id":"call-1","name":"read","input":"{}","finished":true}`)},
-				{T: walPartFinish, Data: json.RawMessage(`{"reason":"tool_use","time":1}`)},
-			},
-			CreatedAt: 1,
-			UpdatedAt: 1,
-		},
+		Msg: &walMessage{Kind: "assistant", Assistant: &libagent.AssistantMessage{
+			Role:       "assistant",
+			ToolCalls:  []libagent.ToolCallItem{{ID: "call-1", Name: "read", Input: "{}"}},
+			Completed:  true,
+			Timestamp:  libagent.UnixMilliToTime(1),
+			Meta:       libagent.MessageMeta{ID: "a1", SessionID: sid, CreatedAt: 1, UpdatedAt: 1},
+		}},
 	})
 	write(walEntry{
 		Typ: entryMsgCreate,
-		Msg: &walMessage{
-			ID:        "t-orphan",
-			Role:      message.Tool,
-			SessionID: sid,
-			Parts: []walPart{
-				{T: walPartToolResult, Data: json.RawMessage(`{"tool_call_id":"orphan","name":"read","content":"x"}`)},
-			},
-			CreatedAt: 1,
-			UpdatedAt: 1,
-		},
+		Msg: &walMessage{Kind: "tool_result", ToolResult: &libagent.ToolResultMessage{
+			Role:       "toolResult",
+			ToolCallID: "orphan",
+			ToolName:   "read",
+			Content:    "x",
+			Timestamp:  libagent.UnixMilliToTime(1),
+			Meta:       libagent.MessageMeta{ID: "t-orphan", SessionID: sid, CreatedAt: 1, UpdatedAt: 1},
+		}},
 	})
 
 	if err := f.Close(); err != nil {
@@ -93,7 +85,7 @@ func TestReplayMessages_SanitizeDropsOrphanToolArtifacts(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len(got)=%d want 1", len(got))
 	}
-	if got[0].Role != message.User {
-		t.Fatalf("remaining role=%s want user", got[0].Role)
+	if _, ok := got[0].(*libagent.UserMessage); !ok {
+		t.Fatalf("remaining message type=%T want *libagent.UserMessage", got[0])
 	}
 }

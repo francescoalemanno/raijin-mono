@@ -19,7 +19,6 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/agent"
 	chatsession "github.com/francescoalemanno/raijin-mono/internal/chat/session"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
-	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
@@ -462,17 +461,17 @@ func (app *ChatApp) finalizeReplayedToolStates() {
 	}
 }
 
-func (app *ChatApp) appendStoredMessage(msg message.Message) {
-	switch msg.Role {
-	case message.User:
-		text := strings.TrimSpace(msg.Content().Text)
+func (app *ChatApp) appendStoredMessage(msg libagent.Message) {
+	switch m := msg.(type) {
+	case *libagent.UserMessage:
+		text := strings.TrimSpace(m.Content)
 		if text != "" {
 			app.appendSpacer()
 			app.appendMessage(text, theme.BorderThin, theme.Default.Accent.Ansi24, theme.Default.Foreground.Ansi24, false)
 		}
 
-	case message.Assistant:
-		reasoning := strings.TrimSpace(msg.ReasoningContent().Thinking)
+	case *libagent.AssistantMessage:
+		reasoning := strings.TrimSpace(m.Reasoning)
 		if reasoning != "" {
 			app.appendSpacer()
 			comp := NewThinking(app.ui)
@@ -483,31 +482,28 @@ func (app *ChatApp) appendStoredMessage(msg message.Message) {
 			app.items = append(app.items, historyEntry{component: comp})
 		}
 
-		// Render tool calls first (they precede the text in the turn).
-		for _, tc := range msg.ToolCalls() {
+		for _, tc := range m.ToolCalls {
 			var args json.RawMessage
 			if tc.Input != "" {
 				args = json.RawMessage(tc.Input)
 			}
 			app.appendToolExecution(tc.ID, tc.Name, args)
 		}
-		text := strings.TrimSpace(msg.Content().Text)
+		text := strings.TrimSpace(m.Text)
 		if text != "" {
 			app.appendSpacer()
 			app.appendMessage(text, theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, true)
 		}
-	case message.Tool:
-		for _, result := range msg.ToolResults() {
-			if comp, ok := app.pendingTools[result.ToolCallID]; ok {
-				// Component already created from the assistant message's ToolCall.
-				comp.UpdateResultWithMedia(result.Content, result.IsError, result.MIMEType, result.Data)
-				delete(app.pendingTools, result.ToolCallID)
-			} else {
-				// Fallback: no prior ToolCall found (e.g. older WAL without ToolCall parts).
-				comp := app.appendToolExecution(result.ToolCallID, result.Name, nil)
-				comp.UpdateResultWithMedia(result.Content, result.IsError, result.MIMEType, result.Data)
-				delete(app.pendingTools, result.ToolCallID)
-			}
+	case *libagent.ToolResultMessage:
+		result := m
+		data := libagent.EncodeDataString(result.Data)
+		if comp, ok := app.pendingTools[result.ToolCallID]; ok {
+			comp.UpdateResultWithMedia(result.Content, result.IsError, result.MIMEType, data)
+			delete(app.pendingTools, result.ToolCallID)
+		} else {
+			comp := app.appendToolExecution(result.ToolCallID, result.ToolName, nil)
+			comp.UpdateResultWithMedia(result.Content, result.IsError, result.MIMEType, data)
+			delete(app.pendingTools, result.ToolCallID)
 		}
 	}
 }
@@ -1050,20 +1046,21 @@ func (app *ChatApp) loadForkCandidates(ctx context.Context) ([]forkCandidate, er
 	return collectForkCandidates(msgs), nil
 }
 
-func collectForkCandidates(msgs []message.Message) []forkCandidate {
+func collectForkCandidates(msgs []libagent.Message) []forkCandidate {
 	candidates := make([]forkCandidate, 0)
 	ordinal := 0
 	for _, msg := range msgs {
-		if msg.Role != message.User {
+		um, ok := msg.(*libagent.UserMessage)
+		if !ok {
 			continue
 		}
-		prompt := strings.TrimSpace(msg.Content().Text)
+		prompt := strings.TrimSpace(um.Content)
 		if prompt == "" {
 			continue
 		}
 		ordinal++
 		candidates = append(candidates, forkCandidate{
-			MessageID: msg.ID,
+			MessageID: libagent.MessageID(um),
 			Prompt:    prompt,
 			Preview:   buildForkPreview(prompt, 90),
 			Ordinal:   ordinal,
@@ -1114,10 +1111,7 @@ func (app *ChatApp) applyForkCandidate(ctx context.Context, candidate forkCandid
 		if err := app.session.ForkTo(ctx, parentSessionID, "", msgs); err != nil {
 			return err
 		}
-		if _, err := app.session.Agent().Messages().Create(ctx, app.session.ID(), message.CreateParams{
-			Role:  message.User,
-			Parts: []message.ContentPart{message.TextContent{Text: ""}},
-		}); err != nil {
+		if _, err := app.session.Agent().Messages().Create(ctx, app.session.ID(), &libagent.UserMessage{Role: "user", Content: ""}); err != nil {
 			return err
 		}
 		app.dispatchSync(func(_ tui.UIToken) {
@@ -1134,9 +1128,9 @@ func (app *ChatApp) applyForkCandidate(ctx context.Context, candidate forkCandid
 
 	// Collect only the messages that precede the fork point (exclude the
 	// selected message and everything after it).
-	var keep []message.Message
+	var keep []libagent.Message
 	for _, msg := range msgs {
-		if msg.ID == candidate.MessageID {
+		if libagent.MessageID(msg) == candidate.MessageID {
 			break
 		}
 		keep = append(keep, msg)

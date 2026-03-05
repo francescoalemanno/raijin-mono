@@ -6,10 +6,10 @@ import (
 	"strings"
 
 	"github.com/francescoalemanno/raijin-mono/internal/input"
-	"github.com/francescoalemanno/raijin-mono/internal/message"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/substitution"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 type promptRunOptions struct {
@@ -18,7 +18,7 @@ type promptRunOptions struct {
 
 type preparedPromptInput struct {
 	text        string
-	attachments []message.BinaryContent
+	attachments []libagent.FilePart
 }
 
 type promptMode int
@@ -99,13 +99,13 @@ func preparePromptInput(raw string, paths *tools.PathRegistry) (preparedPromptIn
 
 	out := preparedPromptInput{
 		text:        text,
-		attachments: make([]message.BinaryContent, 0, len(files)),
+		attachments: make([]libagent.FilePart, 0, len(files)),
 	}
 	for _, f := range files {
-		out.attachments = append(out.attachments, message.BinaryContent{
-			Path:     f.Path,
-			MIMEType: f.MediaType,
-			Data:     f.Data,
+		out.attachments = append(out.attachments, libagent.FilePart{
+			Filename:  f.Path,
+			MediaType: f.MediaType,
+			Data:      f.Data,
 		})
 	}
 	return out, nil
