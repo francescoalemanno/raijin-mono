@@ -5,18 +5,17 @@ import (
 	"testing"
 
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/components"
+	"github.com/francescoalemanno/raijin-mono/libtui/pkg/tui"
 	"github.com/stretchr/testify/assert"
 )
 
-// MockTUIRenderer implements TUIRenderer for testing
-type MockTUIRenderer struct {
-	requestRenderCalled bool
-}
-
-func (m *MockTUIRenderer) Dispatch(fn func()) { fn() }
-
-func (m *MockTUIRenderer) RequestRender(force ...bool) {
-	m.requestRenderCalled = true
+// newMockTUIRenderer returns a real UI loop backed by the virtual terminal.
+func newMockTUIRenderer(t *testing.T) *tui.TUI {
+	t.Helper()
+	term := NewVirtualTerminal(120, 40)
+	ui := tui.NewTUI(term)
+	t.Cleanup(ui.Stop)
+	return ui
 }
 
 // defaultEditorTheme creates a simple theme for testing
@@ -36,7 +35,7 @@ func defaultEditorTheme() components.EditorTheme {
 
 // TestEditor_HistoryUpEmpty tests up arrow with empty history
 func TestEditor_HistoryUpEmpty(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.HandleInput("\x1b[A") // Up arrow
@@ -46,7 +45,7 @@ func TestEditor_HistoryUpEmpty(t *testing.T) {
 
 // TestEditor_HistoryUpShowsMostRecent tests up arrow shows most recent history
 func TestEditor_HistoryUpShowsMostRecent(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("first prompt")
@@ -59,7 +58,7 @@ func TestEditor_HistoryUpShowsMostRecent(t *testing.T) {
 
 // TestEditor_HistoryCyclesUp tests cycling through history with repeated Up
 func TestEditor_HistoryCyclesUp(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("first")
@@ -81,7 +80,7 @@ func TestEditor_HistoryCyclesUp(t *testing.T) {
 
 // TestEditor_HistoryDownReturnsEmpty tests down arrow returns to empty
 func TestEditor_HistoryDownReturnsEmpty(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("prompt")
@@ -95,7 +94,7 @@ func TestEditor_HistoryDownReturnsEmpty(t *testing.T) {
 
 // TestEditor_HistoryDownNavigatesForward tests down arrow navigates forward
 func TestEditor_HistoryDownNavigatesForward(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("first")
@@ -121,7 +120,7 @@ func TestEditor_HistoryDownNavigatesForward(t *testing.T) {
 
 // TestEditor_HistoryExitsOnType tests that typing exits history mode
 func TestEditor_HistoryExitsOnType(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("old prompt")
@@ -134,7 +133,7 @@ func TestEditor_HistoryExitsOnType(t *testing.T) {
 
 // TestEditor_HistoryExitsOnSetText tests that setText exits history mode
 func TestEditor_HistoryExitsOnSetText(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("first")
@@ -150,7 +149,7 @@ func TestEditor_HistoryExitsOnSetText(t *testing.T) {
 
 // TestEditor_HistoryNoEmptyStrings tests that empty strings aren't added
 func TestEditor_HistoryNoEmptyStrings(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("")
@@ -167,7 +166,7 @@ func TestEditor_HistoryNoEmptyStrings(t *testing.T) {
 
 // TestEditor_HistoryNoConsecutiveDuplicates tests no consecutive duplicates
 func TestEditor_HistoryNoConsecutiveDuplicates(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("same")
@@ -185,7 +184,7 @@ func TestEditor_HistoryNoConsecutiveDuplicates(t *testing.T) {
 
 // TestEditor_HistoryNonConsecutiveDuplicatesAllowed tests non-consecutive duplicates allowed
 func TestEditor_HistoryNonConsecutiveDuplicatesAllowed(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("first")
@@ -204,7 +203,7 @@ func TestEditor_HistoryNonConsecutiveDuplicatesAllowed(t *testing.T) {
 
 // TestEditor_CursorMovementUpWithContent tests cursor moves up with content
 func TestEditor_CursorMovementUpWithContent(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("history item")
@@ -227,7 +226,7 @@ func TestEditor_CursorMovementUpWithContent(t *testing.T) {
 
 // TestEditor_HistoryLimitsTo100 tests history limits to 100 entries
 func TestEditor_HistoryLimitsTo100(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	// Add 102 entries
@@ -248,7 +247,7 @@ func TestEditor_HistoryLimitsTo100(t *testing.T) {
 
 // TestEditor_GetTextReturnsJoinedLines tests GetText
 func TestEditor_GetTextReturnsJoinedLines(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("line1\nline2\nline3")
@@ -257,7 +256,7 @@ func TestEditor_GetTextReturnsJoinedLines(t *testing.T) {
 
 // TestEditor_GetLinesReturnsDefensiveCopy tests GetLines returns a copy
 func TestEditor_GetLinesReturnsDefensiveCopy(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("line1\nline2")
@@ -270,7 +269,7 @@ func TestEditor_GetLinesReturnsDefensiveCopy(t *testing.T) {
 
 // TestEditor_BackslashInsert tests backslash is inserted immediately
 func TestEditor_BackslashInsert(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.HandleInput("\\")
@@ -279,7 +278,7 @@ func TestEditor_BackslashInsert(t *testing.T) {
 
 // TestEditor_BackslashEnterNewline tests backslash+Enter creates newline
 func TestEditor_BackslashEnterNewline(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.HandleInput("h")
@@ -292,7 +291,7 @@ func TestEditor_BackslashEnterNewline(t *testing.T) {
 
 // TestEditor_BackslashNotNewlineWhenNotLast tests backslash not newline when not last
 func TestEditor_BackslashNotNewlineWhenNotLast(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.HandleInput("h")
@@ -307,7 +306,7 @@ func TestEditor_BackslashNotNewlineWhenNotLast(t *testing.T) {
 
 // TestEditor_BackslashOnlyOneRemoved tests only one backslash removed
 func TestEditor_BackslashOnlyOneRemoved(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.HandleInput("a")
@@ -323,7 +322,7 @@ func TestEditor_BackslashOnlyOneRemoved(t *testing.T) {
 
 // TestEditor_UnicodeInsert tests inserting unicode characters
 func TestEditor_UnicodeInsert(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	// Insert ASCII, umlauts, and emoji
@@ -344,7 +343,7 @@ func TestEditor_UnicodeInsert(t *testing.T) {
 
 // TestEditor_BackspaceUnicode tests backspace handles unicode
 func TestEditor_BackspaceUnicode(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("hällo")
@@ -361,7 +360,7 @@ func TestEditor_BackspaceUnicode(t *testing.T) {
 
 // TestEditor_CursorPositionAfterMovement tests cursor position
 func TestEditor_CursorPosition(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("hello world")
@@ -372,7 +371,7 @@ func TestEditor_CursorPosition(t *testing.T) {
 
 // TestEditor_CtrlAHome tests Ctrl+A moves to start
 func TestEditor_CtrlAHome(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("hello")
@@ -387,7 +386,7 @@ func TestEditor_CtrlAHome(t *testing.T) {
 
 // TestEditor_CtrlEEnd tests Ctrl+E moves to end
 func TestEditor_CtrlEEnd(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("hello")
@@ -404,7 +403,7 @@ func TestEditor_CtrlEEnd(t *testing.T) {
 
 // TestEditor_CtrlWDeleteWord tests Ctrl+W deletes word backward
 func TestEditor_CtrlWDeleteWord(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("foo bar baz")
@@ -422,7 +421,7 @@ func TestEditor_CtrlWDeleteWord(t *testing.T) {
 
 // TestEditor_CtrlLeftRightWord tests word navigation
 func TestEditor_CtrlLeftRightWord(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	// Insert "foo bar"
@@ -451,7 +450,7 @@ func TestEditor_CtrlLeftRightWord(t *testing.T) {
 
 // TestEditor_SetOnSubmitCallback tests submit callback
 func TestEditor_SetOnSubmitCallback(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	var submitted string
@@ -466,7 +465,7 @@ func TestEditor_SetOnSubmitCallback(t *testing.T) {
 }
 
 func TestEditor_LargePasteUsesMarkerAndExpandedText(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	large := strings.Repeat("a", 1001)
@@ -477,7 +476,7 @@ func TestEditor_LargePasteUsesMarkerAndExpandedText(t *testing.T) {
 }
 
 func TestEditor_LargeMultilinePasteUsesMarkerAndExpandedText(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	large := strings.Repeat("line\n", 10) + "line"
@@ -488,7 +487,7 @@ func TestEditor_LargeMultilinePasteUsesMarkerAndExpandedText(t *testing.T) {
 }
 
 func TestEditor_SubmitExpandsLargePasteMarker(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	var submitted string
@@ -505,7 +504,7 @@ func TestEditor_SubmitExpandsLargePasteMarker(t *testing.T) {
 
 // TestEditor_SetOnChangeCallback tests change callback
 func TestEditor_SetOnChangeCallback(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	var changed string
@@ -519,7 +518,7 @@ func TestEditor_SetOnChangeCallback(t *testing.T) {
 
 // TestEditor_Undo tests undo functionality
 func TestEditor_Undo(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.HandleInput("a")
@@ -536,7 +535,7 @@ func TestEditor_Undo(t *testing.T) {
 
 // TestEditor_CtrlZUndo tests modern Ctrl+Z undo alias
 func TestEditor_CtrlZUndo(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.HandleInput("a")
@@ -549,7 +548,7 @@ func TestEditor_CtrlZUndo(t *testing.T) {
 
 // TestEditor_Yank tests yank (paste from kill ring)
 func TestEditor_Yank(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	// Type something, then delete it to put in kill ring
@@ -579,7 +578,7 @@ func TestEditor_WordWrapLine(t *testing.T) {
 
 // TestEditor_ClearHistory tests clearing history
 func TestEditor_ClearHistory(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.AddToHistory("test")
@@ -592,7 +591,7 @@ func TestEditor_ClearHistory(t *testing.T) {
 
 // TestEditor_PaddingX tests padding getters/setters
 func TestEditor_PaddingX(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	assert.Equal(t, 0, editor.GetPaddingX())
@@ -603,7 +602,7 @@ func TestEditor_PaddingX(t *testing.T) {
 
 // TestEditor_AutocompleteMaxVisible tests autocomplete max visible
 func TestEditor_AutocompleteMaxVisible(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	assert.Equal(t, 5, editor.GetAutocompleteMaxVisible())
@@ -622,7 +621,7 @@ func TestEditor_AutocompleteMaxVisible(t *testing.T) {
 
 // TestEditor_DeleteWordForward tests delete word forward
 func TestEditor_DeleteWordForward(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("foo bar")
@@ -637,7 +636,7 @@ func TestEditor_DeleteWordForward(t *testing.T) {
 
 // TestEditor_CtrlDeleteWordForward tests Ctrl+Delete deletes word forward
 func TestEditor_CtrlDeleteWordForward(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("foo bar")
@@ -649,7 +648,7 @@ func TestEditor_CtrlDeleteWordForward(t *testing.T) {
 
 // TestEditor_DeleteToLineStart tests delete to line start
 func TestEditor_DeleteToLineStart(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("hello world")
@@ -667,7 +666,7 @@ func TestEditor_DeleteToLineStart(t *testing.T) {
 
 // TestEditor_DeleteToLineEnd tests delete to line end
 func TestEditor_DeleteToLineEnd(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("hello world")
@@ -682,7 +681,7 @@ func TestEditor_DeleteToLineEnd(t *testing.T) {
 
 // TestEditor_Delete tests forward delete
 func TestEditor_Delete(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("ab")
@@ -697,7 +696,7 @@ func TestEditor_Delete(t *testing.T) {
 
 // TestEditor_JumpMode tests jump to character
 func TestEditor_JumpMode(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("hello world")
@@ -717,7 +716,7 @@ func TestEditor_JumpMode(t *testing.T) {
 
 // TestEditor_EscapeCancelsAutocomplete tests escape cancels autocomplete
 func TestEditor_EscapeCancelsAutocomplete(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	// Type something
@@ -732,7 +731,7 @@ func TestEditor_EscapeCancelsAutocomplete(t *testing.T) {
 
 // TestEditor_TabInsertsLiteral tests tab inserts literal tab
 func TestEditor_TabInsertsLiteral(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.HandleInput("h")
@@ -744,7 +743,7 @@ func TestEditor_TabInsertsLiteral(t *testing.T) {
 
 // TestEditor_LeftArrow tests cursor left
 func TestEditor_LeftArrow(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.HandleInput("a")
@@ -763,7 +762,7 @@ func TestEditor_LeftArrow(t *testing.T) {
 
 // TestEditor_RightArrow tests cursor right
 func TestEditor_RightArrow(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.HandleInput("a")
@@ -778,7 +777,7 @@ func TestEditor_RightArrow(t *testing.T) {
 
 // TestEditor_MultiLineCursorUpDown tests cursor up/down in multi-line
 func TestEditor_MultiLineCursorUpDown(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("line1\nline2")
@@ -798,7 +797,7 @@ func TestEditor_MultiLineCursorUpDown(t *testing.T) {
 
 // TestEditor_Render tests basic rendering
 func TestEditor_Render(t *testing.T) {
-	mockTUI := &MockTUIRenderer{}
+	mockTUI := newMockTUIRenderer(t)
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	editor.SetText("hello")
