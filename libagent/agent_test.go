@@ -488,6 +488,107 @@ func TestAgent_ToolExecution_WithPartialJSONArgs_ReturnsActionableError(t *testi
 	assert.Contains(t, toolEndEvents[0].ToolResult, "invalid tool call JSON input")
 }
 
+func TestAgent_ToolExecution_DoesNotSkipWhenSteeringCallbackReturnsEmptySlice(t *testing.T) {
+	executed := make([]string, 0)
+	echoTool := libagent.NewTypedTool(
+		"echo",
+		"Echo the value back",
+		func(_ context.Context, input struct {
+			Value string `json:"value"`
+		}, _ libagent.ToolCall,
+		) (libagent.ToolResponse, error) {
+			executed = append(executed, input.Value)
+			return libagent.NewTextResponse("echoed: " + input.Value), nil
+		},
+	)
+
+	model := newMockModel(
+		toolCallResponse("tc1", "echo", `{"value":"hello"}`),
+		textResponse("Done!"),
+	)
+
+	agentCtx := &libagent.AgentContext{
+		Tools: libagent.AdaptTools([]libagent.Tool{echoTool}),
+	}
+	cfg := libagent.AgentLoopConfig{
+		Model: model,
+		GetSteeringMessages: func(_ context.Context) ([]libagent.Message, error) {
+			return []libagent.Message{}, nil
+		},
+	}
+
+	eventCh := make(chan libagent.AgentEvent, 128)
+	prompt := &libagent.UserMessage{Role: "user", Content: "Echo hello", Timestamp: time.Now()}
+	_, err := libagent.AgentLoop(context.Background(), []libagent.Message{prompt}, agentCtx, cfg, eventCh)
+	close(eventCh)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"hello"}, executed)
+
+	var events []libagent.AgentEvent
+	for e := range eventCh {
+		events = append(events, e)
+	}
+	toolEndEvents := filterByType(events, libagent.AgentEventTypeToolExecutionEnd)
+	require.Len(t, toolEndEvents, 1)
+	assert.False(t, toolEndEvents[0].ToolIsError)
+}
+
+func TestAgent_ToolExecution_PrefersFinalToolCallInputWhenDeltasArePartial(t *testing.T) {
+	executed := make([]string, 0)
+	echoTool := libagent.NewTypedTool(
+		"echo",
+		"Echo the value back",
+		func(_ context.Context, input struct {
+			Value string `json:"value"`
+		}, _ libagent.ToolCall,
+		) (libagent.ToolResponse, error) {
+			executed = append(executed, input.Value)
+			return libagent.NewTextResponse("echoed: " + input.Value), nil
+		},
+	)
+
+	model := newMockModel(
+		func(_ int) fantasy.StreamResponse {
+			return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
+				if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolInputStart, ID: "tc1", ToolCallName: "echo"}) {
+					return
+				}
+				if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolInputDelta, ID: "tc1", Delta: `{"value":"hel`}) {
+					return
+				}
+				if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "tc1", ToolCallName: "echo", ToolCallInput: `{"value":"hello"}`}) {
+					return
+				}
+				yield(fantasy.StreamPart{
+					Type:         fantasy.StreamPartTypeFinish,
+					FinishReason: fantasy.FinishReasonToolCalls,
+				})
+			})
+		},
+		textResponse("Done!"),
+	)
+
+	a := libagent.NewAgent(libagent.AgentOptions{
+		RuntimeModel: libagent.RuntimeModel{Model: model},
+		Tools:        []libagent.Tool{echoTool},
+	})
+
+	ch, unsub := a.Subscribe()
+	defer unsub()
+
+	err := a.Prompt(context.Background(), "Echo hello")
+	require.NoError(t, err)
+	events := collectEvents(ch)
+
+	assert.Equal(t, []string{"hello"}, executed)
+
+	toolEndEvents := filterByType(events, libagent.AgentEventTypeToolExecutionEnd)
+	require.Len(t, toolEndEvents, 1)
+	assert.False(t, toolEndEvents[0].ToolIsError)
+	assert.Equal(t, "echoed: hello", toolEndEvents[0].ToolResult)
+}
+
 func TestAgent_FinishReasonToolCallsWithoutToolCalls_Errors(t *testing.T) {
 	model := newMockModel(func(_ int) fantasy.StreamResponse {
 		return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
@@ -739,6 +840,83 @@ func TestDefaultConvertToLLM_NormalizesInvalidAssistantToolCallJSON(t *testing.T
 	part, ok := out[0].Content[0].(fantasy.ToolCallPart)
 	require.True(t, ok)
 	assert.Equal(t, "{}", part.Input)
+}
+
+func TestDefaultConvertToLLM_IncludesLegacyAssistantToolCalls(t *testing.T) {
+	msgs := []libagent.Message{
+		&libagent.AssistantMessage{
+			Role: "assistant",
+			ToolCalls: []libagent.ToolCallItem{
+				{
+					ID:    "tc1",
+					Name:  "read",
+					Input: `{"path":"bad`,
+				},
+			},
+			Timestamp: time.Now(),
+		},
+		&libagent.ToolResultMessage{
+			Role:       "toolResult",
+			ToolCallID: "tc1",
+			ToolName:   "read",
+			Content:    "invalid tool input",
+			IsError:    true,
+			Timestamp:  time.Now(),
+		},
+	}
+
+	out, err := libagent.DefaultConvertToLLM(context.Background(), msgs)
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+
+	require.Equal(t, fantasy.MessageRoleAssistant, out[0].Role)
+	require.Len(t, out[0].Content, 1)
+	tc, ok := out[0].Content[0].(fantasy.ToolCallPart)
+	require.True(t, ok)
+	assert.Equal(t, "tc1", tc.ToolCallID)
+	assert.Equal(t, "read", tc.ToolName)
+	assert.Equal(t, "{}", tc.Input)
+
+	require.Equal(t, fantasy.MessageRoleTool, out[1].Role)
+	require.Len(t, out[1].Content, 1)
+	toolResult, ok := out[1].Content[0].(fantasy.ToolResultPart)
+	require.True(t, ok)
+	assert.Equal(t, "tc1", toolResult.ToolCallID)
+}
+
+func TestDefaultConvertToLLM_MergesLegacyToolCallsWithStructuredContent(t *testing.T) {
+	msgs := []libagent.Message{
+		&libagent.AssistantMessage{
+			Role: "assistant",
+			Content: fantasy.ResponseContent{
+				fantasy.TextContent{Text: "working"},
+			},
+			ToolCalls: []libagent.ToolCallItem{
+				{
+					ID:    "tc2",
+					Name:  "bash",
+					Input: `{"command":"pwd"}`,
+				},
+			},
+			Timestamp: time.Now(),
+		},
+	}
+
+	out, err := libagent.DefaultConvertToLLM(context.Background(), msgs)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, fantasy.MessageRoleAssistant, out[0].Role)
+	require.Len(t, out[0].Content, 2)
+
+	textPart, ok := out[0].Content[0].(fantasy.TextPart)
+	require.True(t, ok)
+	assert.Equal(t, "working", textPart.Text)
+
+	toolPart, ok := out[0].Content[1].(fantasy.ToolCallPart)
+	require.True(t, ok)
+	assert.Equal(t, "tc2", toolPart.ToolCallID)
+	assert.Equal(t, "bash", toolPart.ToolName)
+	assert.Equal(t, `{"command":"pwd"}`, toolPart.Input)
 }
 
 func TestAgent_TransformContext(t *testing.T) {
