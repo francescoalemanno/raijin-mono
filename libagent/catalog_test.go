@@ -179,3 +179,11 @@ func TestCatalog_DefaultCatalog_IncludesZenGoCustomProvider(t *testing.T) {
 	assert.Equal(t, libagent.ZenGoProviderID, info.ProviderID)
 	assert.Equal(t, "minimax-m2.5", info.ModelID)
 }
+
+func TestCatalog_FindModelOptions_CustomProviderType(t *testing.T) {
+	cat := libagent.DefaultCatalog()
+
+	providerType, opts := cat.FindModelOptions(libagent.ZenGoProviderID, "kimi-k2.5")
+	assert.Equal(t, string(catwalk.TypeOpenAICompat), providerType)
+	assert.Nil(t, opts)
+}

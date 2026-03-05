@@ -466,9 +466,19 @@ func (c *Catalog) resolveOAuthAPIKey(ctx context.Context, providerID string) (st
 	return p.APIKey(newCreds), nil
 }
 
-// FindModelOptions returns the per-model provider options from the catwalk catalog,
-// plus the catwalk provider type string. Returns empty values for custom providers.
+// FindModelOptions returns the per-model provider options from the catalog,
+// plus the provider type string.
+// For custom providers, model-level provider options are currently not defined,
+// so this returns the provider type and nil options.
 func (c *Catalog) FindModelOptions(providerID, modelID string) (providerType string, catalogProviderOptions map[string]any) {
+	if cp, isCustom := c.customProviders[providerID]; isCustom {
+		providerType = string(cp.Type)
+		if providerType == "" {
+			providerType = string(catwalk.TypeOpenAICompat)
+		}
+		return providerType, nil
+	}
+
 	p, isCatwalk := c.providers[providerID]
 	if !isCatwalk {
 		return "", nil
