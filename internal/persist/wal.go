@@ -80,9 +80,9 @@ type walSession struct {
 // walMessage is the serialisable form of runtime libagent messages.
 // It also retains legacy fields for backward-compatible decode.
 type walMessage struct {
-	Kind       string                `json:"kind,omitempty"`
-	User       *libagent.UserMessage `json:"user,omitempty"`
-	Assistant  *libagent.AssistantMessage `json:"assistant,omitempty"`
+	Kind       string                      `json:"kind,omitempty"`
+	User       *libagent.UserMessage       `json:"user,omitempty"`
+	Assistant  *libagent.AssistantMessage  `json:"assistant,omitempty"`
 	ToolResult *libagent.ToolResultMessage `json:"tool_result,omitempty"`
 
 	// Legacy v1 fields
@@ -735,4 +735,3 @@ func TitleFromFirstUserMessage(text string) string {
 	}
 	return string(runes[:titleMaxLen-1]) + "…"
 }
-

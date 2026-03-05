@@ -156,13 +156,19 @@ type walLegacyPart struct {
 	Finish     *walLegacyFinish     `json:"finish,omitempty"`
 }
 
-type walLegacyText struct{ Text string `json:"text"` }
-type walLegacyReasoning struct{ Thinking string `json:"thinking"` }
-type walLegacyBinary struct {
-	Path     string `json:"path,omitempty"`
-	MIMEType string `json:"mime_type,omitempty"`
-	Data     []byte `json:"data,omitempty"`
-}
+type (
+	walLegacyText struct {
+		Text string `json:"text"`
+	}
+	walLegacyReasoning struct {
+		Thinking string `json:"thinking"`
+	}
+	walLegacyBinary struct {
+		Path     string `json:"path,omitempty"`
+		MIMEType string `json:"mime_type,omitempty"`
+		Data     []byte `json:"data,omitempty"`
+	}
+)
 type walLegacySkill struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`

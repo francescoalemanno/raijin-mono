@@ -54,11 +54,11 @@ func TestReplayMessages_SanitizeDropsOrphanToolArtifacts(t *testing.T) {
 	write(walEntry{
 		Typ: entryMsgCreate,
 		Msg: &walMessage{Kind: "assistant", Assistant: &libagent.AssistantMessage{
-			Role:       "assistant",
-			ToolCalls:  []libagent.ToolCallItem{{ID: "call-1", Name: "read", Input: "{}"}},
-			Completed:  true,
-			Timestamp:  libagent.UnixMilliToTime(1),
-			Meta:       libagent.MessageMeta{ID: "a1", SessionID: sid, CreatedAt: 1, UpdatedAt: 1},
+			Role:      "assistant",
+			ToolCalls: []libagent.ToolCallItem{{ID: "call-1", Name: "read", Input: "{}"}},
+			Completed: true,
+			Timestamp: libagent.UnixMilliToTime(1),
+			Meta:      libagent.MessageMeta{ID: "a1", SessionID: sid, CreatedAt: 1, UpdatedAt: 1},
 		}},
 	})
 	write(walEntry{
