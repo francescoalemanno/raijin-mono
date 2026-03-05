@@ -157,3 +157,25 @@ func TestCatalog_DefaultCatalog_IncludesZenCustomProvider(t *testing.T) {
 	assert.Equal(t, libagent.ZenProviderID, info.ProviderID)
 	assert.Equal(t, "claude-sonnet-4-5", info.ModelID)
 }
+
+func TestCatalog_DefaultCatalog_IncludesZenGoCustomProvider(t *testing.T) {
+	cat := libagent.DefaultCatalog()
+
+	// Test GLM-5 via Go provider
+	info, _, err := cat.FindModel(libagent.ZenGoProviderID, "glm-5")
+	require.NoError(t, err)
+	assert.Equal(t, libagent.ZenGoProviderID, info.ProviderID)
+	assert.Equal(t, "glm-5", info.ModelID)
+
+	// Test Kimi K2.5 via Go provider
+	info, _, err = cat.FindModel(libagent.ZenGoProviderID, "kimi-k2.5")
+	require.NoError(t, err)
+	assert.Equal(t, libagent.ZenGoProviderID, info.ProviderID)
+	assert.Equal(t, "kimi-k2.5", info.ModelID)
+
+	// Test MiniMax M2.5 via Go provider
+	info, _, err = cat.FindModel(libagent.ZenGoProviderID, "minimax-m2.5")
+	require.NoError(t, err)
+	assert.Equal(t, libagent.ZenGoProviderID, info.ProviderID)
+	assert.Equal(t, "minimax-m2.5", info.ModelID)
+}

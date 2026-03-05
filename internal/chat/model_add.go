@@ -425,7 +425,7 @@ func fallbackProviderAPIKeyEnvVars(providerID string) []string {
 		return []string{"OPENROUTER_API_KEY"}
 	case "synthetic":
 		return []string{"SYNTHETIC_API_KEY"}
-	case "opencode", "opencode-zen-free":
+	case "opencode", "opencode-go", "opencode-zen-free":
 		return []string{"OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"}
 	case "xai":
 		return []string{"XAI_API_KEY"}
