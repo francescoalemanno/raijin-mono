@@ -9,17 +9,17 @@ import (
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-type noopUI struct{}
-
-func (noopUI) RequestRender(...bool) {}
-func (noopUI) Dispatch(fn func())    { fn() }
-
 func TestToolExecutionUpdateResultWithMedia_PreservesMediaMetadataWithoutInlineImageRender(t *testing.T) {
+	ui := newVirtualTestUI(t)
+
 	tool := libagent.NewTypedTool("read", "test", func(ctx context.Context, input map[string]any, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		return libagent.NewTextResponse("ok"), nil
 	})
 
-	comp := NewToolExecution("read", json.RawMessage(`{"path":"a.png"}`), tool, noopUI{})
+	var comp *ToolExecutionComponent
+	runOnUI(t, ui, func() {
+		comp = NewToolExecution("read", json.RawMessage(`{"path":"a.png"}`), tool, ui)
+	})
 
 	pngData := []byte{
 		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -32,14 +32,23 @@ func TestToolExecutionUpdateResultWithMedia_PreservesMediaMetadataWithoutInlineI
 		0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
 		0x42, 0x60, 0x82,
 	}
-	comp.UpdateResultWithMedia("Loaded image/png content", false, "image/png", base64.StdEncoding.EncodeToString(pngData))
+	runOnUI(t, ui, func() {
+		comp.UpdateResultWithMedia("Loaded image/png content", false, "image/png", base64.StdEncoding.EncodeToString(pngData))
+	})
 
-	if comp.result == nil || comp.result.media == nil {
+	var hasMedia bool
+	var statusOnly []string
+	var full []string
+	runOnUI(t, ui, func() {
+		hasMedia = comp.result != nil && comp.result.media != nil
+		statusOnly = append([]string(nil), comp.status.Render(80)...)
+		full = append([]string(nil), comp.Render(80)...)
+	})
+
+	if !hasMedia {
 		t.Fatalf("expected media payload to be stored on tool result")
 	}
 
-	statusOnly := comp.status.Render(80)
-	full := comp.Render(80)
 	if len(full) != len(statusOnly) {
 		t.Fatalf("expected no additional inline image lines after image-render removal")
 	}

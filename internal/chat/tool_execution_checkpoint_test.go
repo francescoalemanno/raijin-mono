@@ -44,6 +44,7 @@ func TestStreamingRenderInterval(t *testing.T) {
 
 func TestToolExecutionAppendInputDelta_UsesMessageTenthIntervals(t *testing.T) {
 	t.Parallel()
+	ui := newVirtualTestUI(t)
 
 	baseTool := libagent.NewTypedTool("dummy", "test", func(ctx context.Context, input map[string]any, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		return libagent.NewTextResponse("ok"), nil
@@ -56,51 +57,91 @@ func TestToolExecutionAppendInputDelta_UsesMessageTenthIntervals(t *testing.T) {
 		return "dummy\n" + payload.X
 	})
 
-	comp := NewToolExecution("dummy", nil, tool, noopUI{})
+	var comp *ToolExecutionComponent
+	runOnUI(t, ui, func() {
+		comp = NewToolExecution("dummy", nil, tool, ui)
+	})
 	now := time.Unix(0, 0)
-	comp.streamingRenderGate.now = func() time.Time { return now }
+	runOnUI(t, ui, func() {
+		comp.streamingRenderGate.now = func() time.Time { return now }
+	})
 
-	comp.AppendInputDelta(`{"x":"`)
-	initial := strings.Join(comp.Render(1000), "\n")
+	runOnUI(t, ui, func() {
+		comp.AppendInputDelta(`{"x":"`)
+	})
+	var initial string
+	runOnUI(t, ui, func() {
+		initial = strings.Join(comp.Render(1000), "\n")
+	})
 	if strings.Contains(initial, "AAAAA") {
 		t.Fatalf("unexpected content before data deltas are checkpointed")
 	}
 
-	comp.AppendInputDelta(strings.Repeat("A", 1000))
-	firstStillLimited := strings.Join(comp.Render(1000), "\n")
+	runOnUI(t, ui, func() {
+		comp.AppendInputDelta(strings.Repeat("A", 1000))
+	})
+	var firstStillLimited string
+	runOnUI(t, ui, func() {
+		firstStillLimited = strings.Join(comp.Render(1000), "\n")
+	})
 	if strings.Contains(firstStillLimited, "AAAAA") {
 		t.Fatalf("content rendered before timing checkpoint on large payload")
 	}
 
 	now = now.Add(toolStreamingRenderMinInterval)
-	comp.AppendInputDelta("A")
-	firstRender := strings.Join(comp.Render(1000), "\n")
+	runOnUI(t, ui, func() {
+		comp.AppendInputDelta("A")
+	})
+	var firstRender string
+	runOnUI(t, ui, func() {
+		firstRender = strings.Join(comp.Render(1000), "\n")
+	})
 	if !strings.Contains(firstRender, "AAAAA") {
 		t.Fatalf("content did not render after large first payload and timing checkpoint")
 	}
 
-	comp.AppendInputDelta(strings.Repeat("B", 50))
-	beforeThreshold := strings.Join(comp.Render(1000), "\n")
+	runOnUI(t, ui, func() {
+		comp.AppendInputDelta(strings.Repeat("B", 50))
+	})
+	var beforeThreshold string
+	runOnUI(t, ui, func() {
+		beforeThreshold = strings.Join(comp.Render(1000), "\n")
+	})
 	if strings.Contains(beforeThreshold, "BBBBB") {
 		t.Fatalf("content rendered before crossing len(message)/10 threshold")
 	}
 
-	comp.AppendInputDelta(strings.Repeat("B", 61))
-	stillRateLimited := strings.Join(comp.Render(1000), "\n")
+	runOnUI(t, ui, func() {
+		comp.AppendInputDelta(strings.Repeat("B", 61))
+	})
+	var stillRateLimited string
+	runOnUI(t, ui, func() {
+		stillRateLimited = strings.Join(comp.Render(1000), "\n")
+	})
 	if strings.Contains(stillRateLimited, "BBBBB") {
 		t.Fatalf("content rendered before timing checkpoint (10 updates/s)")
 	}
 
 	now = now.Add(toolStreamingRenderMinInterval)
-	comp.AppendInputDelta("B")
-	atThreshold := strings.Join(comp.Render(1000), "\n")
+	runOnUI(t, ui, func() {
+		comp.AppendInputDelta("B")
+	})
+	var atThreshold string
+	runOnUI(t, ui, func() {
+		atThreshold = strings.Join(comp.Render(1000), "\n")
+	})
 	if !strings.Contains(atThreshold, "BBBBB") {
 		t.Fatalf("content did not render after crossing byte and timing checkpoints")
 	}
+
+	runOnUI(t, ui, func() {
+		comp.UpdateResult("ok", false)
+	})
 }
 
 func TestToolExecutionAppendInputDelta_RateLimitedToTenHz(t *testing.T) {
 	t.Parallel()
+	ui := newVirtualTestUI(t)
 
 	baseTool := libagent.NewTypedTool("dummy", "test", func(ctx context.Context, input map[string]any, call libagent.ToolCall) (libagent.ToolResponse, error) {
 		return libagent.NewTextResponse("ok"), nil
@@ -113,26 +154,50 @@ func TestToolExecutionAppendInputDelta_RateLimitedToTenHz(t *testing.T) {
 		return "dummy\n" + payload.X
 	})
 
-	comp := NewToolExecution("dummy", nil, tool, noopUI{})
+	var comp *ToolExecutionComponent
+	runOnUI(t, ui, func() {
+		comp = NewToolExecution("dummy", nil, tool, ui)
+	})
 	now := time.Unix(0, 0)
-	comp.streamingRenderGate.now = func() time.Time { return now }
+	runOnUI(t, ui, func() {
+		comp.streamingRenderGate.now = func() time.Time { return now }
+	})
 
-	comp.AppendInputDelta(`{"x":"` + strings.Repeat("A", 1000))
-	first := strings.Join(comp.Render(1000), "\n")
+	runOnUI(t, ui, func() {
+		comp.AppendInputDelta(`{"x":"` + strings.Repeat("A", 1000))
+	})
+	var first string
+	runOnUI(t, ui, func() {
+		first = strings.Join(comp.Render(1000), "\n")
+	})
 	if !strings.Contains(first, "AAAAA") {
 		t.Fatalf("expected first streaming render")
 	}
 
-	comp.AppendInputDelta(strings.Repeat("B", 1000))
-	second := strings.Join(comp.Render(1000), "\n")
+	runOnUI(t, ui, func() {
+		comp.AppendInputDelta(strings.Repeat("B", 1000))
+	})
+	var second string
+	runOnUI(t, ui, func() {
+		second = strings.Join(comp.Render(1000), "\n")
+	})
 	if strings.Contains(second, "BBBBB") {
 		t.Fatalf("expected render to be rate-limited before 100ms")
 	}
 
 	now = now.Add(toolStreamingRenderMinInterval)
-	comp.AppendInputDelta("B")
-	third := strings.Join(comp.Render(1000), "\n")
+	runOnUI(t, ui, func() {
+		comp.AppendInputDelta("B")
+	})
+	var third string
+	runOnUI(t, ui, func() {
+		third = strings.Join(comp.Render(1000), "\n")
+	})
 	if !strings.Contains(third, "BBBBB") {
 		t.Fatalf("expected render after 100ms interval")
 	}
+
+	runOnUI(t, ui, func() {
+		comp.UpdateResult("ok", false)
+	})
 }
