@@ -73,20 +73,20 @@ func (m *UserMessage) GetTimestamp() time.Time { return m.Timestamp }
 
 // AssistantMessage is a completed assistant response.
 type AssistantMessage struct {
-	Role         string
-	Text         string
-	Reasoning    string
-	ToolCalls    []ToolCallItem
-	Completed    bool
-	CompleteReason string
+	Role            string
+	Text            string
+	Reasoning       string
+	ToolCalls       []ToolCallItem
+	Completed       bool
+	CompleteReason  string
 	CompleteMessage string
 	CompleteDetails string
-	Content      fantasy.ResponseContent
-	FinishReason fantasy.FinishReason
-	Usage        fantasy.Usage
-	Error        error
-	Timestamp    time.Time
-	Meta         MessageMeta
+	Content         fantasy.ResponseContent
+	FinishReason    fantasy.FinishReason
+	Usage           fantasy.Usage
+	Error           error
+	Timestamp       time.Time
+	Meta            MessageMeta
 }
 
 func (m *AssistantMessage) GetRole() string         { return "assistant" }
