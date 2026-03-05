@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"charm.land/fantasy"
 )
 
 var ErrMessageNotFound = errors.New("message not found")
@@ -89,7 +91,7 @@ func SanitizeHistory(messages []Message) []Message {
 	for _, m := range messages {
 		switch msg := m.(type) {
 		case *AssistantMessage:
-			for _, tc := range msg.ToolCalls {
+			for _, tc := range assistantToolCalls(msg) {
 				id := strings.TrimSpace(tc.ID)
 				if id != "" {
 					callCounts[id]++
@@ -117,9 +119,12 @@ func SanitizeHistory(messages []Message) []Message {
 			}
 			out = append(out, CloneMessage(msg))
 		case *AssistantMessage:
-			hasText := strings.TrimSpace(msg.Text) != "" || strings.TrimSpace(msg.Reasoning) != ""
-			calls := make([]ToolCallItem, 0, len(msg.ToolCalls))
-			for _, tc := range msg.ToolCalls {
+			text := assistantText(msg)
+			reasoning := assistantReasoning(msg)
+			hasText := strings.TrimSpace(text) != "" || strings.TrimSpace(reasoning) != ""
+			rawCalls := assistantToolCalls(msg)
+			calls := make([]ToolCallItem, 0, len(rawCalls))
+			for _, tc := range rawCalls {
 				id := strings.TrimSpace(tc.ID)
 				name := strings.TrimSpace(tc.Name)
 				if id == "" || name == "" {
@@ -137,6 +142,8 @@ func SanitizeHistory(messages []Message) []Message {
 				continue
 			}
 			clone := CloneMessage(msg).(*AssistantMessage)
+			clone.Text = text
+			clone.Reasoning = reasoning
 			clone.ToolCalls = calls
 			out = append(out, clone)
 		case *ToolResultMessage:
@@ -150,6 +157,80 @@ func SanitizeHistory(messages []Message) []Message {
 			}
 			out = append(out, CloneMessage(msg))
 		}
+	}
+	return out
+}
+
+func assistantText(msg *AssistantMessage) string {
+	if msg == nil {
+		return ""
+	}
+	if strings.TrimSpace(msg.Text) != "" {
+		return msg.Text
+	}
+	var sb strings.Builder
+	for _, c := range msg.Content {
+		if v, ok := c.(fantasy.TextContent); ok {
+			sb.WriteString(v.Text)
+		}
+	}
+	return sb.String()
+}
+
+func assistantReasoning(msg *AssistantMessage) string {
+	if msg == nil {
+		return ""
+	}
+	if strings.TrimSpace(msg.Reasoning) != "" {
+		return msg.Reasoning
+	}
+	var sb strings.Builder
+	for _, c := range msg.Content {
+		if v, ok := c.(fantasy.ReasoningContent); ok {
+			sb.WriteString(v.Text)
+		}
+	}
+	return sb.String()
+}
+
+func assistantToolCalls(msg *AssistantMessage) []ToolCallItem {
+	if msg == nil {
+		return nil
+	}
+	out := make([]ToolCallItem, 0, len(msg.ToolCalls)+len(msg.Content.ToolCalls()))
+	byID := make(map[string]int, len(msg.ToolCalls)+len(msg.Content.ToolCalls()))
+	add := func(tc ToolCallItem) {
+		id := strings.TrimSpace(tc.ID)
+		if id == "" {
+			out = append(out, tc)
+			return
+		}
+		if idx, exists := byID[id]; exists {
+			current := out[idx]
+			if strings.TrimSpace(current.Name) == "" {
+				current.Name = tc.Name
+			}
+			if strings.TrimSpace(current.Input) == "" {
+				current.Input = tc.Input
+			}
+			current.ProviderExecuted = current.ProviderExecuted || tc.ProviderExecuted
+			out[idx] = current
+			return
+		}
+		byID[id] = len(out)
+		out = append(out, tc)
+	}
+
+	for _, tc := range msg.ToolCalls {
+		add(tc)
+	}
+	for _, tc := range msg.Content.ToolCalls() {
+		add(ToolCallItem{
+			ID:               tc.ToolCallID,
+			Name:             tc.ToolName,
+			Input:            tc.Input,
+			ProviderExecuted: tc.ProviderExecuted,
+		})
 	}
 	return out
 }

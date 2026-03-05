@@ -78,49 +78,11 @@ type walSession struct {
 }
 
 // walMessage is the serialisable form of runtime libagent messages.
-// It also retains legacy fields for backward-compatible decode.
 type walMessage struct {
 	Kind       string                      `json:"kind,omitempty"`
 	User       *libagent.UserMessage       `json:"user,omitempty"`
 	Assistant  *libagent.AssistantMessage  `json:"assistant,omitempty"`
 	ToolResult *libagent.ToolResultMessage `json:"tool_result,omitempty"`
-
-	// Legacy v1 fields
-	ID         string            `json:"id,omitempty"`
-	Role       string            `json:"role,omitempty"`
-	SessionID  string            `json:"session_id,omitempty"`
-	Parts      []json.RawMessage `json:"parts,omitempty"`
-	Completion *walCompletion    `json:"completion,omitempty"`
-	Model      string            `json:"model,omitempty"`
-	Provider   string            `json:"provider,omitempty"`
-	CreatedAt  int64             `json:"created_at,omitempty"`
-	UpdatedAt  int64             `json:"updated_at,omitempty"`
-}
-
-type walCompletion struct {
-	Reason   string `json:"reason"`
-	Time     int64  `json:"time"`
-	Finished bool   `json:"finished"`
-	Message  string `json:"message,omitempty"`
-	Details  string `json:"details,omitempty"`
-}
-
-type legacyWalPartType string
-
-const (
-	legacyWalPartText       legacyWalPartType = "text"
-	legacyWalPartReasoning  legacyWalPartType = "reasoning"
-	legacyWalPartToolCall   legacyWalPartType = "tool_call"
-	legacyWalPartToolResult legacyWalPartType = "tool_result"
-	legacyWalPartFinish     legacyWalPartType = "finish"
-	legacyWalPartBinary     legacyWalPartType = "binary"
-	legacyWalPartSkill      legacyWalPartType = "skill"
-)
-
-// legacyWalPart encodes historical part records used in WAL v1.
-type legacyWalPart struct {
-	T    legacyWalPartType `json:"t"`
-	Data json.RawMessage   `json:"d"`
 }
 
 // SessionSummary is the information exposed to the /sessions selector.
