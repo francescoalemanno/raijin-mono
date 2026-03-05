@@ -381,9 +381,13 @@ func streamAssistantResponse(
 				ToolName:   part.ToolCallName,
 				Input:      part.ToolCallInput,
 			}
-			// If we have accumulated input via deltas, prefer that.
+			// Align with fantasy's built-in loop semantics:
+			// explicit tool_call input is authoritative; fallback to accumulated
+			// tool_input deltas only when explicit input is empty.
 			if accumulated, ok := toolInputByID[part.ID]; ok {
-				tc.Input = accumulated
+				if strings.TrimSpace(tc.Input) == "" {
+					tc.Input = accumulated
+				}
 				delete(toolInputByID, part.ID)
 				delete(toolNameByID, part.ID)
 			}
@@ -468,14 +472,16 @@ func executeToolCalls(
 
 	for _, tc := range toolCalls {
 		// Check for steering messages before each tool (only if not already steering).
-		if getSteeringMessages != nil && steeringMessages == nil {
+		if getSteeringMessages != nil && len(steeringMessages) == 0 {
 			sm, err := getSteeringMessages(ctx)
 			if err != nil {
 				return produced, results, nil, fmt.Errorf("get steering messages: %w", err)
 			}
-			steeringMessages = sm
+			if len(sm) > 0 {
+				steeringMessages = sm
+			}
 		}
-		if steeringMessages != nil {
+		if len(steeringMessages) > 0 {
 			skippedResult := skipToolCall(tc, "Skipped due to queued user message.", eventCh)
 			results = append(results, skippedResult)
 			produced = append(produced, skippedResult)
