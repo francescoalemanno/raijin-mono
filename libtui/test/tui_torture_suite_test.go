@@ -132,8 +132,6 @@ func TestTUI_Torture_VirtualTerminal_MixedStormStaysResponsive(t *testing.T) {
 }
 
 func TestTUI_Torture_VirtualTerminal_RendersAndTracksCursor(t *testing.T) {
-	t.Parallel()
-
 	term := NewVirtualTerminal(40, 8)
 	ui := tui.NewTUI(term, true)
 	comp := &tortureStateComponent{
@@ -154,6 +152,13 @@ func TestTUI_Torture_VirtualTerminal_RendersAndTracksCursor(t *testing.T) {
 		line2 := term.GetLine(2)
 		return line0 == "header" && line1 == "abcd" && line2 == "tail"
 	}, time.Second, 10*time.Millisecond)
+
+	// Force one final full render and wait until it is processed so cursor
+	// coordinates are read from a deterministic end-of-frame state.
+	ui.RequestRender(true)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.True(t, ui.DispatchSync(ctx, func(tui.UIToken) {}))
 
 	row, col := term.GetCursor()
 	assert.Equal(t, 1, row)
