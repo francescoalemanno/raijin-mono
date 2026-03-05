@@ -91,7 +91,7 @@ func main() {
 		}
 		response, err := chat.RunOneShot(runtimeModel, modelCfg, oneShot)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
 			os.Exit(1)
 		}
 		fmt.Println(response)
@@ -99,7 +99,7 @@ func main() {
 	}
 
 	if err := chat.RunChatWithPrompt(runtimeModel, modelCfg, strings.Join(flag.Args(), " ")); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
 		os.Exit(1)
 	}
 }
