@@ -146,4 +146,13 @@ var syntheticGeneratedModels = []ModelInfo{
 		CostPer1MIn:      0.55,
 		CostPer1MOut:     2.19,
 	},
+	{
+		ProviderID:       SyntheticProviderID,
+		ModelID:          "hf:zai-org/GLM-4.7-Flash",
+		Name:             "zai-org/GLM-4.7-Flash",
+		ContextWindow:    196608,
+		DefaultMaxTokens: 16384,
+		CostPer1MIn:      0.06,
+		CostPer1MOut:     0.4,
+	},
 }

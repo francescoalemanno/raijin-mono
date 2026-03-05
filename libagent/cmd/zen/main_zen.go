@@ -21,6 +21,10 @@ const (
 	fallbackContextWindow      = int64(200000)
 	fallbackDefaultMaxTokens   = int64(16384)
 	defaultFetchTimeoutSeconds = 15
+
+	// Provider IDs used in generated code
+	zenProviderID   = "ZenProviderID"
+	zenGoProviderID = "ZenGoProviderID"
 )
 
 type zenModelsResponse struct {
@@ -44,22 +48,32 @@ type zenModel struct {
 }
 
 type modelsDevResponse struct {
-	OpenCode modelsDevProvider `json:"opencode"`
+	OpenCode   modelsDevProviderInfo `json:"opencode"`
+	OpenCodeGo modelsDevProviderInfo `json:"opencode-go"`
 }
 
-type modelsDevProvider struct {
+type modelsDevProviderInfo struct {
+	ID     string                    `json:"id"`
+	Name   string                    `json:"name"`
+	API    string                    `json:"api"`
+	NPM    string                    `json:"npm"`
 	Models map[string]modelsDevModel `json:"models"`
 }
 
 type modelsDevModel struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Status     string            `json:"status"`
-	ToolCall   *bool             `json:"tool_call"`
-	Reasoning  *bool             `json:"reasoning"`
-	Modalities modelsDevModality `json:"modalities"`
-	Cost       modelsDevCost     `json:"cost"`
-	Limit      modelsDevLimit    `json:"limit"`
+	ID         string               `json:"id"`
+	Name       string               `json:"name"`
+	Status     string               `json:"status"`
+	ToolCall   *bool                `json:"tool_call"`
+	Reasoning  *bool                `json:"reasoning"`
+	Modalities modelsDevModality    `json:"modalities"`
+	Cost       modelsDevCost        `json:"cost"`
+	Limit      modelsDevLimit       `json:"limit"`
+	Provider   modelsDevProviderRef `json:"provider"`
+}
+
+type modelsDevProviderRef struct {
+	NPM string `json:"npm"`
 }
 
 type modelsDevModality struct {
@@ -99,18 +113,26 @@ func run() error {
 		return err
 	}
 
-	metadata, err := fetchModelsDevModels(client, *metadataEndpoint)
+	modelsDev, err := fetchModelsDevData(client, *metadataEndpoint)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "zen-models-gen: warning: models.dev metadata unavailable: %v\n", err)
-		metadata = map[string]modelsDevModel{}
+		modelsDev = &modelsDevResponse{}
 	}
 
-	models := buildModels(zenModels, metadata)
+	// Build Zen models from API + metadata
+	zenMetadata := map[string]modelsDevModel{}
+	if modelsDev.OpenCode.Models != nil {
+		zenMetadata = normalizeModelsDevMap(modelsDev.OpenCode.Models)
+	}
+	models := buildModels(zenModels, zenMetadata)
 	if len(models) == 0 {
 		return fmt.Errorf("no models available after normalization")
 	}
 
-	formatted, err := render(models)
+	// Build Go models from models.dev opencode-go provider
+	goModels, goAnthropicModels := buildGoModelsFromModelsDev(modelsDev.OpenCodeGo)
+
+	formatted, err := render(models, goModels, goAnthropicModels)
 	if err != nil {
 		return err
 	}
@@ -129,14 +151,17 @@ func fetchZenModels(client *http.Client, endpoint string) ([]zenModel, error) {
 	return parsed.Data, nil
 }
 
-func fetchModelsDevModels(client *http.Client, endpoint string) (map[string]modelsDevModel, error) {
+func fetchModelsDevData(client *http.Client, endpoint string) (*modelsDevResponse, error) {
 	var parsed modelsDevResponse
 	if err := fetchJSON(client, endpoint, &parsed); err != nil {
 		return nil, fmt.Errorf("fetch models.dev catalog: %w", err)
 	}
+	return &parsed, nil
+}
 
-	byID := make(map[string]modelsDevModel, len(parsed.OpenCode.Models))
-	for key, model := range parsed.OpenCode.Models {
+func normalizeModelsDevMap(models map[string]modelsDevModel) map[string]modelsDevModel {
+	byID := make(map[string]modelsDevModel, len(models))
+	for key, model := range models {
 		modelID := strings.TrimSpace(model.ID)
 		if modelID == "" {
 			modelID = strings.TrimSpace(key)
@@ -147,7 +172,7 @@ func fetchModelsDevModels(client *http.Client, endpoint string) (map[string]mode
 		model.ID = modelID
 		byID[modelID] = model
 	}
-	return byID, nil
+	return byID
 }
 
 func fetchJSON(client *http.Client, endpoint string, target any) error {
@@ -207,6 +232,85 @@ func buildModels(zenModels []zenModel, modelsDev map[string]modelsDevModel) []ze
 	return models
 }
 
+// buildGoModelsFromModelsDev creates zenModel structs from models.dev opencode-go provider data.
+// Returns the models and a list of model IDs that use Anthropic API format.
+func buildGoModelsFromModelsDev(provider modelsDevProviderInfo) ([]zenModel, []string) {
+	if provider.Models == nil {
+		return nil, nil
+	}
+
+	var models []zenModel
+	var anthropicModels []string
+
+	for _, md := range provider.Models {
+		model := zenModel{
+			ID:   strings.TrimSpace(md.ID),
+			Name: strings.TrimSpace(md.Name),
+		}
+
+		if model.ID == "" {
+			continue
+		}
+		if model.Name == "" {
+			model.Name = model.ID
+		}
+
+		// Skip deprecated models
+		if strings.EqualFold(strings.TrimSpace(md.Status), "deprecated") {
+			continue
+		}
+
+		// Check if this model uses Anthropic API format
+		if isAnthropicNPM(md.Provider.NPM) {
+			anthropicModels = append(anthropicModels, model.ID)
+		}
+
+		// Apply limits
+		if md.Limit.Context != nil && *md.Limit.Context > 0 {
+			model.ContextWindow = *md.Limit.Context
+		}
+		if md.Limit.Output != nil && *md.Limit.Output > 0 {
+			model.DefaultMaxTokens = *md.Limit.Output
+		}
+
+		// Apply costs
+		if md.Cost.Input != nil {
+			model.CostPer1MIn = *md.Cost.Input
+		}
+		if md.Cost.Output != nil {
+			model.CostPer1MOut = *md.Cost.Output
+		}
+		if md.Cost.CacheRead != nil {
+			model.CostPer1MInCached = *md.Cost.CacheRead
+		}
+		if md.Cost.CacheWrite != nil {
+			model.CostPer1MOutCached = *md.Cost.CacheWrite
+		}
+
+		// Apply capabilities
+		if md.Reasoning != nil {
+			model.CanReason = *md.Reasoning
+		}
+		if len(md.Modalities.Input) > 0 {
+			model.SupportsImages = hasImageModality(md.Modalities.Input)
+		}
+
+		// Apply defaults if missing
+		model, ok := normalizeModel(model)
+		if !ok {
+			continue
+		}
+
+		models = append(models, model)
+	}
+
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].ID < models[j].ID
+	})
+
+	return models, anthropicModels
+}
+
 func applyModelsDevMetadata(model zenModel, metadata modelsDevModel) (zenModel, bool) {
 	if strings.EqualFold(strings.TrimSpace(metadata.Status), "deprecated") {
 		return zenModel{}, false
@@ -264,6 +368,11 @@ func hasImageModality(inputs []string) bool {
 	return false
 }
 
+// isAnthropicNPM reports whether the npm package indicates Anthropic API format.
+func isAnthropicNPM(npm string) bool {
+	return strings.Contains(strings.ToLower(npm), "anthropic")
+}
+
 func normalizeModel(model zenModel) (zenModel, bool) {
 	model.ID = strings.TrimSpace(model.ID)
 	if model.ID == "" {
@@ -302,13 +411,31 @@ func normalizeModel(model zenModel) (zenModel, bool) {
 	return model, true
 }
 
-func render(models []zenModel) ([]byte, error) {
+func render(zenModels []zenModel, goModels []zenModel, goAnthropicModels []string) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteString("// Code generated by go generate; DO NOT EDIT.\n\n")
 	out.WriteString("package libagent\n\n")
+
+	// Write all Zen models
 	out.WriteString("var zenGeneratedModels = []ModelInfo{\n")
-	for _, model := range models {
-		writeModelLiteral(&out, model)
+	for _, model := range zenModels {
+		writeModelLiteral(&out, model, zenProviderID)
+	}
+	out.WriteString("}\n\n")
+
+	// Write Go models
+	out.WriteString("var zenGoGeneratedModels = []ModelInfo{\n")
+	for _, model := range goModels {
+		writeModelLiteral(&out, model, zenGoProviderID)
+	}
+	out.WriteString("}\n\n")
+
+	// Write Anthropic models map for Go provider
+	out.WriteString("// zenGoAnthropicModels lists Go models that use Anthropic API format.\n")
+	out.WriteString("// All other Go models use OpenAI-compatible format.\n")
+	out.WriteString("var zenGoAnthropicModels = map[string]bool{\n")
+	for _, modelID := range goAnthropicModels {
+		_, _ = fmt.Fprintf(&out, "\t%q: true,\n", modelID)
 	}
 	out.WriteString("}\n")
 
@@ -319,9 +446,9 @@ func render(models []zenModel) ([]byte, error) {
 	return formatted, nil
 }
 
-func writeModelLiteral(out *bytes.Buffer, model zenModel) {
+func writeModelLiteral(out *bytes.Buffer, model zenModel, providerID string) {
 	_, _ = fmt.Fprintf(out, "\t{\n")
-	_, _ = fmt.Fprintf(out, "\t\tProviderID:       ZenProviderID,\n")
+	_, _ = fmt.Fprintf(out, "\t\tProviderID:       %s,\n", providerID)
 	_, _ = fmt.Fprintf(out, "\t\tModelID:          %q,\n", model.ID)
 	_, _ = fmt.Fprintf(out, "\t\tName:             %q,\n", model.Name)
 	_, _ = fmt.Fprintf(out, "\t\tContextWindow:    %d,\n", model.ContextWindow)
@@ -337,6 +464,12 @@ func writeModelLiteral(out *bytes.Buffer, model zenModel) {
 	}
 	if model.CostPer1MOut != 0 {
 		_, _ = fmt.Fprintf(out, "\t\tCostPer1MOut:     %s,\n", formatFloat(model.CostPer1MOut))
+	}
+	if model.CostPer1MInCached != 0 {
+		_, _ = fmt.Fprintf(out, "\t\tCostPer1MInCached:  %s,\n", formatFloat(model.CostPer1MInCached))
+	}
+	if model.CostPer1MOutCached != 0 {
+		_, _ = fmt.Fprintf(out, "\t\tCostPer1MOutCached: %s,\n", formatFloat(model.CostPer1MOutCached))
 	}
 	_, _ = fmt.Fprintf(out, "\t},\n")
 }
