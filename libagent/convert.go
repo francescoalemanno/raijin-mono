@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openaicompat"
 )
 
 func toBase64(data []byte) string {
@@ -40,12 +41,17 @@ func DefaultConvertToLLM(_ context.Context, messages []Message) ([]fantasy.Messa
 
 		case *AssistantMessage:
 			var parts []fantasy.MessagePart
+			toolCallIDs := make(map[string]struct{})
+			hasText := false
+			hasReasoning := false
 			for _, c := range msg.Content {
 				switch v := c.(type) {
 				case fantasy.TextContent:
 					parts = append(parts, fantasy.TextPart{Text: v.Text})
+					hasText = true
 				case fantasy.ReasoningContent:
 					parts = append(parts, fantasy.ReasoningPart{Text: v.Text})
+					hasReasoning = true
 				case fantasy.ToolCallContent:
 					input := normalizeToolCallJSON(v.Input)
 					parts = append(parts, fantasy.ToolCallPart{
@@ -54,8 +60,38 @@ func DefaultConvertToLLM(_ context.Context, messages []Message) ([]fantasy.Messa
 						Input:            input,
 						ProviderExecuted: v.ProviderExecuted,
 					})
+					if id := strings.TrimSpace(v.ToolCallID); id != "" {
+						toolCallIDs[id] = struct{}{}
+					}
 				}
 			}
+
+			// Backward compatibility: persisted assistant messages may carry legacy
+			// Text/Reasoning/ToolCalls fields without structured Content.
+			if !hasReasoning && msg.Reasoning != "" {
+				parts = append(parts, fantasy.ReasoningPart{Text: msg.Reasoning})
+			}
+			if !hasText && strings.TrimSpace(msg.Text) != "" {
+				parts = append(parts, fantasy.TextPart{Text: msg.Text})
+			}
+			for _, tc := range msg.ToolCalls {
+				id := strings.TrimSpace(tc.ID)
+				name := strings.TrimSpace(tc.Name)
+				if id == "" || name == "" {
+					continue
+				}
+				if _, exists := toolCallIDs[id]; exists {
+					continue
+				}
+				parts = append(parts, fantasy.ToolCallPart{
+					ToolCallID:       id,
+					ToolName:         name,
+					Input:            normalizeToolCallJSON(tc.Input),
+					ProviderExecuted: tc.ProviderExecuted,
+				})
+				toolCallIDs[id] = struct{}{}
+			}
+
 			if len(parts) > 0 {
 				out = append(out, fantasy.Message{
 					Role:    fantasy.MessageRoleAssistant,
@@ -95,4 +131,71 @@ func normalizeToolCallJSON(input string) string {
 		return "{}"
 	}
 	return raw
+}
+
+func defaultConvertToLLMForRuntime(providerType string, providerOptions fantasy.ProviderOptions) ConvertToLLMFn {
+	return func(ctx context.Context, messages []Message) ([]fantasy.Message, error) {
+		prepared := messages
+		if needsOpenAICompatReasoningPlaceholder(providerType, providerOptions) {
+			prepared = withOpenAICompatReasoningPlaceholder(messages)
+		}
+		return DefaultConvertToLLM(ctx, prepared)
+	}
+}
+
+func needsOpenAICompatReasoningPlaceholder(providerType string, providerOptions fantasy.ProviderOptions) bool {
+	if !strings.EqualFold(strings.TrimSpace(providerType), "openai-compat") {
+		return false
+	}
+	raw, ok := providerOptions[openaicompat.Name]
+	if !ok || raw == nil {
+		return false
+	}
+	switch v := raw.(type) {
+	case *openaicompat.ProviderOptions:
+		return v != nil && v.ReasoningEffort != nil
+	default:
+		return false
+	}
+}
+
+func withOpenAICompatReasoningPlaceholder(messages []Message) []Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]Message, 0, len(messages))
+	changed := false
+
+	for _, m := range messages {
+		am, ok := m.(*AssistantMessage)
+		if !ok {
+			out = append(out, m)
+			continue
+		}
+
+		if !assistantNeedsReasoningPlaceholder(am) {
+			out = append(out, m)
+			continue
+		}
+
+		clone := CloneMessage(am).(*AssistantMessage)
+		clone.Reasoning = " "
+		out = append(out, clone)
+		changed = true
+	}
+
+	if !changed {
+		return messages
+	}
+	return out
+}
+
+func assistantNeedsReasoningPlaceholder(am *AssistantMessage) bool {
+	if am == nil {
+		return false
+	}
+	if strings.TrimSpace(am.Reasoning) != "" || len(am.Content.Reasoning()) > 0 {
+		return false
+	}
+	return len(am.ToolCalls) > 0 || len(am.Content.ToolCalls()) > 0
 }
