@@ -33,3 +33,18 @@ func TestToolPreferenceFor_BuiltinAndPluginDefaults(t *testing.T) {
 		t.Fatalf("plugin preference mismatch: %q", got)
 	}
 }
+
+func TestBuildSystemPrompt_IncludesToolParameterDetails(t *testing.T) {
+	t.Parallel()
+
+	got := BuildSystemPrompt()
+	if !strings.Contains(got, "Parameters:") {
+		t.Fatalf("system prompt missing tool parameters section")
+	}
+	if !strings.Contains(got, "- `path` (string, required): Path to the file or directory to read (relative or absolute)") {
+		t.Fatalf("system prompt missing required path parameter details")
+	}
+	if !strings.Contains(got, "- `offset` (integer, optional): Line number to start reading from (1-indexed)") {
+		t.Fatalf("system prompt missing optional offset parameter details")
+	}
+}

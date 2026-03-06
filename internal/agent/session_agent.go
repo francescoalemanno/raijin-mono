@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -571,8 +572,7 @@ You are an expert coding agent, operating inside Raijin a coding-agent harness.
 	if len(allTools) > 0 {
 		sp += "\n\n<tools>\nThe following tools are at your disposal\n"
 		for _, t := range allTools {
-			info := t.Info()
-			sp += "  <tool name=\"" + info.Name + "\">" + info.Description + "</tool>\n"
+			sp += renderToolForSystemPrompt(t.Info())
 		}
 		sp += "</tools>"
 		sp += buildToolPreferencesSection(allTools)
@@ -620,6 +620,58 @@ You invoke $RAIJIN_BINARY -p "How would you optimize the processData function in
 		"\n</env>"
 
 	return sp
+}
+
+func renderToolForSystemPrompt(info libagent.ToolInfo) string {
+	line := "  <tool name=\"" + info.Name + "\">" + info.Description
+	if params := renderToolParametersForSystemPrompt(info.Parameters, info.Required); params != "" {
+		line += "\n" + params + "\n"
+	}
+	line += "</tool>\n"
+	return line
+}
+
+func renderToolParametersForSystemPrompt(parameters map[string]any, required []string) string {
+	if len(parameters) == 0 {
+		return ""
+	}
+
+	requiredSet := make(map[string]struct{}, len(required))
+	for _, name := range required {
+		requiredSet[name] = struct{}{}
+	}
+
+	names := make([]string, 0, len(parameters))
+	for name := range parameters {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	lines := make([]string, 0, len(names)+1)
+	lines = append(lines, "    Parameters:")
+	for _, name := range names {
+		desc := ""
+		typeName := "any"
+
+		if schema, ok := parameters[name].(map[string]any); ok {
+			if d, ok := schema["description"].(string); ok && strings.TrimSpace(d) != "" {
+				desc = d
+			}
+			if t, ok := schema["type"].(string); ok && strings.TrimSpace(t) != "" {
+				typeName = t
+			}
+		}
+		if desc == "" {
+			desc = "(no description)"
+		}
+
+		req := "optional"
+		if _, ok := requiredSet[name]; ok {
+			req = "required"
+		}
+		lines = append(lines, "    - `"+name+"` ("+typeName+", "+req+"): "+desc)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func buildToolPreferencesSection(allTools []libagent.Tool) string {
