@@ -84,32 +84,55 @@ func SanitizeHistory(messages []Message) []Message {
 	if len(messages) == 0 {
 		return messages
 	}
-	callCounts := map[string]int{}
-	resultCounts := map[string]int{}
-	for _, m := range messages {
+
+	type toolCouplingKey struct {
+		id   string
+		name string
+	}
+	type callRef struct {
+		msgIdx  int
+		callIdx int
+	}
+	pendingByKey := map[toolCouplingKey][]callRef{}
+	validCalls := map[callRef]struct{}{}
+	validResults := map[int]struct{}{}
+	for msgIdx, m := range messages {
 		switch msg := m.(type) {
 		case *AssistantMessage:
-			for _, tc := range assistantToolCalls(msg) {
+			for callIdx, tc := range assistantToolCalls(msg) {
 				id := strings.TrimSpace(tc.ID)
-				if id != "" {
-					callCounts[id]++
+				name := strings.TrimSpace(tc.Name)
+				if id == "" || name == "" {
+					continue
 				}
+				key := toolCouplingKey{id: id, name: name}
+				pendingByKey[key] = append(pendingByKey[key], callRef{msgIdx: msgIdx, callIdx: callIdx})
 			}
 		case *ToolResultMessage:
 			id := strings.TrimSpace(msg.ToolCallID)
-			if id != "" {
-				resultCounts[id]++
+			name := strings.TrimSpace(msg.ToolName)
+			if id == "" || name == "" {
+				continue
 			}
+			key := toolCouplingKey{id: id, name: name}
+			pending := pendingByKey[key]
+			if len(pending) == 0 {
+				continue
+			}
+			match := pending[0]
+			pending = pending[1:]
+			if len(pending) == 0 {
+				delete(pendingByKey, key)
+			} else {
+				pendingByKey[key] = pending
+			}
+			validCalls[match] = struct{}{}
+			validResults[msgIdx] = struct{}{}
 		}
 	}
-	valid := map[string]struct{}{}
-	for id, c := range callCounts {
-		if c == 1 && resultCounts[id] == 1 {
-			valid[id] = struct{}{}
-		}
-	}
+
 	out := make([]Message, 0, len(messages))
-	for _, m := range messages {
+	for msgIdx, m := range messages {
 		switch msg := m.(type) {
 		case *UserMessage:
 			if strings.TrimSpace(msg.Content) == "" && len(msg.Files) == 0 {
@@ -122,13 +145,13 @@ func SanitizeHistory(messages []Message) []Message {
 			hasText := strings.TrimSpace(text) != "" || strings.TrimSpace(reasoning) != ""
 			rawCalls := assistantToolCalls(msg)
 			calls := make([]ToolCallItem, 0, len(rawCalls))
-			for _, tc := range rawCalls {
+			for callIdx, tc := range rawCalls {
 				id := strings.TrimSpace(tc.ID)
 				name := strings.TrimSpace(tc.Name)
 				if id == "" || name == "" {
 					continue
 				}
-				if _, ok := valid[id]; !ok {
+				if _, ok := validCalls[callRef{msgIdx: msgIdx, callIdx: callIdx}]; !ok {
 					continue
 				}
 				calls = append(calls, tc)
@@ -145,12 +168,7 @@ func SanitizeHistory(messages []Message) []Message {
 			clone.ToolCalls = calls
 			out = append(out, clone)
 		case *ToolResultMessage:
-			id := strings.TrimSpace(msg.ToolCallID)
-			name := strings.TrimSpace(msg.ToolName)
-			if id == "" || name == "" {
-				continue
-			}
-			if _, ok := valid[id]; !ok {
+			if _, ok := validResults[msgIdx]; !ok {
 				continue
 			}
 			out = append(out, CloneMessage(msg))
@@ -159,41 +177,54 @@ func SanitizeHistory(messages []Message) []Message {
 	return out
 }
 
-// HasBijectiveToolCoupling returns true when every assistant tool call ID has
-// exactly one matching tool result ID, and vice versa.
+// HasBijectiveToolCoupling returns true when assistant tool calls and tool
+// results are balanced in-order:
+//   - every tool call has a matching tool result with the same ID and tool name
+//   - every tool result matches a previously seen unmatched tool call
+//   - all call IDs and tool names are non-empty
+//
+// This allows repeated tool-call IDs over time, as long as they remain
+// balanced on the inspected message path.
 func HasBijectiveToolCoupling(messages []Message) bool {
-	callCounts := make(map[string]int)
-	resultCounts := make(map[string]int)
+	type toolCouplingKey struct {
+		id   string
+		name string
+	}
+	pendingByKey := make(map[toolCouplingKey]int)
 
 	for _, msg := range messages {
 		switch m := msg.(type) {
 		case *AssistantMessage:
 			for _, call := range assistantToolCalls(m) {
 				id := strings.TrimSpace(call.ID)
-				if id == "" {
+				name := strings.TrimSpace(call.Name)
+				if id == "" || name == "" {
 					return false
 				}
-				callCounts[id]++
+				key := toolCouplingKey{id: id, name: name}
+				pendingByKey[key]++
 			}
 		case *ToolResultMessage:
 			id := strings.TrimSpace(m.ToolCallID)
-			if id == "" {
+			name := strings.TrimSpace(m.ToolName)
+			if id == "" || name == "" {
 				return false
 			}
-			resultCounts[id]++
+			key := toolCouplingKey{id: id, name: name}
+			pending := pendingByKey[key]
+			if pending <= 0 {
+				return false
+			}
+			pending--
+			if pending == 0 {
+				delete(pendingByKey, key)
+			} else {
+				pendingByKey[key] = pending
+			}
 		}
 	}
-
-	if len(callCounts) != len(resultCounts) {
-		return false
-	}
-	for id, count := range callCounts {
-		if count != 1 || resultCounts[id] != 1 {
-			return false
-		}
-	}
-	for id, count := range resultCounts {
-		if count != 1 || callCounts[id] != 1 {
+	for _, pending := range pendingByKey {
+		if pending != 0 {
 			return false
 		}
 	}

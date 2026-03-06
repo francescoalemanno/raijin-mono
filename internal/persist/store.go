@@ -518,6 +518,10 @@ func hasBijectiveToolCouplingFromLeaf(nodes map[string]*treeNode, leafID string)
 		}
 		cur = n.parentID
 	}
+	// Build chronological order (root -> leaf) for coupling validation.
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
+	}
 	return libagent.HasBijectiveToolCoupling(path)
 }
 
