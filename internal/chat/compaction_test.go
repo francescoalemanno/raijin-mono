@@ -34,7 +34,7 @@ func TestIsValidCompactionCutIndex_RejectsCrossBoundaryToolPair(t *testing.T) {
 	}
 }
 
-func TestIsValidCompactionCutIndex_RejectsDuplicateToolCallIDs(t *testing.T) {
+func TestIsValidCompactionCutIndex_AllowsDuplicateToolCallIDsWhenBalanced(t *testing.T) {
 	msgs := []libagent.Message{
 		&libagent.UserMessage{Role: "user", Content: "q"},
 		&libagent.AssistantMessage{Role: "assistant", Completed: true, ToolCalls: []libagent.ToolCallItem{{ID: "dup", Name: "tool"}}},
@@ -43,8 +43,8 @@ func TestIsValidCompactionCutIndex_RejectsDuplicateToolCallIDs(t *testing.T) {
 		&libagent.ToolResultMessage{Role: "toolResult", ToolCallID: "dup", ToolName: "tool", Content: "ok"},
 	}
 
-	if isValidCompactionCutIndex(msgs, 1) {
-		t.Fatalf("expected cut to be invalid when tool call IDs are duplicated")
+	if !isValidCompactionCutIndex(msgs, 1) {
+		t.Fatalf("expected cut to be valid when duplicate tool call IDs are balanced")
 	}
 }
 
