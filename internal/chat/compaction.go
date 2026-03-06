@@ -235,46 +235,7 @@ func isValidCompactionCutIndex(msgs []libagent.Message, cut int) bool {
 	if _, ok := msgs[cut].(*libagent.ToolResultMessage); ok {
 		return false
 	}
-	return hasBijectiveToolCoupling(msgs[:cut]) && hasBijectiveToolCoupling(msgs[cut:])
-}
-
-func hasBijectiveToolCoupling(msgs []libagent.Message) bool {
-	callCounts := make(map[string]int)
-	resultCounts := make(map[string]int)
-
-	for _, msg := range msgs {
-		switch m := msg.(type) {
-		case *libagent.AssistantMessage:
-			for _, call := range m.ToolCalls {
-				id := strings.TrimSpace(call.ID)
-				if id == "" {
-					return false
-				}
-				callCounts[id]++
-			}
-		case *libagent.ToolResultMessage:
-			id := strings.TrimSpace(m.ToolCallID)
-			if id == "" {
-				return false
-			}
-			resultCounts[id]++
-		}
-	}
-
-	if len(callCounts) != len(resultCounts) {
-		return false
-	}
-	for id, count := range callCounts {
-		if count != 1 || resultCounts[id] != 1 {
-			return false
-		}
-	}
-	for id, count := range resultCounts {
-		if count != 1 || callCounts[id] != 1 {
-			return false
-		}
-	}
-	return true
+	return libagent.HasBijectiveToolCoupling(msgs[:cut]) && libagent.HasBijectiveToolCoupling(msgs[cut:])
 }
 
 func estimateMessageTokens(msg libagent.Message) int64 {

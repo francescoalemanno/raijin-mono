@@ -299,3 +299,113 @@ func TestAppendCompaction_ReplayRoundTrip(t *testing.T) {
 		t.Fatalf("replayed summary content mismatch: %q", replayed[0].(*libagent.UserMessage).Content)
 	}
 }
+
+func TestGetTree_HidesUnsafeAssistantSelectionThatWouldSplitToolCoupling(t *testing.T) {
+	t.Parallel()
+
+	st, sess := newEphemeralTestStore(t)
+	ctx := context.Background()
+	ms := st.Messages()
+
+	if _, err := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "start"}); err != nil {
+		t.Fatalf("Create user: %v", err)
+	}
+	a1, err := ms.Create(ctx, sess.ID, &libagent.AssistantMessage{
+		Role: "assistant",
+		Text: "running tool",
+		ToolCalls: []libagent.ToolCallItem{{
+			ID:    "call-1",
+			Name:  "read",
+			Input: `{"path":"file.txt"}`,
+		}},
+		Completed: true,
+	})
+	if err != nil {
+		t.Fatalf("Create assistant: %v", err)
+	}
+	tr1, err := ms.Create(ctx, sess.ID, &libagent.ToolResultMessage{
+		Role:       "toolResult",
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		Content:    "ok",
+	})
+	if err != nil {
+		t.Fatalf("Create tool result: %v", err)
+	}
+	if _, err := ms.Create(ctx, sess.ID, &libagent.AssistantMessage{Role: "assistant", Text: "done", Completed: true}); err != nil {
+		t.Fatalf("Create assistant 2: %v", err)
+	}
+
+	tree := st.GetTree()
+	if treeContainsID(tree, libagent.MessageID(a1)) {
+		t.Fatalf("unsafe assistant entry should be hidden from /tree")
+	}
+	if !treeContainsID(tree, libagent.MessageID(tr1)) {
+		t.Fatalf("tool result entry should remain visible")
+	}
+}
+
+func TestGetTree_AllVisibleEntriesNavigateToBijectiveToolCoupling(t *testing.T) {
+	t.Parallel()
+
+	st, sess := newEphemeralTestStore(t)
+	ctx := context.Background()
+	ms := st.Messages()
+
+	if _, err := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "start"}); err != nil {
+		t.Fatalf("Create user: %v", err)
+	}
+	if _, err := ms.Create(ctx, sess.ID, &libagent.AssistantMessage{
+		Role: "assistant",
+		Text: "running tool",
+		ToolCalls: []libagent.ToolCallItem{{
+			ID:    "call-1",
+			Name:  "read",
+			Input: `{"path":"file.txt"}`,
+		}},
+		Completed: true,
+	}); err != nil {
+		t.Fatalf("Create assistant: %v", err)
+	}
+	if _, err := ms.Create(ctx, sess.ID, &libagent.ToolResultMessage{
+		Role:       "toolResult",
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		Content:    "ok",
+	}); err != nil {
+		t.Fatalf("Create tool result: %v", err)
+	}
+	if _, err := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "next"}); err != nil {
+		t.Fatalf("Create user 2: %v", err)
+	}
+	if _, err := ms.Create(ctx, sess.ID, &libagent.AssistantMessage{Role: "assistant", Text: "done", Completed: true}); err != nil {
+		t.Fatalf("Create assistant 2: %v", err)
+	}
+
+	tree := st.GetTree()
+	if len(tree) == 0 {
+		t.Fatal("expected non-empty tree")
+	}
+
+	for _, entry := range tree {
+		if _, err := st.Navigate(entry.ID); err != nil {
+			t.Fatalf("Navigate(%s): %v", entry.ID, err)
+		}
+		msgs, err := ms.List(ctx, sess.ID)
+		if err != nil {
+			t.Fatalf("List after navigate: %v", err)
+		}
+		if !libagent.HasBijectiveToolCoupling(msgs) {
+			t.Fatalf("visible tree entry %s navigates to non-bijective tool history", entry.ID)
+		}
+	}
+}
+
+func treeContainsID(entries []TreeEntry, id string) bool {
+	for _, entry := range entries {
+		if entry.ID == id {
+			return true
+		}
+	}
+	return false
+}

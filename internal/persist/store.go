@@ -337,6 +337,21 @@ func (st *Store) GetTree() []TreeEntry {
 		return nil
 	}
 
+	// Only expose nodes that are safe navigation targets: selecting them must
+	// not separate tool calls from their tool results in the resulting path.
+	navigationSafe := make(map[string]bool, len(st.nodes))
+	for id, n := range st.nodes {
+		if n == nil || n.msg == nil {
+			navigationSafe[id] = true
+			continue
+		}
+		leafID := id
+		if _, ok := n.msg.(*libagent.UserMessage); ok {
+			leafID = n.parentID
+		}
+		navigationSafe[id] = hasBijectiveToolCouplingFromLeaf(st.nodes, leafID)
+	}
+
 	// isDisplayed: hide compaction checkpoints and assistant messages with no
 	// visible text (tool-call-only intermediaries). Hidden nodes have their
 	// children promoted to the nearest visible level.
@@ -345,6 +360,9 @@ func (st *Store) GetTree() []TreeEntry {
 			return false
 		}
 		if node.typ == jTypeCompaction {
+			return false
+		}
+		if !navigationSafe[node.id] {
 			return false
 		}
 		msg := node.msg
@@ -478,6 +496,29 @@ func (st *Store) GetTree() []TreeEntry {
 		dfs(root, 0, visRoots, i, nil)
 	}
 	return out
+}
+
+func hasBijectiveToolCouplingFromLeaf(nodes map[string]*treeNode, leafID string) bool {
+	seen := make(map[string]struct{}, len(nodes))
+	path := make([]libagent.Message, 0, len(nodes))
+
+	cur := leafID
+	for cur != "" {
+		if _, ok := seen[cur]; ok {
+			break
+		}
+		seen[cur] = struct{}{}
+
+		n, ok := nodes[cur]
+		if !ok || n == nil {
+			break
+		}
+		if n.msg != nil {
+			path = append(path, n.msg)
+		}
+		cur = n.parentID
+	}
+	return libagent.HasBijectiveToolCoupling(path)
 }
 
 // ---------------------------------------------------------------------------

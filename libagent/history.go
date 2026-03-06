@@ -159,6 +159,47 @@ func SanitizeHistory(messages []Message) []Message {
 	return out
 }
 
+// HasBijectiveToolCoupling returns true when every assistant tool call ID has
+// exactly one matching tool result ID, and vice versa.
+func HasBijectiveToolCoupling(messages []Message) bool {
+	callCounts := make(map[string]int)
+	resultCounts := make(map[string]int)
+
+	for _, msg := range messages {
+		switch m := msg.(type) {
+		case *AssistantMessage:
+			for _, call := range assistantToolCalls(m) {
+				id := strings.TrimSpace(call.ID)
+				if id == "" {
+					return false
+				}
+				callCounts[id]++
+			}
+		case *ToolResultMessage:
+			id := strings.TrimSpace(m.ToolCallID)
+			if id == "" {
+				return false
+			}
+			resultCounts[id]++
+		}
+	}
+
+	if len(callCounts) != len(resultCounts) {
+		return false
+	}
+	for id, count := range callCounts {
+		if count != 1 || resultCounts[id] != 1 {
+			return false
+		}
+	}
+	for id, count := range resultCounts {
+		if count != 1 || callCounts[id] != 1 {
+			return false
+		}
+	}
+	return true
+}
+
 func assistantText(msg *AssistantMessage) string {
 	if msg == nil {
 		return ""
