@@ -373,7 +373,7 @@ func (st *Store) GetTree() []TreeEntry {
 		if !ok {
 			return true
 		}
-		return strings.TrimSpace(am.Text) != ""
+		return strings.TrimSpace(libagent.AssistantText(am)) != ""
 	}
 
 	// Build the active path set: leafID → root.
@@ -659,6 +659,7 @@ func (st *Store) loadSessionTree(sessionID string) error {
 	if err != nil {
 		return err
 	}
+	leafID = sanitizeLoadedLeafPath(nodes, leafID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.current != sessionID {
@@ -669,6 +670,131 @@ func (st *Store) loadSessionTree(sessionID string) error {
 	st.leafID = leafID
 	st.titled = titled
 	return nil
+}
+
+func sanitizeLoadedLeafPath(nodes map[string]*treeNode, leafID string) string {
+	if len(nodes) == 0 || strings.TrimSpace(leafID) == "" {
+		return leafID
+	}
+
+	path := make([]string, 0, len(nodes))
+	seen := make(map[string]struct{}, len(nodes))
+	for cur := leafID; cur != ""; {
+		if _, ok := seen[cur]; ok {
+			break
+		}
+		seen[cur] = struct{}{}
+		n, ok := nodes[cur]
+		if !ok || n == nil {
+			break
+		}
+		path = append(path, cur)
+		cur = n.parentID
+	}
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
+	}
+
+	pathMessages := make([]libagent.Message, 0, len(path))
+	for _, id := range path {
+		if n := nodes[id]; n != nil && n.msg != nil {
+			pathMessages = append(pathMessages, n.msg)
+		}
+	}
+	if len(pathMessages) == 0 {
+		return leafID
+	}
+
+	sanitized := libagent.SanitizeHistory(pathMessages)
+	if len(sanitized) == 0 {
+		return ""
+	}
+
+	sanitizedByID := make(map[string]libagent.Message, len(sanitized))
+	keepMsgID := make(map[string]struct{}, len(sanitized))
+	for _, msg := range sanitized {
+		id := strings.TrimSpace(libagent.MessageID(msg))
+		if id == "" {
+			continue
+		}
+		keepMsgID[id] = struct{}{}
+		sanitizedByID[id] = msg
+	}
+	if len(keepMsgID) == 0 {
+		return ""
+	}
+
+	filteredPath := make([]string, 0, len(path))
+	for _, id := range path {
+		n := nodes[id]
+		if n == nil {
+			continue
+		}
+		if n.msg != nil {
+			if _, keep := keepMsgID[id]; !keep {
+				continue
+			}
+			if sanitizedMsg, ok := sanitizedByID[id]; ok {
+				n.msg = libagent.CloneMessage(sanitizedMsg)
+			}
+		}
+		filteredPath = append(filteredPath, id)
+	}
+	if len(filteredPath) == 0 {
+		return ""
+	}
+
+	for i, id := range filteredPath {
+		n := nodes[id]
+		if n == nil {
+			continue
+		}
+		oldParent := n.parentID
+		newParent := ""
+		if i > 0 {
+			newParent = filteredPath[i-1]
+		}
+		if oldParent == newParent {
+			continue
+		}
+		if parent, ok := nodes[oldParent]; ok && parent != nil {
+			parent.children = removeChildID(parent.children, id)
+		}
+		n.parentID = newParent
+		if parent, ok := nodes[newParent]; ok && parent != nil {
+			if !containsChildID(parent.children, id) {
+				parent.children = append(parent.children, id)
+			}
+		}
+	}
+
+	return filteredPath[len(filteredPath)-1]
+}
+
+func containsChildID(children []string, id string) bool {
+	for _, child := range children {
+		if child == id {
+			return true
+		}
+	}
+	return false
+}
+
+func removeChildID(children []string, id string) []string {
+	if len(children) == 0 {
+		return children
+	}
+	out := children[:0]
+	for _, child := range children {
+		if child == id {
+			continue
+		}
+		out = append(out, child)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // replaySessionMeta reads a journal file and returns the latest session metadata.
@@ -829,6 +955,9 @@ func messageToJMsg(m libagent.Message) jMsg {
 		return jMsg{Kind: "user", User: libagent.CloneMessage(msg).(*libagent.UserMessage)}
 	case *libagent.AssistantMessage:
 		clone := libagent.CloneMessage(msg).(*libagent.AssistantMessage)
+		clone.Text = libagent.AssistantText(clone)
+		clone.Reasoning = libagent.AssistantReasoning(clone)
+		clone.ToolCalls = libagent.AssistantToolCalls(clone)
 		clone.Content = nil
 		clone.Error = nil
 		return jMsg{Kind: "assistant", Assistant: clone}
@@ -850,7 +979,12 @@ func jMsgToMessage(jm jMsg) (libagent.Message, bool) {
 		if jm.Assistant == nil {
 			return nil, false
 		}
-		return libagent.CloneMessage(jm.Assistant), true
+		clone := libagent.CloneMessage(jm.Assistant).(*libagent.AssistantMessage)
+		if len(clone.Content) == 0 {
+			hydrated := libagent.NewAssistantMessage(clone.Text, clone.Reasoning, clone.ToolCalls, clone.Timestamp)
+			clone.Content = hydrated.Content
+		}
+		return clone, true
 	case "tool_result":
 		if jm.ToolResult == nil {
 			return nil, false

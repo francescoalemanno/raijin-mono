@@ -41,17 +41,12 @@ func DefaultConvertToLLM(_ context.Context, messages []Message) ([]fantasy.Messa
 
 		case *AssistantMessage:
 			var parts []fantasy.MessagePart
-			toolCallIDs := make(map[string]struct{})
-			hasText := false
-			hasReasoning := false
 			for _, c := range msg.Content {
 				switch v := c.(type) {
 				case fantasy.TextContent:
 					parts = append(parts, fantasy.TextPart{Text: v.Text})
-					hasText = true
 				case fantasy.ReasoningContent:
 					parts = append(parts, fantasy.ReasoningPart{Text: v.Text})
-					hasReasoning = true
 				case fantasy.ToolCallContent:
 					input := normalizeToolCallJSON(v.Input)
 					parts = append(parts, fantasy.ToolCallPart{
@@ -60,36 +55,7 @@ func DefaultConvertToLLM(_ context.Context, messages []Message) ([]fantasy.Messa
 						Input:            input,
 						ProviderExecuted: v.ProviderExecuted,
 					})
-					if id := strings.TrimSpace(v.ToolCallID); id != "" {
-						toolCallIDs[id] = struct{}{}
-					}
 				}
-			}
-
-			// Backward compatibility: persisted assistant messages may carry legacy
-			// Text/Reasoning/ToolCalls fields without structured Content.
-			if !hasReasoning && msg.Reasoning != "" {
-				parts = append(parts, fantasy.ReasoningPart{Text: msg.Reasoning})
-			}
-			if !hasText && strings.TrimSpace(msg.Text) != "" {
-				parts = append(parts, fantasy.TextPart{Text: msg.Text})
-			}
-			for _, tc := range msg.ToolCalls {
-				id := strings.TrimSpace(tc.ID)
-				name := strings.TrimSpace(tc.Name)
-				if id == "" || name == "" {
-					continue
-				}
-				if _, exists := toolCallIDs[id]; exists {
-					continue
-				}
-				parts = append(parts, fantasy.ToolCallPart{
-					ToolCallID:       id,
-					ToolName:         name,
-					Input:            normalizeToolCallJSON(tc.Input),
-					ProviderExecuted: tc.ProviderExecuted,
-				})
-				toolCallIDs[id] = struct{}{}
 			}
 
 			if len(parts) > 0 {
@@ -179,7 +145,7 @@ func withOpenAICompatReasoningPlaceholder(messages []Message) []Message {
 		}
 
 		clone := CloneMessage(am).(*AssistantMessage)
-		clone.Reasoning = " "
+		clone.Content = append(clone.Content, fantasy.ReasoningContent{Text: " "})
 		out = append(out, clone)
 		changed = true
 	}
@@ -194,8 +160,8 @@ func assistantNeedsReasoningPlaceholder(am *AssistantMessage) bool {
 	if am == nil {
 		return false
 	}
-	if strings.TrimSpace(am.Reasoning) != "" || len(am.Content.Reasoning()) > 0 {
+	if strings.TrimSpace(AssistantReasoning(am)) != "" {
 		return false
 	}
-	return len(am.ToolCalls) > 0 || len(am.Content.ToolCalls()) > 0
+	return len(AssistantToolCalls(am)) > 0
 }

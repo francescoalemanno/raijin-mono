@@ -8,6 +8,12 @@ import (
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
+func testAssistant(text string, calls []libagent.ToolCallItem) *libagent.AssistantMessage {
+	am := libagent.NewAssistantMessage(text, "", calls, libagent.UnixMilliToTime(1))
+	am.Completed = true
+	return am
+}
+
 func newEphemeralTestStore(t *testing.T) (*Store, Session) {
 	t.Helper()
 	st := &Store{
@@ -30,7 +36,7 @@ func TestCreateAndListMessages(t *testing.T) {
 	ms := st.Messages()
 
 	u1 := &libagent.UserMessage{Role: "user", Content: "hello"}
-	a1 := &libagent.AssistantMessage{Role: "assistant", Text: "world", Completed: true}
+	a1 := testAssistant("world", nil)
 	u2 := &libagent.UserMessage{Role: "user", Content: "second"}
 
 	if _, err := ms.Create(ctx, sess.ID, u1); err != nil {
@@ -63,7 +69,7 @@ func TestNavigate_UserMessageRestoresEditorText(t *testing.T) {
 	ms := st.Messages()
 
 	u1 := &libagent.UserMessage{Role: "user", Content: "first question"}
-	a1 := &libagent.AssistantMessage{Role: "assistant", Text: "answer", Completed: true}
+	a1 := testAssistant("answer", nil)
 	u2 := &libagent.UserMessage{Role: "user", Content: "second question"}
 
 	m1, _ := ms.Create(ctx, sess.ID, u1)
@@ -94,7 +100,7 @@ func TestNavigate_NonUserMessageSetsLeaf(t *testing.T) {
 	ms := st.Messages()
 
 	u1 := &libagent.UserMessage{Role: "user", Content: "q"}
-	a1 := &libagent.AssistantMessage{Role: "assistant", Text: "a", Completed: true}
+	a1 := testAssistant("a", nil)
 	u2 := &libagent.UserMessage{Role: "user", Content: "q2"}
 
 	ms.Create(ctx, sess.ID, u1) //nolint
@@ -124,9 +130,9 @@ func TestBranchingNavigation(t *testing.T) {
 
 	// Build: u1 -> a1 -> u2 -> a2
 	u1 := &libagent.UserMessage{Role: "user", Content: "root"}
-	a1 := &libagent.AssistantMessage{Role: "assistant", Text: "ok", Completed: true}
+	a1 := testAssistant("ok", nil)
 	u2 := &libagent.UserMessage{Role: "user", Content: "branch A"}
-	a2 := &libagent.AssistantMessage{Role: "assistant", Text: "A answer", Completed: true}
+	a2 := testAssistant("A answer", nil)
 
 	m1, _ := ms.Create(ctx, sess.ID, u1)
 	ms.Create(ctx, sess.ID, a1) //nolint
@@ -138,7 +144,7 @@ func TestBranchingNavigation(t *testing.T) {
 
 	// Add branch B
 	uB := &libagent.UserMessage{Role: "user", Content: "branch B"}
-	aB := &libagent.AssistantMessage{Role: "assistant", Text: "B answer", Completed: true}
+	aB := testAssistant("B answer", nil)
 	ms.Create(ctx, sess.ID, uB) //nolint
 	ms.Create(ctx, sess.ID, aB) //nolint
 
@@ -158,8 +164,8 @@ func TestReplayJournal_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	ms := st.Messages()
 
-	ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "persisted"})                   //nolint
-	ms.Create(ctx, sess.ID, &libagent.AssistantMessage{Role: "assistant", Text: "yes", Completed: true}) //nolint
+	ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "persisted"}) //nolint
+	ms.Create(ctx, sess.ID, testAssistant("yes", nil))                                 //nolint
 
 	st.mu.Lock()
 	leafBefore := st.leafID
@@ -207,10 +213,10 @@ func TestAppendCompaction_ListShowsSummaryAndKeptMessages(t *testing.T) {
 	ctx := context.Background()
 	ms := st.Messages()
 
-	u1, _ := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "first"})                       //nolint:errcheck
-	a1, _ := ms.Create(ctx, sess.ID, &libagent.AssistantMessage{Role: "assistant", Text: "one", Completed: true}) //nolint:errcheck
-	u2, _ := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "second"})                      //nolint:errcheck
-	a2, _ := ms.Create(ctx, sess.ID, &libagent.AssistantMessage{Role: "assistant", Text: "two", Completed: true}) //nolint:errcheck
+	u1, _ := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "first"})  //nolint:errcheck
+	a1, _ := ms.Create(ctx, sess.ID, testAssistant("one", nil))                              //nolint:errcheck
+	u2, _ := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "second"}) //nolint:errcheck
+	a2, _ := ms.Create(ctx, sess.ID, testAssistant("two", nil))                              //nolint:errcheck
 
 	if err := st.AppendCompaction("summary checkpoint", libagent.MessageID(u2), 1234); err != nil {
 		t.Fatalf("AppendCompaction: %v", err)
@@ -233,8 +239,8 @@ func TestAppendCompaction_ListShowsSummaryAndKeptMessages(t *testing.T) {
 	if got[1].(*libagent.UserMessage).Content != "second" {
 		t.Fatalf("got[1] content = %q, want second", got[1].(*libagent.UserMessage).Content)
 	}
-	if got[2].(*libagent.AssistantMessage).Text != "two" {
-		t.Fatalf("got[2] text = %q, want two", got[2].(*libagent.AssistantMessage).Text)
+	if libagent.AssistantText(got[2].(*libagent.AssistantMessage)) != "two" {
+		t.Fatalf("got[2] text = %q, want two", libagent.AssistantText(got[2].(*libagent.AssistantMessage)))
 	}
 
 	// Continue conversation from compaction node.
@@ -265,9 +271,9 @@ func TestAppendCompaction_ReplayRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	ms := st.Messages()
 
-	_, _ = ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "first"})                                 //nolint:errcheck
-	u2, _ := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "second"})                              //nolint:errcheck
-	_, _ = ms.Create(ctx, sess.ID, &libagent.AssistantMessage{Role: "assistant", Text: "second-answer", Completed: true}) //nolint:errcheck
+	_, _ = ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "first"})    //nolint:errcheck
+	u2, _ := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "second"}) //nolint:errcheck
+	_, _ = ms.Create(ctx, sess.ID, testAssistant("second-answer", nil))                      //nolint:errcheck
 
 	if err := st.AppendCompaction("persist me", libagent.MessageID(u2), 777); err != nil {
 		t.Fatalf("AppendCompaction: %v", err)
@@ -310,16 +316,11 @@ func TestGetTree_HidesUnsafeAssistantSelectionThatWouldSplitToolCoupling(t *test
 	if _, err := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "start"}); err != nil {
 		t.Fatalf("Create user: %v", err)
 	}
-	a1, err := ms.Create(ctx, sess.ID, &libagent.AssistantMessage{
-		Role: "assistant",
-		Text: "running tool",
-		ToolCalls: []libagent.ToolCallItem{{
-			ID:    "call-1",
-			Name:  "read",
-			Input: `{"path":"file.txt"}`,
-		}},
-		Completed: true,
-	})
+	a1, err := ms.Create(ctx, sess.ID, testAssistant("running tool", []libagent.ToolCallItem{{
+		ID:    "call-1",
+		Name:  "read",
+		Input: `{"path":"file.txt"}`,
+	}}))
 	if err != nil {
 		t.Fatalf("Create assistant: %v", err)
 	}
@@ -332,7 +333,7 @@ func TestGetTree_HidesUnsafeAssistantSelectionThatWouldSplitToolCoupling(t *test
 	if err != nil {
 		t.Fatalf("Create tool result: %v", err)
 	}
-	if _, err := ms.Create(ctx, sess.ID, &libagent.AssistantMessage{Role: "assistant", Text: "done", Completed: true}); err != nil {
+	if _, err := ms.Create(ctx, sess.ID, testAssistant("done", nil)); err != nil {
 		t.Fatalf("Create assistant 2: %v", err)
 	}
 
@@ -355,16 +356,11 @@ func TestGetTree_AllVisibleEntriesNavigateToBijectiveToolCoupling(t *testing.T) 
 	if _, err := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "start"}); err != nil {
 		t.Fatalf("Create user: %v", err)
 	}
-	if _, err := ms.Create(ctx, sess.ID, &libagent.AssistantMessage{
-		Role: "assistant",
-		Text: "running tool",
-		ToolCalls: []libagent.ToolCallItem{{
-			ID:    "call-1",
-			Name:  "read",
-			Input: `{"path":"file.txt"}`,
-		}},
-		Completed: true,
-	}); err != nil {
+	if _, err := ms.Create(ctx, sess.ID, testAssistant("running tool", []libagent.ToolCallItem{{
+		ID:    "call-1",
+		Name:  "read",
+		Input: `{"path":"file.txt"}`,
+	}})); err != nil {
 		t.Fatalf("Create assistant: %v", err)
 	}
 	if _, err := ms.Create(ctx, sess.ID, &libagent.ToolResultMessage{
@@ -378,7 +374,7 @@ func TestGetTree_AllVisibleEntriesNavigateToBijectiveToolCoupling(t *testing.T) 
 	if _, err := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "next"}); err != nil {
 		t.Fatalf("Create user 2: %v", err)
 	}
-	if _, err := ms.Create(ctx, sess.ID, &libagent.AssistantMessage{Role: "assistant", Text: "done", Completed: true}); err != nil {
+	if _, err := ms.Create(ctx, sess.ID, testAssistant("done", nil)); err != nil {
 		t.Fatalf("Create assistant 2: %v", err)
 	}
 

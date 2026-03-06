@@ -251,8 +251,8 @@ func estimateMessageTokens(msg libagent.Message) int64 {
 			}
 		}
 	case *libagent.AssistantMessage:
-		chars += int64(len(m.Text) + len(m.Reasoning) + len(m.CompleteReason) + len(m.CompleteMessage) + len(m.CompleteDetails))
-		for _, tc := range m.ToolCalls {
+		chars += int64(len(libagent.AssistantText(m)) + len(libagent.AssistantReasoning(m)) + len(m.CompleteReason) + len(m.CompleteMessage) + len(m.CompleteDetails))
+		for _, tc := range libagent.AssistantToolCalls(m) {
 			chars += int64(len(tc.ID) + len(tc.Name) + len(tc.Input))
 		}
 	case *libagent.ToolResultMessage:
@@ -294,15 +294,16 @@ func serializeConversationForCompaction(msgs []libagent.Message) string {
 				parts = append(parts, "[User]: "+text)
 			}
 		case *libagent.AssistantMessage:
-			if thinking := strings.TrimSpace(m.Reasoning); thinking != "" {
+			if thinking := strings.TrimSpace(libagent.AssistantReasoning(m)); thinking != "" {
 				parts = append(parts, "[Assistant thinking]: "+thinking)
 			}
-			if text := strings.TrimSpace(m.Text); text != "" {
+			if text := strings.TrimSpace(libagent.AssistantText(m)); text != "" {
 				parts = append(parts, "[Assistant]: "+text)
 			}
-			if len(m.ToolCalls) > 0 {
-				callParts := make([]string, 0, len(m.ToolCalls))
-				for _, c := range m.ToolCalls {
+			assistantCalls := libagent.AssistantToolCalls(m)
+			if len(assistantCalls) > 0 {
+				callParts := make([]string, 0, len(assistantCalls))
+				for _, c := range assistantCalls {
 					input := strings.TrimSpace(c.Input)
 					if input == "" {
 						input = "{}"

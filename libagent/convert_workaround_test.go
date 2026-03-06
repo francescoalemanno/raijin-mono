@@ -19,15 +19,11 @@ func TestDefaultConvertToLLMForRuntime_OpenAICompatAddsReasoningPlaceholderForTo
 	})
 
 	msgs := []Message{
-		&AssistantMessage{
-			Role: "assistant",
-			ToolCalls: []ToolCallItem{{
-				ID:    "tc1",
-				Name:  "bash",
-				Input: `{"command":"ls"}`,
-			}},
-			Timestamp: time.Now(),
-		},
+		NewAssistantMessage("", "", []ToolCallItem{{
+			ID:    "tc1",
+			Name:  "bash",
+			Input: `{"command":"ls"}`,
+		}}, time.Now()),
 	}
 
 	out, err := convert(context.Background(), msgs)
@@ -61,15 +57,11 @@ func TestDefaultConvertToLLMForRuntime_DoesNotAddPlaceholderWithoutReasoningEffo
 	})
 
 	msgs := []Message{
-		&AssistantMessage{
-			Role: "assistant",
-			ToolCalls: []ToolCallItem{{
-				ID:    "tc1",
-				Name:  "bash",
-				Input: `{"command":"ls"}`,
-			}},
-			Timestamp: time.Now(),
-		},
+		NewAssistantMessage("", "", []ToolCallItem{{
+			ID:    "tc1",
+			Name:  "bash",
+			Input: `{"command":"ls"}`,
+		}}, time.Now()),
 	}
 
 	out, err := convert(context.Background(), msgs)

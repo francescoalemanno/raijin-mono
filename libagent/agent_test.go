@@ -67,6 +67,37 @@ func (m *streamErrorModel) StreamObject(_ context.Context, _ fantasy.ObjectCall)
 func (m *streamErrorModel) Provider() string { return "mock" }
 func (m *streamErrorModel) Model() string    { return "mock" }
 
+type cancelAfterToolCallModel struct{}
+
+func (m *cancelAfterToolCallModel) Stream(ctx context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+	return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
+		if !yield(fantasy.StreamPart{
+			Type:          fantasy.StreamPartTypeToolCall,
+			ID:            "tc-cancel",
+			ToolCallName:  "echo",
+			ToolCallInput: `{"value":"hello"}`,
+		}) {
+			return
+		}
+		<-ctx.Done()
+	}), nil
+}
+
+func (m *cancelAfterToolCallModel) Generate(_ context.Context, _ fantasy.Call) (*fantasy.Response, error) {
+	return nil, nil
+}
+
+func (m *cancelAfterToolCallModel) GenerateObject(_ context.Context, _ fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
+	return nil, nil
+}
+
+func (m *cancelAfterToolCallModel) StreamObject(_ context.Context, _ fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
+	return nil, nil
+}
+
+func (m *cancelAfterToolCallModel) Provider() string { return "mock" }
+func (m *cancelAfterToolCallModel) Model() string    { return "mock" }
+
 // textResponse creates a StreamResponse that yields one text block then stops.
 func textResponse(text string) func(int) fantasy.StreamResponse {
 	return func(_ int) fantasy.StreamResponse {
@@ -486,6 +517,21 @@ func TestAgent_ToolExecution_WithPartialJSONArgs_ReturnsActionableError(t *testi
 	assert.True(t, toolEndEvents[0].ToolIsError)
 	assert.Contains(t, toolEndEvents[0].ToolResult, `"{\"value\":\"hello"`)
 	assert.Contains(t, toolEndEvents[0].ToolResult, "invalid tool call JSON input")
+
+	toolStartEvents := filterByType(events, libagent.AgentEventTypeToolExecutionStart)
+	require.Len(t, toolStartEvents, 1)
+	assert.Equal(t, "{}", toolStartEvents[0].ToolArgs)
+
+	var assistantEnds []*libagent.AssistantMessage
+	for _, e := range filterByType(events, libagent.AgentEventTypeMessageEnd) {
+		if am, ok := e.Message.(*libagent.AssistantMessage); ok {
+			assistantEnds = append(assistantEnds, am)
+		}
+	}
+	require.NotEmpty(t, assistantEnds)
+	firstToolCalls := assistantEnds[0].Content.ToolCalls()
+	require.Len(t, firstToolCalls, 1)
+	assert.Equal(t, "{}", firstToolCalls[0].Input)
 }
 
 func TestAgent_ToolExecution_DoesNotSkipWhenSteeringCallbackReturnsEmptySlice(t *testing.T) {
@@ -726,6 +772,61 @@ func TestAgentLoop_SteeringSkipsRemainingToolCalls(t *testing.T) {
 	assert.True(t, len(msgs) > 0)
 }
 
+func TestAgent_ToolExecution_DuplicateToolCallIDsAreCanonicalized(t *testing.T) {
+	executed := make([]string, 0, 2)
+	echoTool := libagent.NewTypedTool(
+		"echo",
+		"Echo",
+		func(_ context.Context, input struct {
+			Value string `json:"value"`
+		}, _ libagent.ToolCall,
+		) (libagent.ToolResponse, error) {
+			executed = append(executed, input.Value)
+			return libagent.NewTextResponse("ok:" + input.Value), nil
+		},
+	)
+
+	model := newMockModel(
+		twoToolCallsResponse("dup", "echo", `{"value":"first"}`, "dup", "echo", `{"value":"second"}`),
+		textResponse("done"),
+	)
+	a := libagent.NewAgent(libagent.AgentOptions{
+		RuntimeModel: libagent.RuntimeModel{Model: model},
+		Tools:        []libagent.Tool{echoTool},
+	})
+
+	ch, unsub := a.Subscribe()
+	defer unsub()
+
+	err := a.Prompt(context.Background(), "run tools")
+	require.NoError(t, err)
+	events := collectEvents(ch)
+
+	assert.Equal(t, []string{"first", "second"}, executed)
+
+	var firstAssistant *libagent.AssistantMessage
+	for _, e := range filterByType(events, libagent.AgentEventTypeMessageEnd) {
+		am, ok := e.Message.(*libagent.AssistantMessage)
+		if ok {
+			firstAssistant = am
+			break
+		}
+	}
+	require.NotNil(t, firstAssistant)
+	calls := firstAssistant.Content.ToolCalls()
+	require.Len(t, calls, 2)
+	assert.NotEqual(t, calls[0].ToolCallID, calls[1].ToolCallID)
+
+	starts := filterByType(events, libagent.AgentEventTypeToolExecutionStart)
+	ends := filterByType(events, libagent.AgentEventTypeToolExecutionEnd)
+	require.Len(t, starts, 2)
+	require.Len(t, ends, 2)
+	assert.Equal(t, starts[0].ToolCallID, calls[0].ToolCallID)
+	assert.Equal(t, starts[1].ToolCallID, calls[1].ToolCallID)
+	assert.Equal(t, ends[0].ToolCallID, calls[0].ToolCallID)
+	assert.Equal(t, ends[1].ToolCallID, calls[1].ToolCallID)
+}
+
 func TestAgent_FollowUpMessages(t *testing.T) {
 	callCount := 0
 	model := newMockModel(func(call int) fantasy.StreamResponse {
@@ -842,19 +943,15 @@ func TestDefaultConvertToLLM_NormalizesInvalidAssistantToolCallJSON(t *testing.T
 	assert.Equal(t, "{}", part.Input)
 }
 
-func TestDefaultConvertToLLM_IncludesLegacyAssistantToolCalls(t *testing.T) {
+func TestDefaultConvertToLLM_IncludesAssistantToolCallsFromStructuredContent(t *testing.T) {
 	msgs := []libagent.Message{
-		&libagent.AssistantMessage{
-			Role: "assistant",
-			ToolCalls: []libagent.ToolCallItem{
-				{
-					ID:    "tc1",
-					Name:  "read",
-					Input: `{"path":"bad`,
-				},
+		libagent.NewAssistantMessage("", "", []libagent.ToolCallItem{
+			{
+				ID:    "tc1",
+				Name:  "read",
+				Input: `{"path":"bad`,
 			},
-			Timestamp: time.Now(),
-		},
+		}, time.Now()),
 		&libagent.ToolResultMessage{
 			Role:       "toolResult",
 			ToolCallID: "tc1",
@@ -884,22 +981,15 @@ func TestDefaultConvertToLLM_IncludesLegacyAssistantToolCalls(t *testing.T) {
 	assert.Equal(t, "tc1", toolResult.ToolCallID)
 }
 
-func TestDefaultConvertToLLM_MergesLegacyToolCallsWithStructuredContent(t *testing.T) {
+func TestDefaultConvertToLLM_PreservesStructuredTextAndToolCalls(t *testing.T) {
 	msgs := []libagent.Message{
-		&libagent.AssistantMessage{
-			Role: "assistant",
-			Content: fantasy.ResponseContent{
-				fantasy.TextContent{Text: "working"},
+		libagent.NewAssistantMessage("working", "", []libagent.ToolCallItem{
+			{
+				ID:    "tc2",
+				Name:  "bash",
+				Input: `{"command":"pwd"}`,
 			},
-			ToolCalls: []libagent.ToolCallItem{
-				{
-					ID:    "tc2",
-					Name:  "bash",
-					Input: `{"command":"pwd"}`,
-				},
-			},
-			Timestamp: time.Now(),
-		},
+		}, time.Now()),
 	}
 
 	out, err := libagent.DefaultConvertToLLM(context.Background(), msgs)
@@ -1005,6 +1095,49 @@ func TestAgent_Abort(t *testing.T) {
 	a.WaitForIdle()
 	<-promptDone
 	assert.False(t, a.State().IsStreaming)
+}
+
+func TestAgent_Abort_WithPendingToolCalls_ProducesBalancedSyntheticResults(t *testing.T) {
+	executed := false
+	echoTool := libagent.NewTypedTool(
+		"echo",
+		"Echo",
+		func(_ context.Context, _ struct {
+			Value string `json:"value"`
+		}, _ libagent.ToolCall,
+		) (libagent.ToolResponse, error) {
+			executed = true
+			return libagent.NewTextResponse("ok"), nil
+		},
+	)
+
+	a := libagent.NewAgent(libagent.AgentOptions{
+		RuntimeModel: libagent.RuntimeModel{Model: &cancelAfterToolCallModel{}},
+		Tools:        []libagent.Tool{echoTool},
+	})
+	ch, unsub := a.Subscribe()
+	defer unsub()
+
+	promptDone := make(chan error, 1)
+	go func() {
+		promptDone <- a.Prompt(context.Background(), "run and cancel")
+	}()
+
+	require.Eventually(t, func() bool { return a.State().IsStreaming }, time.Second, 10*time.Millisecond)
+
+	a.Abort()
+	err := <-promptDone
+	require.Error(t, err)
+
+	events := collectEvents(ch)
+	toolEnds := filterByType(events, libagent.AgentEventTypeToolExecutionEnd)
+	require.Len(t, toolEnds, 1)
+	assert.True(t, toolEnds[0].ToolIsError)
+	assert.Contains(t, toolEnds[0].ToolResult, "canceled")
+	assert.False(t, executed)
+
+	s := a.State()
+	assert.True(t, libagent.HasBijectiveToolCoupling(s.Messages))
 }
 
 func TestAgent_Continue_WithFollowUpFromAssistantTail(t *testing.T) {

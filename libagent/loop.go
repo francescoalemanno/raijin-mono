@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -135,31 +137,35 @@ func runLoop(
 			}
 
 			// Stream the assistant response.
-			assistantMsg, err := streamAssistantResponse(ctx, currentCtx, cfg, eventCh)
+			assistantMsg, plannedCalls, err := streamAssistantResponse(ctx, currentCtx, cfg, eventCh)
 			if err != nil {
 				return newMessages, err
 			}
 			newMessages = append(newMessages, assistantMsg)
 
-			// Check for error/abort finish.
+			var turnErr error
 			if assistantMsg.FinishReason == fantasy.FinishReasonError {
-				sendEvent(eventCh, AgentEvent{
-					Type:        AgentEventTypeTurnEnd,
-					TurnMessage: assistantMsg,
-				})
 				if assistantMsg.Error != nil {
-					return newMessages, assistantMsg.Error
+					turnErr = assistantMsg.Error
+				} else {
+					turnErr = fmt.Errorf("language model finished with error")
 				}
-				return newMessages, fmt.Errorf("language model finished with error")
+				// Keep assistant/tool coupling valid even on provider/cancel errors.
+				// We do this by skipping all planned calls with synthetic tool results.
+				for i := range plannedCalls {
+					if strings.TrimSpace(plannedCalls[i].SkipReason) != "" {
+						continue
+					}
+					plannedCalls[i].SkipReason = fmt.Sprintf("tool execution skipped: assistant failed: %v", turnErr)
+				}
 			}
 
 			// Collect tool calls from the response.
-			toolCalls := assistantMsg.Content.ToolCalls()
-			hasMoreToolCalls = len(toolCalls) > 0
+			hasMoreToolCalls = len(plannedCalls) > 0
 
 			var toolResults []*ToolResultMessage
 			if hasMoreToolCalls {
-				produced, results, steering, err := executeToolCalls(ctx, currentCtx.Tools, toolCalls, cfg.GetSteeringMessages, eventCh)
+				produced, results, steering, err := executeToolCalls(ctx, currentCtx.Tools, plannedCalls, cfg.GetSteeringMessages, eventCh)
 				if err != nil {
 					return newMessages, err
 				}
@@ -176,6 +182,9 @@ func runLoop(
 				TurnMessage: assistantMsg,
 				ToolResults: toolResults,
 			})
+			if turnErr != nil {
+				return newMessages, turnErr
+			}
 
 			// Resolve next steering messages.
 			if len(steeringAfterTools) > 0 {
@@ -215,14 +224,14 @@ func streamAssistantResponse(
 	currentCtx *AgentContext,
 	cfg AgentLoopConfig,
 	eventCh chan<- AgentEvent,
-) (*AssistantMessage, error) {
+) (*AssistantMessage, []plannedToolCall, error) {
 	// Optional context transform (e.g. pruning).
 	messages := currentCtx.Messages
 	if cfg.TransformContext != nil {
 		var err error
 		messages, err = cfg.TransformContext(ctx, messages)
 		if err != nil {
-			return nil, fmt.Errorf("transform context: %w", err)
+			return nil, nil, fmt.Errorf("transform context: %w", err)
 		}
 	}
 
@@ -233,7 +242,7 @@ func streamAssistantResponse(
 	}
 	llmMessages, err := convertFn(ctx, messages)
 	if err != nil {
-		return nil, fmt.Errorf("convert to LLM messages: %w", err)
+		return nil, nil, fmt.Errorf("convert to LLM messages: %w", err)
 	}
 
 	// Build system message.
@@ -273,7 +282,7 @@ func streamAssistantResponse(
 		currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
 		sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageStart, Message: assistantMsg})
 		sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageEnd, Message: assistantMsg})
-		return assistantMsg, nil
+		return assistantMsg, nil, nil
 	}
 
 	// Accumulate response and emit events.
@@ -425,7 +434,37 @@ func streamAssistantResponse(
 			Input:      input,
 		})
 	}
+	usedToolCallIDs := collectUsedToolCallIDs(currentCtx.Messages)
+	var plannedCalls []plannedToolCall
+	assistantMsg.Content, plannedCalls = canonicalizeAssistantToolCalls(assistantMsg.Content, usedToolCallIDs)
 	toolCalls := assistantMsg.Content.ToolCalls()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		for i := range plannedCalls {
+			if strings.TrimSpace(plannedCalls[i].SkipReason) != "" {
+				continue
+			}
+			plannedCalls[i].SkipReason = fmt.Sprintf("tool execution canceled: %v", ctxErr)
+		}
+	}
+
+	if assistantMsg.FinishReason == "" {
+		switch {
+		case ctx.Err() != nil:
+			assistantMsg.FinishReason = fantasy.FinishReasonError
+			assistantMsg.Error = ctx.Err()
+		case len(toolCalls) > 0:
+			assistantMsg.FinishReason = fantasy.FinishReasonToolCalls
+		default:
+			assistantMsg.FinishReason = fantasy.FinishReasonStop
+		}
+	}
+	if assistantMsg.FinishReason == fantasy.FinishReasonError && assistantMsg.Error == nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			assistantMsg.Error = ctxErr
+		} else {
+			assistantMsg.Error = errors.New("language model finished with error")
+		}
+	}
 	// Enforce loop invariants so callers get actionable errors instead of
 	// silently stopping in inconsistent states.
 	if assistantMsg.FinishReason == fantasy.FinishReasonToolCalls && len(toolCalls) == 0 {
@@ -447,7 +486,7 @@ func streamAssistantResponse(
 	currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
 
 	sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageEnd, Message: assistantMsg})
-	return assistantMsg, nil
+	return assistantMsg, plannedCalls, nil
 }
 
 // executeToolCalls runs the tool calls from an assistant message, emitting events.
@@ -456,7 +495,7 @@ func streamAssistantResponse(
 func executeToolCalls(
 	ctx context.Context,
 	tools []fantasy.AgentTool,
-	toolCalls []fantasy.ToolCallContent,
+	plannedCalls []plannedToolCall,
 	getSteeringMessages GetSteeringMessagesFn,
 	eventCh chan<- AgentEvent,
 ) ([]Message, []*ToolResultMessage, []Message, error) {
@@ -470,7 +509,20 @@ func executeToolCalls(
 		toolMap[t.Info().Name] = t
 	}
 
-	for _, tc := range toolCalls {
+	for _, planned := range plannedCalls {
+		tc := planned.Call
+		if reason := strings.TrimSpace(planned.SkipReason); reason != "" {
+			skippedResult := skipToolCall(tc, reason, eventCh)
+			results = append(results, skippedResult)
+			produced = append(produced, skippedResult)
+			continue
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			skippedResult := skipToolCall(tc, fmt.Sprintf("tool execution canceled: %v", ctxErr), eventCh)
+			results = append(results, skippedResult)
+			produced = append(produced, skippedResult)
+			continue
+		}
 		// Check for steering messages before each tool (only if not already steering).
 		if getSteeringMessages != nil && len(steeringMessages) == 0 {
 			sm, err := getSteeringMessages(ctx)
@@ -488,15 +540,7 @@ func executeToolCalls(
 			continue
 		}
 
-		if raw := strings.TrimSpace(tc.Input); raw != "" && !json.Valid([]byte(raw)) {
-			skippedResult := skipToolCall(tc, fmt.Sprintf(
-				"invalid tool call JSON input for %q: %q\nThe arguments are incomplete or malformed. Re-issue this tool call with valid JSON.",
-				tc.ToolName, tc.Input,
-			), eventCh)
-			results = append(results, skippedResult)
-			produced = append(produced, skippedResult)
-			continue
-		} else if raw == "" {
+		if strings.TrimSpace(tc.Input) == "" {
 			tc.Input = "{}"
 		}
 
@@ -610,6 +654,11 @@ func executeToolCalls(
 	return produced, results, steeringMessages, nil
 }
 
+type plannedToolCall struct {
+	Call       fantasy.ToolCallContent
+	SkipReason string
+}
+
 func normalizeMediaPayload(data []byte) []byte {
 	if len(data) == 0 {
 		return data
@@ -662,6 +711,105 @@ func buildInputSchema(info fantasy.ToolInfo) map[string]any {
 		schema["required"] = info.Required
 	}
 	return schema
+}
+
+func canonicalizeAssistantToolCalls(content fantasy.ResponseContent, usedToolCallIDs map[string]struct{}) (fantasy.ResponseContent, []plannedToolCall) {
+	nonTool := make(fantasy.ResponseContent, 0, len(content))
+	toolCalls := content.ToolCalls()
+	planned := make([]plannedToolCall, 0, len(toolCalls))
+
+	nextToolCallID := func() string {
+		seed := len(usedToolCallIDs) + 1
+		for {
+			id := "tool-call-" + strconv.Itoa(seed)
+			seed++
+			if _, exists := usedToolCallIDs[id]; !exists {
+				return id
+			}
+		}
+	}
+
+	for _, part := range content {
+		tc, ok := part.(fantasy.ToolCallContent)
+		if !ok {
+			nonTool = append(nonTool, part)
+			continue
+		}
+
+		name := strings.TrimSpace(tc.ToolName)
+		if name == "" {
+			continue
+		}
+		id := strings.TrimSpace(tc.ToolCallID)
+		if id == "" {
+			id = nextToolCallID()
+		}
+		if _, exists := usedToolCallIDs[id]; exists {
+			base := id
+			suffix := 2
+			for {
+				candidate := base + "-" + strconv.Itoa(suffix)
+				if _, used := usedToolCallIDs[candidate]; !used {
+					id = candidate
+					break
+				}
+				suffix++
+			}
+		}
+		usedToolCallIDs[id] = struct{}{}
+
+		originalInput := tc.Input
+		input := strings.TrimSpace(tc.Input)
+		skipReason := ""
+		if input == "" {
+			input = "{}"
+		}
+		if !json.Valid([]byte(input)) {
+			skipReason = fmt.Sprintf(
+				"invalid tool call JSON input for %q: %q\nThe arguments are incomplete or malformed. Re-issue this tool call with valid JSON.",
+				name, originalInput,
+			)
+			input = "{}"
+		}
+
+		tc.ToolCallID = id
+		tc.ToolName = name
+		tc.Input = input
+		planned = append(planned, plannedToolCall{
+			Call:       tc,
+			SkipReason: skipReason,
+		})
+	}
+
+	out := make(fantasy.ResponseContent, 0, len(nonTool)+len(planned))
+	out = append(out, nonTool...)
+	for _, p := range planned {
+		out = append(out, p.Call)
+	}
+	return out, planned
+}
+
+func collectUsedToolCallIDs(messages []Message) map[string]struct{} {
+	used := make(map[string]struct{})
+	for _, msg := range messages {
+		switch m := msg.(type) {
+		case *AssistantMessage:
+			for _, tc := range AssistantToolCalls(m) {
+				id := strings.TrimSpace(tc.ID)
+				if id == "" {
+					continue
+				}
+				used[id] = struct{}{}
+			}
+		case *ToolResultMessage:
+			id := strings.TrimSpace(m.ToolCallID)
+			if id == "" {
+				continue
+			}
+			used[id] = struct{}{}
+		}
+	}
+	return used
 }
 
 // errorAssistantMessage wraps an error into an AssistantMessage with FinishReasonError.

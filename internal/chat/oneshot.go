@@ -60,7 +60,7 @@ func RunOneShot(runtimeModel libagent.RuntimeModel, modelCfg libagent.ModelConfi
 		if !ok {
 			continue
 		}
-		text := am.Text
+		text := libagent.AssistantText(am)
 		if strings.TrimSpace(text) == "" {
 			continue
 		}

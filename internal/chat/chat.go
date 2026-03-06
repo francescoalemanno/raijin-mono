@@ -472,7 +472,7 @@ func (app *ChatApp) appendStoredMessage(msg libagent.Message) {
 		}
 
 	case *libagent.AssistantMessage:
-		reasoning := strings.TrimSpace(m.Reasoning)
+		reasoning := strings.TrimSpace(libagent.AssistantReasoning(m))
 		if reasoning != "" {
 			app.appendSpacer()
 			comp := NewThinking(app.ui)
@@ -483,14 +483,14 @@ func (app *ChatApp) appendStoredMessage(msg libagent.Message) {
 			app.items = append(app.items, historyEntry{component: comp})
 		}
 
-		for _, tc := range m.ToolCalls {
+		for _, tc := range libagent.AssistantToolCalls(m) {
 			var args json.RawMessage
 			if tc.Input != "" {
 				args = json.RawMessage(tc.Input)
 			}
 			app.appendToolExecution(tc.ID, tc.Name, args)
 		}
-		text := strings.TrimSpace(m.Text)
+		text := strings.TrimSpace(libagent.AssistantText(m))
 		if text != "" {
 			app.appendSpacer()
 			app.appendMessage(text, theme.BorderThin, theme.Default.Success.Ansi24, theme.Default.Foreground.Ansi24, true)

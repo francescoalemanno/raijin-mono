@@ -235,8 +235,9 @@ func treeEntryLabel(e persist.TreeEntry, selected bool) string {
 		return role + bold(buildTreePreview(m.Content, 80))
 	case *libagent.AssistantMessage:
 		role := theme.Default.Success.Ansi24("assistant: ")
-		if m.Text != "" {
-			return role + bold(buildTreePreview(m.Text, 80))
+		text := libagent.AssistantText(m)
+		if text != "" {
+			return role + bold(buildTreePreview(text, 80))
 		}
 		return role + theme.Default.Muted.Ansi24("(no content)")
 	case *libagent.ToolResultMessage:
@@ -255,7 +256,7 @@ func treeEntrySearchText(e persist.TreeEntry) string {
 	case *libagent.UserMessage:
 		return "user " + m.Content
 	case *libagent.AssistantMessage:
-		return "assistant " + m.Text
+		return "assistant " + libagent.AssistantText(m)
 	case *libagent.ToolResultMessage:
 		return m.ToolName + " " + m.Content
 	}

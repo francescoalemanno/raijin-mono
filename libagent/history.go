@@ -99,7 +99,7 @@ func SanitizeHistory(messages []Message) []Message {
 	for msgIdx, m := range messages {
 		switch msg := m.(type) {
 		case *AssistantMessage:
-			for callIdx, tc := range assistantToolCalls(msg) {
+			for callIdx, tc := range AssistantToolCalls(msg) {
 				id := strings.TrimSpace(tc.ID)
 				name := strings.TrimSpace(tc.Name)
 				if id == "" || name == "" {
@@ -140,11 +140,12 @@ func SanitizeHistory(messages []Message) []Message {
 			}
 			out = append(out, CloneMessage(msg))
 		case *AssistantMessage:
-			text := assistantText(msg)
-			reasoning := assistantReasoning(msg)
+			text := AssistantText(msg)
+			reasoning := AssistantReasoning(msg)
 			hasText := strings.TrimSpace(text) != "" || strings.TrimSpace(reasoning) != ""
-			rawCalls := assistantToolCalls(msg)
+			rawCalls := AssistantToolCalls(msg)
 			calls := make([]ToolCallItem, 0, len(rawCalls))
+			validCallIdx := make(map[int]struct{}, len(rawCalls))
 			for callIdx, tc := range rawCalls {
 				id := strings.TrimSpace(tc.ID)
 				name := strings.TrimSpace(tc.Name)
@@ -155,6 +156,7 @@ func SanitizeHistory(messages []Message) []Message {
 					continue
 				}
 				calls = append(calls, tc)
+				validCallIdx[callIdx] = struct{}{}
 			}
 			if !msg.Completed {
 				continue
@@ -163,9 +165,29 @@ func SanitizeHistory(messages []Message) []Message {
 				continue
 			}
 			clone := CloneMessage(msg).(*AssistantMessage)
-			clone.Text = text
-			clone.Reasoning = reasoning
-			clone.ToolCalls = calls
+			filtered := make(fantasy.ResponseContent, 0, len(clone.Content))
+			callIdx := 0
+			for _, part := range clone.Content {
+				tc, ok := part.(fantasy.ToolCallContent)
+				if !ok {
+					filtered = append(filtered, part)
+					continue
+				}
+				id := strings.TrimSpace(tc.ToolCallID)
+				name := strings.TrimSpace(tc.ToolName)
+				keep := false
+				if id != "" && name != "" {
+					_, keep = validCallIdx[callIdx]
+				}
+				callIdx++
+				if keep {
+					filtered = append(filtered, tc)
+				}
+			}
+			clone.Content = filtered
+			clone.Text = AssistantText(clone)
+			clone.Reasoning = AssistantReasoning(clone)
+			clone.ToolCalls = nil
 			out = append(out, clone)
 		case *ToolResultMessage:
 			if _, ok := validResults[msgIdx]; !ok {
@@ -195,7 +217,7 @@ func HasBijectiveToolCoupling(messages []Message) bool {
 	for _, msg := range messages {
 		switch m := msg.(type) {
 		case *AssistantMessage:
-			for _, call := range assistantToolCalls(m) {
+			for _, call := range AssistantToolCalls(m) {
 				id := strings.TrimSpace(call.ID)
 				name := strings.TrimSpace(call.Name)
 				if id == "" || name == "" {
@@ -231,12 +253,9 @@ func HasBijectiveToolCoupling(messages []Message) bool {
 	return true
 }
 
-func assistantText(msg *AssistantMessage) string {
+func AssistantText(msg *AssistantMessage) string {
 	if msg == nil {
 		return ""
-	}
-	if strings.TrimSpace(msg.Text) != "" {
-		return msg.Text
 	}
 	var sb strings.Builder
 	for _, c := range msg.Content {
@@ -247,12 +266,9 @@ func assistantText(msg *AssistantMessage) string {
 	return sb.String()
 }
 
-func assistantReasoning(msg *AssistantMessage) string {
+func AssistantReasoning(msg *AssistantMessage) string {
 	if msg == nil {
 		return ""
-	}
-	if strings.TrimSpace(msg.Reasoning) != "" {
-		return msg.Reasoning
 	}
 	var sb strings.Builder
 	for _, c := range msg.Content {
@@ -263,39 +279,13 @@ func assistantReasoning(msg *AssistantMessage) string {
 	return sb.String()
 }
 
-func assistantToolCalls(msg *AssistantMessage) []ToolCallItem {
+func AssistantToolCalls(msg *AssistantMessage) []ToolCallItem {
 	if msg == nil {
 		return nil
 	}
-	out := make([]ToolCallItem, 0, len(msg.ToolCalls)+len(msg.Content.ToolCalls()))
-	byID := make(map[string]int, len(msg.ToolCalls)+len(msg.Content.ToolCalls()))
-	add := func(tc ToolCallItem) {
-		id := strings.TrimSpace(tc.ID)
-		if id == "" {
-			out = append(out, tc)
-			return
-		}
-		if idx, exists := byID[id]; exists {
-			current := out[idx]
-			if strings.TrimSpace(current.Name) == "" {
-				current.Name = tc.Name
-			}
-			if strings.TrimSpace(current.Input) == "" {
-				current.Input = tc.Input
-			}
-			current.ProviderExecuted = current.ProviderExecuted || tc.ProviderExecuted
-			out[idx] = current
-			return
-		}
-		byID[id] = len(out)
-		out = append(out, tc)
-	}
-
-	for _, tc := range msg.ToolCalls {
-		add(tc)
-	}
+	out := make([]ToolCallItem, 0, len(msg.Content.ToolCalls()))
 	for _, tc := range msg.Content.ToolCalls() {
-		add(ToolCallItem{
+		out = append(out, ToolCallItem{
 			ID:               tc.ToolCallID,
 			Name:             tc.ToolName,
 			Input:            tc.Input,

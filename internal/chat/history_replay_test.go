@@ -14,11 +14,9 @@ func TestAppendStoredMessage_AssistantReasoningRendersThinkingBlock(t *testing.T
 		pendingTools: make(map[string]*ToolExecutionComponent),
 	}
 
-	app.appendStoredMessage(&libagent.AssistantMessage{
-		Role:      "assistant",
-		Reasoning: "step one\nstep two",
-		Completed: true,
-	})
+	assistant := libagent.NewAssistantMessage("", "step one\nstep two", nil, libagent.UnixMilliToTime(1))
+	assistant.Completed = true
+	app.appendStoredMessage(assistant)
 
 	if len(app.items) != 2 {
 		t.Fatalf("history entries = %d, want 2 (spacer + thinking)", len(app.items))
@@ -34,15 +32,13 @@ func TestAppendStoredMessage_AssistantUnfinishedToolCallRehydratesAsCancelledOnF
 		pendingTools: make(map[string]*ToolExecutionComponent),
 	}
 
-	app.appendStoredMessage(&libagent.AssistantMessage{
-		Role:      "assistant",
-		Completed: true,
-		ToolCalls: []libagent.ToolCallItem{{
-			ID:    "tool-1",
-			Name:  "read",
-			Input: `{"path":"README.md"}`,
-		}},
-	})
+	assistant := libagent.NewAssistantMessage("", "", []libagent.ToolCallItem{{
+		ID:    "tool-1",
+		Name:  "read",
+		Input: `{"path":"README.md"}`,
+	}}, libagent.UnixMilliToTime(1))
+	assistant.Completed = true
+	app.appendStoredMessage(assistant)
 
 	comp, ok := app.pendingTools["tool-1"]
 	if !ok {

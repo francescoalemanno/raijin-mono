@@ -132,7 +132,6 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	}()
 
 	// Build history from stored messages.
-	msgs = libagent.SanitizeHistory(msgs)
 	history := make([]libagent.Message, 0, len(msgs))
 	for _, m := range msgs {
 		if isEmptyMessage(m) {
@@ -299,15 +298,6 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 				rs.textStarted = true
 			}
 			rs.currentAssistant.Text += text
-		case "tool_input_start":
-			rs.currentAssistant.ToolCalls = append(rs.currentAssistant.ToolCalls, libagent.ToolCallItem{ID: delta.ID, Name: delta.ToolName})
-		case "tool_input_delta":
-			for i := range rs.currentAssistant.ToolCalls {
-				if rs.currentAssistant.ToolCalls[i].ID == delta.ID {
-					rs.currentAssistant.ToolCalls[i].Input += delta.Delta
-					break
-				}
-			}
 		}
 
 	case libagent.AgentEventTypeMessageEnd:
@@ -317,16 +307,6 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 			}
 			if len(am.Content) > 0 {
 				rs.currentAssistant.Content = append(rs.currentAssistant.Content[:0], am.Content...)
-			}
-			if len(rs.currentAssistant.ToolCalls) == 0 {
-				for _, tc := range am.Content.ToolCalls() {
-					rs.currentAssistant.ToolCalls = append(rs.currentAssistant.ToolCalls, libagent.ToolCallItem{
-						ID:               tc.ToolCallID,
-						Name:             tc.ToolName,
-						Input:            tc.Input,
-						ProviderExecuted: tc.ProviderExecuted,
-					})
-				}
 			}
 			rs.currentAssistant.Completed = true
 			rs.currentAssistant.CompleteReason = string(am.FinishReason)
@@ -390,7 +370,7 @@ func isEmptyMessage(m libagent.Message) bool {
 	case *libagent.UserMessage:
 		return strings.TrimSpace(msg.Content) == "" && len(msg.Files) == 0
 	case *libagent.AssistantMessage:
-		return !msg.Completed || (strings.TrimSpace(msg.Text) == "" && strings.TrimSpace(msg.Reasoning) == "" && len(msg.ToolCalls) == 0)
+		return !msg.Completed || (strings.TrimSpace(libagent.AssistantText(msg)) == "" && strings.TrimSpace(libagent.AssistantReasoning(msg)) == "" && len(libagent.AssistantToolCalls(msg)) == 0)
 	case *libagent.ToolResultMessage:
 		return strings.TrimSpace(msg.ToolCallID) == "" || strings.TrimSpace(msg.ToolName) == ""
 	default:
