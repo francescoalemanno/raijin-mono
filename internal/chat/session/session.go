@@ -9,7 +9,6 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/agent"
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
-	sessionstore "github.com/francescoalemanno/raijin-mono/internal/session"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 )
 
@@ -57,10 +56,10 @@ func (s *Session) Paths() *tools.PathRegistry { return s.paths }
 
 // ListMessages returns all stored messages for the current backend session.
 func (s *Session) ListMessages(ctx context.Context) ([]libagent.Message, error) {
-	if s.agent == nil || s.id == "" {
+	if s.id == "" {
 		return nil, nil
 	}
-	return s.agent.Messages().List(ctx, s.id)
+	return s.persistStore.Messages().List(ctx, s.id)
 }
 
 // SetEventCallback updates event streaming callback.
@@ -73,17 +72,11 @@ func (s *Session) SetEventCallback(cb func(libagent.AgentEvent)) {
 
 // Reconfigure rebuilds the agent from a RuntimeModel while preserving service state.
 func (s *Session) Reconfigure(runtimeModel libagent.RuntimeModel) error {
-	var sessSvc sessionstore.Service
-	var msgSvc libagent.MessageService
-	if s.agent != nil {
-		sessSvc = s.agent.Sessions()
-		msgSvc = s.agent.Messages()
-	} else {
-		sessSvc = s.persistStore.Sessions()
-		msgSvc = s.persistStore.Messages()
-	}
-
-	ag, err := agent.NewSessionAgentFromConfig(runtimeModel, msgSvc, sessSvc)
+	ag, err := agent.NewSessionAgentFromConfig(
+		runtimeModel,
+		s.persistStore.Messages(),
+		s.persistStore,
+	)
 	if err != nil {
 		return err
 	}
@@ -123,27 +116,35 @@ func (s *Session) GetTree() []persist.TreeEntry {
 
 // SwitchTo loads a previously persisted session and makes it current.
 func (s *Session) SwitchTo(ctx context.Context, sessionID string) error {
-	if s.agent == nil {
-		return nil
-	}
-	if err := s.agent.Sessions().SetCurrent(ctx, sessionID); err != nil {
+	_ = ctx
+	if err := s.persistStore.SetCurrent(sessionID); err != nil {
 		return err
 	}
 	s.id = sessionID
 	return nil
 }
 
-// PersistStore returns the underlying persist.Store.
-func (s *Session) PersistStore() *persist.Store {
-	return s.persistStore
+// ListSessionSummaries returns persisted sessions, newest first.
+func (s *Session) ListSessionSummaries() []persist.SessionSummary {
+	return s.persistStore.ListSessionSummaries()
+}
+
+// RemoveSession permanently deletes a non-active persisted session.
+func (s *Session) RemoveSession(sessionID string) error {
+	return s.persistStore.RemoveSession(sessionID)
+}
+
+// AppendCompaction stores a compaction checkpoint for the active session.
+func (s *Session) AppendCompaction(summary, firstKeptID string, tokensBefore int64) error {
+	return s.persistStore.AppendCompaction(summary, firstKeptID, tokensBefore)
 }
 
 // HasHistory returns true when current session has at least one stored message.
 func (s *Session) HasHistory(ctx context.Context) (bool, error) {
-	if s.agent == nil || s.id == "" {
+	if s.id == "" {
 		return false, nil
 	}
-	msgs, err := s.agent.Messages().List(ctx, s.id)
+	msgs, err := s.persistStore.Messages().List(ctx, s.id)
 	if err != nil {
 		return false, err
 	}

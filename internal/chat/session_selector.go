@@ -276,8 +276,7 @@ func (app *ChatApp) showSessionSelector() {
 		return
 	}
 
-	store := app.session.PersistStore()
-	summaries := store.ListSessionSummaries()
+	summaries := app.session.ListSessionSummaries()
 	if len(summaries) == 0 {
 		app.appendMessage("no previous sessions found", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		app.ui.RequestRender()
@@ -309,7 +308,7 @@ func (app *ChatApp) showSessionSelector() {
 			},
 			func(candidate sessionCandidate) {
 				go func() {
-					if err := store.RemoveSession(candidate.ID); err != nil {
+					if err := app.session.RemoveSession(candidate.ID); err != nil {
 						app.dispatchSync(func(_ tui.UIToken) {
 							app.appendMessage("/sessions delete: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
 						})

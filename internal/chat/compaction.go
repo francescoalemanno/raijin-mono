@@ -134,12 +134,11 @@ func (app *ChatApp) compactConversation(customInstructions string) error {
 
 	// Persist backend is append-only: store a compaction checkpoint marker and
 	// reconstruct context from it instead of rewriting message history.
-	store := app.session.PersistStore()
 	firstKeptID := firstPersistedMessageID(kept)
 	if firstKeptID == "" {
 		return fmt.Errorf("cannot compact: no persisted message ID in kept window")
 	}
-	if err := store.AppendCompaction(summary, firstKeptID, estimateConversationTokens(msgs)); err != nil {
+	if err := app.session.AppendCompaction(summary, firstKeptID, estimateConversationTokens(msgs)); err != nil {
 		return fmt.Errorf("failed to append compaction entry: %w", err)
 	}
 

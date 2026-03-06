@@ -14,7 +14,7 @@ import (
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 
 	"github.com/francescoalemanno/raijin-mono/internal/core"
-	"github.com/francescoalemanno/raijin-mono/internal/session"
+	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 )
@@ -43,7 +43,7 @@ type SessionAgent struct {
 	activeAgents   map[string]*libagent.Agent
 
 	messages libagent.MessageService
-	sessions session.Service
+	store    *persist.Store
 }
 
 // SessionAgentOptions configures a new SessionAgent.
@@ -52,7 +52,7 @@ type SessionAgentOptions struct {
 	SystemPrompt string
 	Tools        []libagent.Tool
 	Messages     libagent.MessageService
-	Sessions     session.Service
+	Store        *persist.Store
 }
 
 // NewSessionAgent creates a new SessionAgent with services.
@@ -64,7 +64,7 @@ func NewSessionAgent(opts SessionAgentOptions) *SessionAgent {
 		systemPrompt:   opts.SystemPrompt,
 		agentTools:     agentTools,
 		messages:       opts.Messages,
-		sessions:       opts.Sessions,
+		store:          opts.Store,
 		activeRequests: make(map[string]context.CancelFunc),
 		activeAgents:   make(map[string]*libagent.Agent),
 	}
@@ -85,7 +85,7 @@ func (a *SessionAgent) EventCallback() func(libagent.AgentEvent) {
 }
 
 // Run executes the agent with a user message.
-// Messages are stored via the message service; session usage is tracked via session service.
+// Messages are stored via the message service; session existence is verified via persist store metadata.
 func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	if call.Prompt == "" && len(call.Attachments) == 0 {
 		return ErrEmptyPrompt
@@ -106,7 +106,7 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	}
 
 	// Verify session exists
-	if _, err := a.sessions.Get(ctx, call.SessionID); err != nil {
+	if _, err := a.store.GetSession(call.SessionID); err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
 
@@ -524,13 +524,8 @@ func (a *SessionAgent) Messages() libagent.MessageService {
 	return a.messages
 }
 
-// Sessions returns the session service.
-func (a *SessionAgent) Sessions() session.Service {
-	return a.sessions
-}
-
-// NewSessionAgentFromConfig creates a SessionAgent from a RuntimeModel, optionally reusing existing services.
-func NewSessionAgentFromConfig(runtimeModel libagent.RuntimeModel, msgService libagent.MessageService, sessService session.Service) (*SessionAgent, error) {
+// NewSessionAgentFromConfig creates a SessionAgent from a RuntimeModel.
+func NewSessionAgentFromConfig(runtimeModel libagent.RuntimeModel, msgService libagent.MessageService, store *persist.Store) (*SessionAgent, error) {
 	if runtimeModel.Model == nil {
 		return nil, ErrNoModelConfigured
 	}
@@ -540,15 +535,15 @@ func NewSessionAgentFromConfig(runtimeModel libagent.RuntimeModel, msgService li
 	if msgService == nil {
 		return nil, ErrMessageServiceMissing
 	}
-	if sessService == nil {
-		return nil, ErrSessionServiceMissing
+	if store == nil {
+		return nil, ErrSessionStoreMissing
 	}
 
 	return NewSessionAgent(SessionAgentOptions{
 		Model:        runtimeModel,
 		SystemPrompt: systemPrompt,
 		Messages:     msgService,
-		Sessions:     sessService,
+		Store:        store,
 	}), nil
 }
 

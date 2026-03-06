@@ -24,7 +24,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
-	sessionstore "github.com/francescoalemanno/raijin-mono/internal/session"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
@@ -116,6 +115,16 @@ type GutterInfo struct {
 	Show     bool // true = draw │, false = draw space
 }
 
+var ErrSessionNotFound = errors.New("session not found")
+
+// Session represents persisted session metadata.
+type Session struct {
+	ID        string
+	Title     string
+	CreatedAt int64
+	UpdatedAt int64
+}
+
 // Store is the entry point for persistence. It manages a directory of
 // session journal files and keeps the current session's tree in memory.
 type Store struct {
@@ -123,7 +132,7 @@ type Store struct {
 	mu  sync.Mutex
 
 	// session index (loaded at startup from file headers)
-	sessions map[string]sessionstore.Session
+	sessions map[string]Session
 	current  string // current active session ID
 
 	// current session's in-memory tree
@@ -146,7 +155,7 @@ func OpenStore() (*Store, error) {
 
 	st := &Store{
 		dir:      dir,
-		sessions: make(map[string]sessionstore.Session),
+		sessions: make(map[string]Session),
 		nodes:    make(map[string]*treeNode),
 	}
 
@@ -156,9 +165,6 @@ func OpenStore() (*Store, error) {
 	st.loadState()
 	return st, nil
 }
-
-// Sessions returns a session.Service backed by this store.
-func (st *Store) Sessions() sessionstore.Service { return &sessionService{store: st} }
 
 // Messages returns a libagent.MessageService backed by this store.
 func (st *Store) Messages() libagent.MessageService { return &messageService{store: st} }
@@ -189,9 +195,9 @@ func (st *Store) ListSessionSummaries() []SessionSummary {
 
 // CreateEphemeral registers a fresh session in memory only.
 // No journal file is written until the first message is stored.
-func (st *Store) CreateEphemeral() (sessionstore.Session, error) {
+func (st *Store) CreateEphemeral() (Session, error) {
 	now := time.Now().Unix()
-	sess := sessionstore.Session{
+	sess := Session{
 		ID:        uuid.New().String(),
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -215,7 +221,7 @@ func (st *Store) RemoveSession(sessionID string) error {
 	st.mu.Lock()
 	if _, ok := st.sessions[sessionID]; !ok {
 		st.mu.Unlock()
-		return sessionstore.ErrSessionNotFound
+		return ErrSessionNotFound
 	}
 	if st.current == sessionID {
 		st.mu.Unlock()
@@ -243,7 +249,7 @@ func (st *Store) AppendCompaction(summary, firstKeptID string, tokensBefore int6
 	sessionID := st.current
 	if sessionID == "" {
 		st.mu.Unlock()
-		return sessionstore.ErrSessionNotFound
+		return ErrSessionNotFound
 	}
 	if _, ok := st.nodes[firstKeptID]; !ok {
 		st.mu.Unlock()
@@ -621,17 +627,17 @@ func (st *Store) loadSessionTree(sessionID string) error {
 }
 
 // replaySessionMeta reads a journal file and returns the latest session metadata.
-func replaySessionMeta(path string) (sessionstore.Session, error) {
+func replaySessionMeta(path string) (Session, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return sessionstore.Session{}, nil
+			return Session{}, nil
 		}
-		return sessionstore.Session{}, err
+		return Session{}, err
 	}
 	defer f.Close()
 
-	var sess sessionstore.Session
+	var sess Session
 	scanner := bufio.NewScanner(f)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 10*1024*1024)
@@ -654,7 +660,7 @@ func replaySessionMeta(path string) (sessionstore.Session, error) {
 		}
 		switch entry.Typ {
 		case jTypeSession:
-			sess = sessionstore.Session{
+			sess = Session{
 				ID:        entry.SessID,
 				Title:     entry.Title,
 				CreatedAt: entry.SessTime,
@@ -810,111 +816,59 @@ func jMsgToMessage(jm jMsg) (libagent.Message, bool) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// session.Service implementation
-// ---------------------------------------------------------------------------
-
-type sessionService struct {
-	store *Store
-}
-
-func (s *sessionService) Create(ctx context.Context) (sessionstore.Session, error) {
-	return s.store.CreateEphemeral()
-}
-
-func (s *sessionService) Get(_ context.Context, id string) (sessionstore.Session, error) {
-	s.store.mu.Lock()
-	defer s.store.mu.Unlock()
-	sess, ok := s.store.sessions[id]
+// GetSession returns metadata for a persisted session.
+func (st *Store) GetSession(id string) (Session, error) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	sess, ok := st.sessions[id]
 	if !ok {
-		return sessionstore.Session{}, sessionstore.ErrSessionNotFound
+		return Session{}, ErrSessionNotFound
 	}
 	return sess, nil
 }
 
-func (s *sessionService) Update(_ context.Context, sess sessionstore.Session) error {
-	s.store.mu.Lock()
-	if _, ok := s.store.sessions[sess.ID]; !ok {
-		s.store.mu.Unlock()
-		return sessionstore.ErrSessionNotFound
+// SetCurrent makes sessionID the active session and loads its tree.
+func (st *Store) SetCurrent(id string) error {
+	st.mu.Lock()
+	if _, ok := st.sessions[id]; !ok {
+		st.mu.Unlock()
+		return ErrSessionNotFound
 	}
-	sess.UpdatedAt = time.Now().Unix()
-	s.store.sessions[sess.ID] = sess
-	s.store.mu.Unlock()
-
-	return s.store.appendEntry(sess.ID, jEntry{
-		Typ:   jTypeTitle,
-		Title: sess.Title,
-	})
-}
-
-func (s *sessionService) Delete(_ context.Context, id string) error {
-	s.store.mu.Lock()
-	defer s.store.mu.Unlock()
-	if _, ok := s.store.sessions[id]; !ok {
-		return sessionstore.ErrSessionNotFound
-	}
-	delete(s.store.sessions, id)
-	if s.store.current == id {
-		s.store.current = ""
-	}
-	return nil
-}
-
-func (s *sessionService) Current(_ context.Context) (sessionstore.Session, error) {
-	s.store.mu.Lock()
-	defer s.store.mu.Unlock()
-	if s.store.current == "" {
-		return sessionstore.Session{}, sessionstore.ErrSessionNotFound
-	}
-	sess, ok := s.store.sessions[s.store.current]
-	if !ok {
-		return sessionstore.Session{}, sessionstore.ErrSessionNotFound
-	}
-	return sess, nil
-}
-
-func (s *sessionService) SetCurrent(_ context.Context, id string) error {
-	s.store.mu.Lock()
-	if _, ok := s.store.sessions[id]; !ok {
-		s.store.mu.Unlock()
-		return sessionstore.ErrSessionNotFound
-	}
-	prev := s.store.current
-	s.store.current = id
+	prev := st.current
+	st.current = id
 	needLoad := id != prev
-	s.store.mu.Unlock()
+	st.mu.Unlock()
 
 	if needLoad {
 		// Reset tree so it gets reloaded on first message access.
-		s.store.mu.Lock()
-		s.store.nodes = make(map[string]*treeNode)
-		s.store.order = nil
-		s.store.leafID = ""
-		s.store.titled = false
-		s.store.pending = false
-		s.store.mu.Unlock()
+		st.mu.Lock()
+		st.nodes = make(map[string]*treeNode)
+		st.order = nil
+		st.leafID = ""
+		st.titled = false
+		st.pending = false
+		st.mu.Unlock()
 
-		_ = s.store.loadSessionTree(id)
+		_ = st.loadSessionTree(id)
 	}
-	s.store.saveState(id)
+	st.saveState(id)
 	return nil
 }
 
-// setTitle sets the session title if not already set. Internal helper.
-func (s *sessionService) setTitle(ctx context.Context, sessionID, title string) {
-	s.store.mu.Lock()
-	sess, ok := s.store.sessions[sessionID]
+// setTitleIfUnset assigns the session title if it has not been set yet.
+func (st *Store) setTitleIfUnset(sessionID, title string) {
+	st.mu.Lock()
+	sess, ok := st.sessions[sessionID]
 	if !ok || sess.Title != "" {
-		s.store.mu.Unlock()
+		st.mu.Unlock()
 		return
 	}
 	sess.Title = title
 	sess.UpdatedAt = time.Now().Unix()
-	s.store.sessions[sessionID] = sess
-	s.store.mu.Unlock()
+	st.sessions[sessionID] = sess
+	st.mu.Unlock()
 
-	_ = s.store.appendEntry(sessionID, jEntry{
+	_ = st.appendEntry(sessionID, jEntry{
 		Typ:   jTypeTitle,
 		Title: title,
 	})
@@ -995,8 +949,7 @@ func (ms *messageService) Create(ctx context.Context, sessionID string, msg liba
 
 	if um, ok := toStore.(*libagent.UserMessage); ok && !titled {
 		if t := strings.TrimSpace(um.Content); t != "" {
-			ss := &sessionService{store: ms.store}
-			ss.setTitle(ctx, sessionID, TitleFromFirstUserMessage(t))
+			ms.store.setTitleIfUnset(sessionID, TitleFromFirstUserMessage(t))
 		}
 	}
 

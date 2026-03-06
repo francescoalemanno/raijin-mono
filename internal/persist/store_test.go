@@ -5,15 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	sessionstore "github.com/francescoalemanno/raijin-mono/internal/session"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-func newEphemeralTestStore(t *testing.T) (*Store, sessionstore.Session) {
+func newEphemeralTestStore(t *testing.T) (*Store, Session) {
 	t.Helper()
 	st := &Store{
 		dir:      t.TempDir(),
-		sessions: make(map[string]sessionstore.Session),
+		sessions: make(map[string]Session),
 		nodes:    make(map[string]*treeNode),
 	}
 	sess, err := st.CreateEphemeral()
@@ -169,7 +168,7 @@ func TestReplayJournal_RoundTrip(t *testing.T) {
 	// Reload from disk into a new store.
 	st2 := &Store{
 		dir:      st.dir,
-		sessions: make(map[string]sessionstore.Session),
+		sessions: make(map[string]Session),
 		nodes:    make(map[string]*treeNode),
 	}
 	_ = st2.loadSessionIndex()
@@ -276,7 +275,7 @@ func TestAppendCompaction_ReplayRoundTrip(t *testing.T) {
 
 	st2 := &Store{
 		dir:      st.dir,
-		sessions: make(map[string]sessionstore.Session),
+		sessions: make(map[string]Session),
 		nodes:    make(map[string]*treeNode),
 	}
 	if err := st2.loadSessionIndex(); err != nil {
