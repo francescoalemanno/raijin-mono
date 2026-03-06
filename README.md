@@ -22,14 +22,13 @@ No MCP. No hidden sub-agents. No permission popups.
 
 | Tool | Purpose |
 |------|---------|
-| `read` | Inspect files |
+| `read` | Inspect files and load skills |
 | `write` | Create or overwrite files |
 | `edit` | Surgical in-place edits |
 | `bash` | Execute shell commands |
 | `grep` | Search file contents |
 | `glob` | Find files by pattern |
 | `webfetch` | Fetch web pages as clean Markdown |
-| `skill` | Load reusable workflows |
 
 ## What you can do right away
 
@@ -39,7 +38,7 @@ No MCP. No hidden sub-agents. No permission popups.
 - Inject shell output with `~~ command` without copy-paste
 - Load skills inline with `$skill-name`
 - Use reusable prompt templates with `/template-name args` (for example `/amplify add a tool that checks Jira status`)
-- Fork a conversation from any previous user prompt with `/fork`
+- Fork a conversation from any previous user prompt with `/tree`
 - Resume old chats with `/sessions`
 - Compact long history with `/compact` (it will not auto-run on context overflow, you manage your context)
 
@@ -52,7 +51,7 @@ One-shot mode (`-p`) prints only the final assistant response and supports regul
 - `/models` - switch model
 - `/models add` - add and configure models/providers
 - `/sessions` - browse and resume prior sessions
-- `/fork` - branch from a previous user prompt
+- `/tree` - browse conversation history and fork at any safe boundary
 - `/compact [instructions]` - summarize old context, keep recent context
 - `/templates` - list prompt templates and source
 - `/exit` - quit
