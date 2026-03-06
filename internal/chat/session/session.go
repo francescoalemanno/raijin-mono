@@ -2,7 +2,7 @@ package session
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 
@@ -32,9 +32,11 @@ func New(runtimeModel libagent.RuntimeModel) (*Session, error) {
 		paths: paths,
 	}
 
-	if store, err := persist.OpenStore(); err == nil {
-		s.persistStore = store
+	store, err := persist.OpenStore()
+	if err != nil {
+		return nil, fmt.Errorf("open session store: %w", err)
 	}
+	s.persistStore = store
 
 	if runtimeModel.Model != nil {
 		if err := s.Reconfigure(runtimeModel); err != nil {
@@ -76,7 +78,7 @@ func (s *Session) Reconfigure(runtimeModel libagent.RuntimeModel) error {
 	if s.agent != nil {
 		sessSvc = s.agent.Sessions()
 		msgSvc = s.agent.Messages()
-	} else if s.persistStore != nil {
+	} else {
 		sessSvc = s.persistStore.Sessions()
 		msgSvc = s.persistStore.Messages()
 	}
@@ -108,23 +110,15 @@ func (s *Session) Clear(ctx context.Context) error {
 	return nil
 }
 
-// ForkTo creates a new durable child session pre-populated with msgs and switches to it.
-func (s *Session) ForkTo(ctx context.Context, parentSessionID, forkedFromMessageID string, msgs []libagent.Message) error {
-	if s.agent == nil {
-		return nil
-	}
-	if s.persistStore == nil {
-		return errors.New("session persistence is not available")
-	}
-	forked, err := s.persistStore.ForkSession(parentSessionID, forkedFromMessageID, msgs)
-	if err != nil {
-		return err
-	}
-	if err := s.agent.Sessions().SetCurrent(ctx, forked.ID); err != nil {
-		return err
-	}
-	s.id = forked.ID
-	return nil
+// Navigate moves the leaf pointer to targetID within the current session's tree.
+// If the target is a user message, it returns the message text for editor pre-population.
+func (s *Session) Navigate(targetID string) (editorText string, err error) {
+	return s.persistStore.Navigate(targetID)
+}
+
+// GetTree returns the flat tree entry list for the current session.
+func (s *Session) GetTree() []persist.TreeEntry {
+	return s.persistStore.GetTree()
 }
 
 // SwitchTo loads a previously persisted session and makes it current.
@@ -139,7 +133,7 @@ func (s *Session) SwitchTo(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// PersistStore returns the underlying persist.Store, or nil if using in-memory only.
+// PersistStore returns the underlying persist.Store.
 func (s *Session) PersistStore() *persist.Store {
 	return s.persistStore
 }
@@ -164,22 +158,12 @@ func (s *Session) registerTools() {
 }
 
 func (s *Session) newBackendSession(ctx context.Context) error {
+	_ = ctx
 	if s.agent == nil {
 		return nil
 	}
-	if s.persistStore != nil {
-		sess, err := s.persistStore.CreateEphemeral()
-		if err != nil {
-			return err
-		}
-		s.id = sess.ID
-		return nil
-	}
-	sess, err := s.agent.Sessions().Create(ctx)
+	sess, err := s.persistStore.CreateEphemeral()
 	if err != nil {
-		return err
-	}
-	if err := s.agent.Sessions().SetCurrent(ctx, sess.ID); err != nil {
 		return err
 	}
 	s.id = sess.ID
@@ -195,16 +179,11 @@ func (s *Session) refreshRuntime() {
 }
 
 func (s *Session) ensureSessionID(ctx context.Context) {
+	_ = ctx
 	if s.agent == nil || s.id != "" {
 		return
 	}
-	if s.persistStore != nil {
-		if sess, err := s.persistStore.CreateEphemeral(); err == nil {
-			s.id = sess.ID
-			return
-		}
-	}
-	if sess, err := s.agent.Sessions().Create(ctx); err == nil {
+	if sess, err := s.persistStore.CreateEphemeral(); err == nil {
 		s.id = sess.ID
 	}
 }

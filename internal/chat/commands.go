@@ -18,7 +18,7 @@ var commandNamesDescs = []commandHelp{
 	{Command: "/models", Desc: "Select a model to use"},
 	{Command: "/models add", Desc: "Select and configure a model from available providers"},
 	{Command: "/sessions", Desc: "Browse and resume a previous session"},
-	{Command: "/fork", Desc: "Fork from a previous user message and edit it before resubmitting"},
+	{Command: "/tree", Desc: "Navigate the session tree and branch from any previous message"},
 	{Command: "/compact", Desc: "Summarize old context and keep recent messages (optional instructions)"},
 	{Command: "/templates", Desc: "List available prompt templates and their sources"},
 }

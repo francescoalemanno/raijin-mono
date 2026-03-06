@@ -15,10 +15,10 @@ func TestCommandsAreNotParameterized(t *testing.T) {
 	}
 }
 
-func TestCommandsIncludeFork(t *testing.T) {
+func TestCommandsIncludeTree(t *testing.T) {
 	t.Parallel()
 
-	const want = "/fork"
+	const want = "/tree"
 	for _, cmd := range commandNamesDescs {
 		if cmd.Command == want {
 			return

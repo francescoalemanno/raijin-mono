@@ -18,8 +18,6 @@ type MessageService interface {
 	Update(ctx context.Context, msg Message) error
 	Get(ctx context.Context, id string) (Message, error)
 	List(ctx context.Context, sessionID string) ([]Message, error)
-	Delete(ctx context.Context, id string) error
-	DeleteAll(ctx context.Context, sessionID string) error
 }
 
 func MessageID(m Message) string {

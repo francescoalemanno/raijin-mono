@@ -19,6 +19,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/agent"
 	chatsession "github.com/francescoalemanno/raijin-mono/internal/chat/session"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
+	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
 	"github.com/francescoalemanno/raijin-mono/internal/theme"
@@ -911,8 +912,8 @@ func (app *ChatApp) handleBuiltinCommand(cmd builtinCommandCall) {
 		}
 	case cmd.name == "sessions":
 		app.dispatchSync(func(_ tui.UIToken) { app.showSessionSelector() })
-	case cmd.name == "fork":
-		app.dispatchSync(func(_ tui.UIToken) { app.showForkSelector() })
+	case cmd.name == "tree":
+		app.dispatchSync(func(_ tui.UIToken) { app.showTreeSelector() })
 	case cmd.name == "compact":
 		instructions := strings.TrimSpace(cmd.args)
 		go func() {
@@ -994,158 +995,56 @@ func (app *ChatApp) showTemplates() {
 	app.appendMessage(strings.TrimSpace(b.String()), theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 }
 
-func (app *ChatApp) showForkSelector() {
+func (app *ChatApp) showTreeSelector() {
 	if app.state == stateRunning {
-		app.appendMessage("cannot fork while a response is running; interrupt first", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
+		app.appendMessage("cannot navigate tree while a response is running; interrupt first", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 
 	if app.session == nil || app.session.Agent() == nil || app.session.ID() == "" {
-		app.appendMessage("no active conversation to fork", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
+		app.appendMessage("no active conversation", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
 		return
 	}
 
-	// loadForkCandidates does blocking I/O — run it off the UI goroutine.
-	go func() {
-		candidates, err := app.loadForkCandidates(context.Background())
-		app.dispatchSync(func(_ tui.UIToken) {
-			if err != nil {
-				app.appendMessage("failed to load messages for /fork: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
-				return
-			}
-			if len(candidates) == 0 {
-				app.appendMessage("no previous user messages to fork", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
-				return
-			}
-			app.showSelector(func(done func()) tui.Component {
-				return NewForkSelector(candidates,
-					func(candidate forkCandidate) {
-						done()
-						go func() {
-							if err := app.applyForkCandidate(context.Background(), candidate); err != nil {
-								app.dispatchSync(func(_ tui.UIToken) {
-									app.appendMessage("/fork failed: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
-								})
-							}
-						}()
-					},
-					func() {
-						done()
-					},
-				)
-			})
-		})
-	}()
+	entries := app.session.GetTree()
+	if len(entries) == 0 {
+		app.appendMessage("no history to navigate", theme.BorderThin, theme.Default.Muted.Ansi24, theme.Default.Foreground.Ansi24, false)
+		return
+	}
+
+	app.showSelector(func(done func()) tui.Component {
+		return NewTreeSelector(entries,
+			func(entry persist.TreeEntry) {
+				done()
+				go func() {
+					if err := app.applyTreeNavigation(context.Background(), entry); err != nil {
+						app.dispatchSync(func(_ tui.UIToken) {
+							app.appendMessage("/tree failed: "+err.Error(), theme.BorderThin, theme.Default.Danger.Ansi24, theme.Default.Foreground.Ansi24, false)
+						})
+					}
+				}()
+			},
+			func() {
+				done()
+			},
+		)
+	})
 }
 
-func (app *ChatApp) loadForkCandidates(ctx context.Context) ([]forkCandidate, error) {
-	msgs, err := app.session.ListMessages(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return collectForkCandidates(msgs), nil
-}
-
-func collectForkCandidates(msgs []libagent.Message) []forkCandidate {
-	candidates := make([]forkCandidate, 0)
-	ordinal := 0
-	for _, msg := range msgs {
-		um, ok := msg.(*libagent.UserMessage)
-		if !ok {
-			continue
-		}
-		prompt := strings.TrimSpace(um.Content)
-		if prompt == "" {
-			continue
-		}
-		ordinal++
-		candidates = append(candidates, forkCandidate{
-			MessageID: libagent.MessageID(um),
-			Prompt:    prompt,
-			Preview:   buildForkPreview(prompt, 90),
-			Ordinal:   ordinal,
-		})
-	}
-
-	for i, j := 0, len(candidates)-1; i < j; i, j = i+1, j-1 {
-		candidates[i], candidates[j] = candidates[j], candidates[i]
-	}
-
-	headPreview := "continue conversation in a fork."
-	candidates = append([]forkCandidate{{
-		IsHead:  true,
-		Prompt:  "",
-		Preview: headPreview,
-		Ordinal: ordinal + 1,
-	}}, candidates...)
-	return candidates
-}
-
-func buildForkPreview(prompt string, maxRunes int) string {
-	if maxRunes <= 1 {
-		maxRunes = 1
-	}
-	normalized := strings.Join(strings.Fields(prompt), " ")
-	runes := []rune(normalized)
-	if len(runes) <= maxRunes {
-		return normalized
-	}
-	return string(runes[:maxRunes-1]) + "…"
-}
-
-func (app *ChatApp) applyForkCandidate(ctx context.Context, candidate forkCandidate) error {
+func (app *ChatApp) applyTreeNavigation(ctx context.Context, entry persist.TreeEntry) error {
 	if app.session == nil || app.session.Agent() == nil || app.session.ID() == "" {
 		return errors.New("no active session")
 	}
 
-	msgs, err := app.session.ListMessages(ctx)
+	editorText, err := app.session.Navigate(entry.ID)
 	if err != nil {
-		return err
-	}
-
-	// Head fork: keep full history and start a fresh branch from current tip.
-	// We inject an empty user message in the child so future forks can branch
-	// from this explicit "new turn" node instead of reusing a parent message.
-	if candidate.IsHead {
-		parentSessionID := app.session.ID()
-		if err := app.session.ForkTo(ctx, parentSessionID, "", msgs); err != nil {
-			return err
-		}
-		if _, err := app.session.Agent().Messages().Create(ctx, app.session.ID(), &libagent.UserMessage{Role: "user", Content: ""}); err != nil {
-			return err
-		}
-		app.dispatchSync(func(_ tui.UIToken) {
-			app.resetConversationView(false)
-			app.restoreHistoryFromSession(ctx)
-			app.editor.SetText("")
-			app.ui.SetFocus(app.editor)
-			app.refreshHeader()
-			app.refreshStatus()
-		})
-		app.ui.RequestRender(true)
-		return nil
-	}
-
-	// Collect only the messages that precede the fork point (exclude the
-	// selected message and everything after it).
-	var keep []libagent.Message
-	for _, msg := range msgs {
-		if libagent.MessageID(msg) == candidate.MessageID {
-			break
-		}
-		keep = append(keep, msg)
-	}
-
-	// Create a new durable child session pre-populated with those messages.
-	parentSessionID := app.session.ID()
-	if err := app.session.ForkTo(ctx, parentSessionID, candidate.MessageID, keep); err != nil {
 		return err
 	}
 
 	app.dispatchSync(func(_ tui.UIToken) {
 		app.resetConversationView(false)
 		app.restoreHistoryFromSession(ctx)
-		app.editor.SetText(candidate.Prompt)
+		app.editor.SetText(editorText)
 		app.ui.SetFocus(app.editor)
 		app.refreshHeader()
 		app.refreshStatus()

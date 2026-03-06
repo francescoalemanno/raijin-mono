@@ -132,25 +132,15 @@ func (app *ChatApp) compactConversation(customInstructions string) error {
 		return err
 	}
 
-	if err := msgSvc.DeleteAll(context.Background(), sessionID); err != nil {
-		return fmt.Errorf("failed to rewrite history: %w", err)
+	// Persist backend is append-only: store a compaction checkpoint marker and
+	// reconstruct context from it instead of rewriting message history.
+	store := app.session.PersistStore()
+	firstKeptID := firstPersistedMessageID(kept)
+	if firstKeptID == "" {
+		return fmt.Errorf("cannot compact: no persisted message ID in kept window")
 	}
-
-	summaryText := "[Context checkpoint created by /compact]\n\n" + strings.TrimSpace(summary)
-	if _, err := msgSvc.Create(context.Background(), sessionID, &libagent.UserMessage{Role: "user", Content: summaryText}); err != nil {
-		if rollbackErr := restoreMessages(context.Background(), msgSvc, sessionID, msgs); rollbackErr != nil {
-			return fmt.Errorf("failed to store compaction summary: %w (rollback failed: %v)", err, rollbackErr)
-		}
-		return fmt.Errorf("failed to store compaction summary: %w", err)
-	}
-
-	for _, msg := range kept {
-		if _, err := msgSvc.Create(context.Background(), sessionID, libagent.CloneMessage(msg)); err != nil {
-			if rollbackErr := restoreMessages(context.Background(), msgSvc, sessionID, msgs); rollbackErr != nil {
-				return fmt.Errorf("failed to restore kept history: %w (rollback failed: %v)", err, rollbackErr)
-			}
-			return fmt.Errorf("failed to restore kept history: %w", err)
-		}
+	if err := store.AppendCompaction(summary, firstKeptID, estimateConversationTokens(msgs)); err != nil {
+		return fmt.Errorf("failed to append compaction entry: %w", err)
 	}
 
 	app.dispatchSync(func(_ tui.UIToken) {
@@ -202,18 +192,6 @@ func generateCompactionSummary(ctx context.Context, model libagent.RuntimeModel,
 		return "", fmt.Errorf("compaction summarization returned empty output")
 	}
 	return summary, nil
-}
-
-func restoreMessages(ctx context.Context, msgSvc libagent.MessageService, sessionID string, msgs []libagent.Message) error {
-	if err := msgSvc.DeleteAll(ctx, sessionID); err != nil {
-		return err
-	}
-	for _, msg := range msgs {
-		if _, err := msgSvc.Create(ctx, sessionID, libagent.CloneMessage(msg)); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func findCompactionCutIndex(msgs []libagent.Message, keepRecentTokens int64) int {
@@ -327,6 +305,23 @@ func estimateMessageTokens(msg libagent.Message) int64 {
 		return 0
 	}
 	return int64(math.Ceil(float64(chars) / 4.0))
+}
+
+func estimateConversationTokens(msgs []libagent.Message) int64 {
+	var total int64
+	for _, msg := range msgs {
+		total += estimateMessageTokens(msg)
+	}
+	return total
+}
+
+func firstPersistedMessageID(msgs []libagent.Message) string {
+	for _, msg := range msgs {
+		if id := strings.TrimSpace(libagent.MessageID(msg)); id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 func serializeConversationForCompaction(msgs []libagent.Message) string {

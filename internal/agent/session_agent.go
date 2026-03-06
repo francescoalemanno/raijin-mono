@@ -538,10 +538,10 @@ func NewSessionAgentFromConfig(runtimeModel libagent.RuntimeModel, msgService li
 	systemPrompt := BuildSystemPrompt()
 
 	if msgService == nil {
-		msgService = libagent.NewInMemoryMessageService()
+		return nil, ErrMessageServiceMissing
 	}
 	if sessService == nil {
-		sessService = session.NewInMemoryService()
+		return nil, ErrSessionServiceMissing
 	}
 
 	return NewSessionAgent(SessionAgentOptions{
