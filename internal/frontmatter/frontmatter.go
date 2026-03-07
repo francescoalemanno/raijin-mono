@@ -117,7 +117,7 @@ func StripOptionalQuotes(s string) string {
 
 // FirstNonEmptyLine returns the first non-blank line in content.
 func FirstNonEmptyLine(content string) string {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed != "" {
 			return trimmed

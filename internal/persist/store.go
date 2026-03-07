@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -772,12 +773,7 @@ func sanitizeLoadedLeafPath(nodes map[string]*treeNode, leafID string) string {
 }
 
 func containsChildID(children []string, id string) bool {
-	for _, child := range children {
-		if child == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(children, id)
 }
 
 func removeChildID(children []string, id string) []string {

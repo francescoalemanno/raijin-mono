@@ -61,7 +61,7 @@ func TestInput_CtrlU_SavesToKillRing(t *testing.T) {
 	input.SetValue("hello world")
 	// Move cursor to after "hello "
 	input.HandleInput("\x01") // Ctrl+A
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		input.HandleInput("\x1b[C") // Right arrow
 	}
 
@@ -244,7 +244,7 @@ func TestInput_BackwardDeletionsPrependForwardDeletionsAppendDuringAccumulation(
 	input.SetValue("prefix|suffix")
 	// Position cursor at "|"
 	input.HandleInput("\x01") // Ctrl+A
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		input.HandleInput("\x1b[C") // Move right 6
 	}
 
@@ -281,7 +281,7 @@ func TestInput_HandlesYankInMiddleOfText(t *testing.T) {
 	input.SetValue("hello world")
 	// Move to middle (after "hello ")
 	input.HandleInput("\x01") // Ctrl+A
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		input.HandleInput("\x1b[C")
 	}
 
@@ -303,7 +303,7 @@ func TestInput_HandlesYankPopInMiddleOfText(t *testing.T) {
 	// Set up "hello world" and position cursor after "hello "
 	input.SetValue("hello world")
 	input.HandleInput("\x01") // Ctrl+A
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		input.HandleInput("\x1b[C")
 	}
 
@@ -440,7 +440,7 @@ func TestInput_UndoesCtrlK(t *testing.T) {
 	input.HandleInput("l")
 	input.HandleInput("d")
 	input.HandleInput("\x01") // Ctrl+A
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		input.HandleInput("\x1b[C")
 	}
 
@@ -466,7 +466,7 @@ func TestInput_UndoesCtrlU(t *testing.T) {
 	input.HandleInput("l")
 	input.HandleInput("d")
 	input.HandleInput("\x01") // Ctrl+A
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		input.HandleInput("\x1b[C")
 	}
 
@@ -499,7 +499,7 @@ func TestInput_UndoesPasteAtomically(t *testing.T) {
 
 	input.SetValue("hello world")
 	input.HandleInput("\x01") // Ctrl+A
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		input.HandleInput("\x1b[C")
 	}
 

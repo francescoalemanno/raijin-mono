@@ -211,7 +211,7 @@ func geminiCliDiscoverProject(ctx context.Context, accessToken string, onProgres
 		"X-Goog-Api-Client": "gl-node/22.17.0",
 	}
 
-	loadBody := map[string]interface{}{
+	loadBody := map[string]any{
 		"cloudaicompanionProject": envProjectID,
 		"metadata": map[string]string{
 			"ideType":     "IDE_UNSPECIFIED",
@@ -260,7 +260,7 @@ func geminiCliOnboardUser(
 	projectHint string,
 	onProgress func(string),
 ) (string, error) {
-	onboardBody := map[string]interface{}{
+	onboardBody := map[string]any{
 		"cloudaicompanionProject": projectHint,
 		"metadata": map[string]string{
 			"ideType":    "IDE_UNSPECIFIED",

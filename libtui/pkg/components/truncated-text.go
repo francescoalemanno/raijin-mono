@@ -61,10 +61,7 @@ func (t *TruncatedText) Render(width int) []string {
 	// Calculate available width after horizontal padding
 	maxPadding := max(0, (width-1)/2)
 	effectivePaddingX := min(t.paddingX, maxPadding)
-	availableWidth := width - effectivePaddingX*2
-	if availableWidth < 1 {
-		availableWidth = 1
-	}
+	availableWidth := max(width-effectivePaddingX*2, 1)
 
 	// Take only the first line (stop at newline)
 	singleLineText := t.text
@@ -89,10 +86,7 @@ func (t *TruncatedText) Render(width int) []string {
 	// Pad line to exactly width characters
 	finalLine := lineWithPadding
 	lineVisibleWidth := utils.VisibleWidth(finalLine)
-	paddingNeeded := width - lineVisibleWidth
-	if paddingNeeded < 0 {
-		paddingNeeded = 0
-	}
+	paddingNeeded := max(width-lineVisibleWidth, 0)
 	padding := strings.Repeat(" ", paddingNeeded)
 	if t.fgColorFn != nil {
 		padding = t.fgColorFn(padding)

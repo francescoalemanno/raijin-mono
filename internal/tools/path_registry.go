@@ -1,5 +1,7 @@
 package tools
 
+import "slices"
+
 import "sync"
 
 // PathRegistry is a thread-safe registry of extra directories to prepend to
@@ -19,10 +21,8 @@ func NewPathRegistry() *PathRegistry {
 func (r *PathRegistry) Add(dir string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, p := range r.paths {
-		if p == dir {
-			return
-		}
+	if slices.Contains(r.paths, dir) {
+		return
 	}
 	r.paths = append(r.paths, dir)
 }

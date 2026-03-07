@@ -188,9 +188,6 @@ func substituteSlice(expr string, args []string) (string, bool) {
 	if length <= 0 {
 		return "", true
 	}
-	end := start + length
-	if end > len(args) {
-		end = len(args)
-	}
+	end := min(start+length, len(args))
 	return strings.Join(args[start:end], " "), true
 }

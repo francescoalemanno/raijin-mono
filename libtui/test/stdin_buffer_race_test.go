@@ -35,7 +35,7 @@ func TestStdinBuffer_ConcurrentProcessAndClear_NoRace(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 250; i++ {
+		for range 250 {
 			buffer.Process("\x1b[<35")
 			time.Sleep(150 * time.Microsecond)
 			buffer.Process(";20;5m")
@@ -44,7 +44,7 @@ func TestStdinBuffer_ConcurrentProcessAndClear_NoRace(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 250; i++ {
+		for range 250 {
 			time.Sleep(100 * time.Microsecond)
 			buffer.Clear()
 		}

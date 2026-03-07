@@ -75,10 +75,7 @@ func (m *MessageComponent) Render(width int) []string {
 	}
 	borderPrefix := m.borderColor(m.borderChar) + " "
 	borderWidth := 2 // "│ " = 2 visible chars
-	contentWidth := width - borderWidth
-	if contentWidth < 4 {
-		contentWidth = 4
-	}
+	contentWidth := max(width-borderWidth, 4)
 
 	var contentLines []string
 	if m.markdown {
@@ -101,10 +98,7 @@ func (m *MessageComponent) Render(width int) []string {
 	result := make([]string, len(contentLines))
 	for i, line := range contentLines {
 		lineWidth := utils.VisibleWidth(line)
-		pad := contentWidth - lineWidth
-		if pad < 0 {
-			pad = 0
-		}
+		pad := max(contentWidth-lineWidth, 0)
 		padding := theme.Default.Foreground.Ansi24(strings.Repeat(" ", pad))
 		full := borderPrefix + line + padding
 		fullWidth := borderWidth + lineWidth + pad

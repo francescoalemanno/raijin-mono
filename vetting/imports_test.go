@@ -20,8 +20,8 @@ func topLevelDir(repoRelPath string) string {
 // isLocalImport checks if an import path belongs to this module and returns
 // the repo-relative import suffix (e.g. "internal/paths").
 func isLocalImport(imp string) (string, bool) {
-	if strings.HasPrefix(imp, modulePath+"/") {
-		return strings.TrimPrefix(imp, modulePath+"/"), true
+	if after, ok := strings.CutPrefix(imp, modulePath+"/"); ok {
+		return after, true
 	}
 	return "", false
 }

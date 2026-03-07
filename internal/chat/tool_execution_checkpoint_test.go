@@ -32,7 +32,6 @@ func TestStreamingRenderInterval(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(fmt.Sprintf("total_%d", tt.totalBytes), func(t *testing.T) {
 			t.Parallel()
 			if got := streamingRenderInterval(tt.totalBytes); got != tt.want {

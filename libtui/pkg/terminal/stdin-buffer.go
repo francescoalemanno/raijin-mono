@@ -58,7 +58,7 @@ func (sb *StdinBuffer) SetOnPaste(callback func(string)) {
 }
 
 // Process feeds input data into the buffer
-func (sb *StdinBuffer) Process(data interface{}) {
+func (sb *StdinBuffer) Process(data any) {
 	// Convert data to string
 	var str string
 	if bytes, ok := data.([]byte); ok {

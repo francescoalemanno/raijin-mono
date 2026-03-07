@@ -63,8 +63,8 @@ func main() {
 		if mc, ok := store.GetDefault(); ok {
 			modelCfg = mc.Normalize()
 			apiKey := modelCfg.APIKey
-			if strings.HasPrefix(apiKey, "$") {
-				apiKey = os.Getenv(strings.TrimPrefix(apiKey, "$"))
+			if after, ok0 := strings.CutPrefix(apiKey, "$"); ok0 {
+				apiKey = os.Getenv(after)
 			}
 			cat := libagent.DefaultCatalog()
 			if model, err := cat.NewModel(context.Background(), modelCfg.Provider, modelCfg.Model, apiKey); err == nil {

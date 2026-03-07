@@ -462,7 +462,7 @@ func TestStdinBuffer_EdgeCases(t *testing.T) {
 	t.Run("should handle very long sequences", func(t *testing.T) {
 		buffer, collector := newTestBuffer()
 		longSeq := "\x1b["
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			longSeq += "1;"
 		}
 		longSeq += "H"

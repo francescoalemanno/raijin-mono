@@ -11,6 +11,7 @@
 package keys
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -581,12 +582,7 @@ func parseIntSafe(s string, defaultVal int) int {
 
 // matchesLegacySequence checks if data matches any of the given sequences
 func matchesLegacySequence(data string, sequences []string) bool {
-	for _, seq := range sequences {
-		if data == seq {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(sequences, data)
 }
 
 // =============================================================================

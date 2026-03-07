@@ -100,14 +100,14 @@ func TestTUI_Torture_InputResizeRenderStorm_NoDeadlock(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < n; i++ {
+		for range n {
 			term.emitInput("a")
 		}
 	}()
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < n; i++ {
+		for i := range n {
 			cols := 100 + (i % 40)
 			rows := 30 + (i % 20)
 			term.emitResize(cols, rows)
@@ -116,7 +116,7 @@ func TestTUI_Torture_InputResizeRenderStorm_NoDeadlock(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < n; i++ {
+		for i := range n {
 			ui.RequestRender(i%13 == 0)
 		}
 	}()

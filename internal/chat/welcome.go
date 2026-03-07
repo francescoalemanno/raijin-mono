@@ -110,10 +110,8 @@ func (w *WelcomeComponent) Render(width int) []string {
 		width = 1
 	}
 
-	contentWidth := width - 2 // Account for borders
-	if contentWidth < 20 {
-		contentWidth = 20
-	}
+	// Account for borders
+	contentWidth := max(width-2, 20)
 
 	// truncLine ensures a line never exceeds the terminal width
 	truncLine := func(line string) string {
@@ -126,8 +124,8 @@ func (w *WelcomeComponent) Render(width int) []string {
 	lines = append(lines, truncLine(w.centerLine(theme.Default.Muted.Ansi24("┌"+strings.Repeat("─", max(0, width-2))+"┐"), width)))
 
 	// ASCII logo
-	logoLines := strings.Split(asciiArtLogo, "\n")
-	for _, line := range logoLines {
+	logoLines := strings.SplitSeq(asciiArtLogo, "\n")
+	for line := range logoLines {
 		if strings.TrimSpace(line) != "" {
 			lines = append(lines, truncLine(w.centerLine(theme.Default.Accent.Ansi24(line), width)))
 		}

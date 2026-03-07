@@ -121,10 +121,7 @@ func (m *Markdown) Render(width int) []string {
 	}
 
 	// Calculate content width
-	contentWidth := width - m.paddingX*2
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
+	contentWidth := max(width-m.paddingX*2, 1)
 
 	// Handle empty text
 	if strings.TrimSpace(m.text) == "" {
@@ -379,10 +376,9 @@ func (m *Markdown) renderBlockquote(quote *ast.Blockquote, width int, source []b
 	}
 
 	// Calculate available width for content
-	quoteContentWidth := width - 2 // "│ " = 2 chars
-	if quoteContentWidth < 1 {
-		quoteContentWidth = 1
-	}
+	quoteContentWidth := max(
+		// "│ " = 2 chars
+		width-2, 1)
 
 	// Render the blockquote content
 	for child := quote.FirstChild(); child != nil; child = child.NextSibling() {
@@ -578,8 +574,8 @@ func (m *Markdown) renderInlineNodes(node ast.Node, styleCtx *inlineStyleContext
 
 			// Check if link text matches href (for autolinks)
 			hrefForComparison := href
-			if strings.HasPrefix(href, "mailto:") {
-				hrefForComparison = strings.TrimPrefix(href, "mailto:")
+			if after, ok := strings.CutPrefix(href, "mailto:"); ok {
+				hrefForComparison = after
 			}
 
 			if textContent == href || textContent == hrefForComparison {
@@ -678,9 +674,9 @@ func (m *Markdown) getDefaultStylePrefix() string {
 		styled = m.theme.Underline(styled)
 	}
 
-	idx := strings.Index(styled, sentinel)
-	if idx >= 0 {
-		m.defaultStylePrefix = styled[:idx]
+	before, _, ok := strings.Cut(styled, sentinel)
+	if ok {
+		m.defaultStylePrefix = before
 	}
 
 	return m.defaultStylePrefix

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"time"
@@ -86,12 +87,7 @@ type ModelInfo struct {
 
 // HasCapability reports whether the model advertises a capability.
 func (m ModelInfo) HasCapability(c ModelCapability) bool {
-	for _, v := range m.Capabilities {
-		if v == c {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(m.Capabilities, c)
 }
 
 func normalizeModelInfo(m ModelInfo) ModelInfo {
@@ -117,13 +113,7 @@ func normalizeModelInfo(m ModelInfo) ModelInfo {
 			normCaps = append(normCaps, ModelCapabilityImage)
 		}
 	}
-	m.SupportsImages = false
-	for _, c := range normCaps {
-		if c == ModelCapabilityImage {
-			m.SupportsImages = true
-			break
-		}
-	}
+	m.SupportsImages = slices.Contains(normCaps, ModelCapabilityImage)
 	slices.Sort(normCaps)
 	m.Capabilities = normCaps
 	return m
@@ -191,9 +181,7 @@ func NewCatalog() *Catalog {
 	// Persist to disk whenever credentials are created or refreshed.
 	c.onCredsUpdated = func(_ string, _ oauth.Credentials) {
 		snapshot := make(map[string]oauth.Credentials, len(c.credStore))
-		for k, v := range c.credStore {
-			snapshot[k] = v
-		}
+		maps.Copy(snapshot, c.credStore)
 		_ = saveCredentials(snapshot) // best-effort; callers are not burdened with I/O errors
 	}
 

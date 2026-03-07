@@ -338,10 +338,7 @@ func breakLongWordASCII(word string, width int, tracker *ansi.AnsiCodeTracker) [
 // ApplyBackgroundToLine applies background color to a line, padding to full width
 func ApplyBackgroundToLine(line string, width int, bgFn func(string) string) string {
 	visibleLen := VisibleWidth(line)
-	paddingNeeded := width - visibleLen
-	if paddingNeeded < 0 {
-		paddingNeeded = 0
-	}
+	paddingNeeded := max(width-visibleLen, 0)
 	padding := strings.Repeat(" ", paddingNeeded)
 
 	withPadding := line + padding

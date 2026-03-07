@@ -189,13 +189,13 @@ type SkillItem struct {
 
 // CombinedAutocompleteProvider provides autocomplete for slash commands, file paths, and skills
 type CombinedAutocompleteProvider struct {
-	commands []interface{} // SlashCommand or AutocompleteItem
+	commands []any // SlashCommand or AutocompleteItem
 	skills   []SkillItem
 	basePath string
 }
 
 // NewCombinedAutocompleteProvider creates a new autocomplete provider
-func NewCombinedAutocompleteProvider(commands []interface{}, basePath string) *CombinedAutocompleteProvider {
+func NewCombinedAutocompleteProvider(commands []any, basePath string) *CombinedAutocompleteProvider {
 	if basePath == "" {
 		basePath, _ = os.Getwd()
 	}
@@ -365,10 +365,7 @@ func (p *CombinedAutocompleteProvider) ApplyCompletion(lines []string, cursorLin
 	// Convert rune index to byte offset for string slicing
 	byteOffset := RuneIndexToByteOffset(currentLine, cursorCol)
 	// Calculate byte offset for the prefix start
-	prefixStartRuneIdx := cursorCol - len([]rune(prefix))
-	if prefixStartRuneIdx < 0 {
-		prefixStartRuneIdx = 0
-	}
+	prefixStartRuneIdx := max(cursorCol-len([]rune(prefix)), 0)
 	prefixStartByteOffset := RuneIndexToByteOffset(currentLine, prefixStartRuneIdx)
 
 	beforePrefix := ""

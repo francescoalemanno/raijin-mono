@@ -82,8 +82,8 @@ func PrependPath(environ []string, dirs []string) []string {
 	result := make([]string, 0, len(environ))
 	found := false
 	for _, entry := range environ {
-		if strings.HasPrefix(entry, "PATH=") {
-			existing := strings.TrimPrefix(entry, "PATH=")
+		if after, ok := strings.CutPrefix(entry, "PATH="); ok {
+			existing := after
 			if existing == "" {
 				result = append(result, "PATH="+prefix)
 			} else {

@@ -37,7 +37,7 @@ func TestRenderDiffPreviewHighlightsContextCode(t *testing.T) {
 	escapePattern := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 	var contextLine string
-	for _, line := range strings.Split(diff, "\n") {
+	for line := range strings.SplitSeq(diff, "\n") {
 		plain := escapePattern.ReplaceAllString(line, "")
 		if strings.Contains(plain, "package") && strings.Contains(plain, "main") && strings.HasPrefix(plain, " 1 ") {
 			contextLine = line
@@ -65,7 +65,7 @@ func TestRenderDiffPreviewNeutralLinesAreMuted(t *testing.T) {
 
 	escapePattern := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	var contextLine string
-	for _, line := range strings.Split(diff, "\n") {
+	for line := range strings.SplitSeq(diff, "\n") {
 		plain := escapePattern.ReplaceAllString(line, "")
 		if strings.HasPrefix(plain, " 1 ") {
 			contextLine = line
@@ -93,7 +93,7 @@ func TestRenderDiffPreviewColorsAddedAndRemovedWithForeground(t *testing.T) {
 
 	escapePattern := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	var addedLine, removedLine string
-	for _, line := range strings.Split(diff, "\n") {
+	for line := range strings.SplitSeq(diff, "\n") {
 		plain := escapePattern.ReplaceAllString(line, "")
 		if strings.HasPrefix(plain, "+") {
 			addedLine = line

@@ -150,7 +150,7 @@ func (t *typedTool[T]) Run(ctx context.Context, params ToolCall) (ToolResponse, 
 }
 
 func schemaFor[T any]() (map[string]any, []string) {
-	inputType := reflect.TypeOf((*T)(nil)).Elem()
+	inputType := reflect.TypeFor[T]()
 	sch := schema.Generate(inputType)
 	params := make(map[string]any, len(sch.Properties))
 	for name, propSchema := range sch.Properties {

@@ -57,11 +57,11 @@ func TestLoader_ConcurrentSetMessageAndLoop_NoRace(t *testing.T) {
 	go loader.Loop()
 
 	var wg sync.WaitGroup
-	for worker := 0; worker < 4; worker++ {
+	for worker := range 4 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < 60; i++ {
+			for i := range 60 {
 				msg := fmt.Sprintf("worker-%d-%d", id, i)
 				ui.Dispatch(func() { loader.SetMessage(msg) })
 				time.Sleep(2 * time.Millisecond)
@@ -81,12 +81,10 @@ func TestLoader_Stop_IsSafeWhenCalledConcurrently(t *testing.T) {
 	go loader.Loop()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 16 {
+		wg.Go(func() {
 			loader.Stop()
-		}()
+		})
 	}
 	wg.Wait()
 }

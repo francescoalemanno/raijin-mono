@@ -2,6 +2,7 @@ package artifacts
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -121,9 +122,7 @@ func (m *Manager) Reload() error {
 	for kind := range loaders {
 		kinds = append(kinds, kind)
 	}
-	sort.Slice(kinds, func(i, j int) bool {
-		return kinds[i] < kinds[j]
-	})
+	slices.Sort(kinds)
 
 	for _, kind := range kinds {
 		for _, loader := range loaders[kind] {

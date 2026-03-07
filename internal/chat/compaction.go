@@ -173,10 +173,7 @@ func generateCompactionSummary(ctx context.Context, model libagent.RuntimeModel,
 	if cw := model.EffectiveContextWindow(); cw > 0 {
 		reserve = min(reserve, cw/2)
 	}
-	maxOut := int64(math.Floor(float64(reserve) * 0.8))
-	if maxOut < 256 {
-		maxOut = 256
-	}
+	maxOut := max(int64(math.Floor(float64(reserve)*0.8)), 256)
 
 	var sb strings.Builder
 	err := libagent.StreamText(ctx, model.Model, compactionSystemPrompt, prompt, maxOut, func(delta string) {

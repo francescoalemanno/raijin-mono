@@ -24,8 +24,8 @@ func RenderPath(path string) string {
 	if cwd, err := os.Getwd(); err == nil {
 		cwdNormalized := filepath.ToSlash(cwd)
 		cwdNormalized = strings.TrimSuffix(cwdNormalized, "/")
-		if strings.HasPrefix(normalized, cwdNormalized+"/") {
-			normalized = "./" + strings.TrimPrefix(normalized, cwdNormalized+"/")
+		if after, ok := strings.CutPrefix(normalized, cwdNormalized+"/"); ok {
+			normalized = "./" + after
 		} else if normalized == cwdNormalized {
 			normalized = "."
 		}
@@ -35,8 +35,8 @@ func RenderPath(path string) string {
 	if home, err := os.UserHomeDir(); err == nil {
 		homeNormalized := filepath.ToSlash(home)
 		homeNormalized = strings.TrimSuffix(homeNormalized, "/")
-		if strings.HasPrefix(normalized, homeNormalized+"/") {
-			normalized = "~/" + strings.TrimPrefix(normalized, homeNormalized+"/")
+		if after, ok := strings.CutPrefix(normalized, homeNormalized+"/"); ok {
+			normalized = "~/" + after
 		} else if normalized == homeNormalized {
 			normalized = "~"
 		}
@@ -60,7 +60,7 @@ func renderDiffPreview(path, oldStr, newStr string) string {
 	}
 
 	var b strings.Builder
-	for _, line := range strings.Split(details.Diff, "\n") {
+	for line := range strings.SplitSeq(details.Diff, "\n") {
 		switch {
 		case strings.HasPrefix(line, "+"):
 			b.WriteString(theme.Default.DiffAdded.Ansi24(line))

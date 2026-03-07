@@ -22,7 +22,7 @@ func setupFolder(baseDir string, dirs []string, files map[string]string) {
 }
 
 func TestCombinedAutocompleteProvider_ExtractPathPrefix_Root(t *testing.T) {
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, "/tmp")
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, "/tmp")
 	lines := []string{"hey /"}
 
 	result := provider.GetForceFileSuggestions(lines, 0, 5)
@@ -34,7 +34,7 @@ func TestCombinedAutocompleteProvider_ExtractPathPrefix_Root(t *testing.T) {
 }
 
 func TestCombinedAutocompleteProvider_ExtractPathPrefix_PathA(t *testing.T) {
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, "/tmp")
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, "/tmp")
 	lines := []string{"/A"}
 
 	result := provider.GetForceFileSuggestions(lines, 0, 2)
@@ -47,7 +47,7 @@ func TestCombinedAutocompleteProvider_ExtractPathPrefix_PathA(t *testing.T) {
 }
 
 func TestCombinedAutocompleteProvider_NoTriggerForSlashCommands(t *testing.T) {
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, "/tmp")
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, "/tmp")
 	lines := []string{"/model"}
 
 	result := provider.GetForceFileSuggestions(lines, 0, 6)
@@ -56,7 +56,7 @@ func TestCombinedAutocompleteProvider_NoTriggerForSlashCommands(t *testing.T) {
 }
 
 func TestCombinedAutocompleteProvider_TriggerAfterSlashCommandArg(t *testing.T) {
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, "/tmp")
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, "/tmp")
 	lines := []string{"/command /"}
 
 	result := provider.GetForceFileSuggestions(lines, 0, 10)
@@ -78,7 +78,7 @@ func TestCombinedAutocompleteProvider_EmptyQuery(t *testing.T) {
 		"README.md": "readme",
 	})
 
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, tempDir)
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, tempDir)
 	lines := []string{"@"}
 
 	result := provider.GetSuggestions(lines, 0, 1)
@@ -104,7 +104,7 @@ func TestCombinedAutocompleteProvider_WithExtension(t *testing.T) {
 		"file.txt": "content",
 	})
 
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, tempDir)
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, tempDir)
 	lines := []string{"@file.txt"}
 
 	result := provider.GetSuggestions(lines, 0, 9)
@@ -130,7 +130,7 @@ func TestCombinedAutocompleteProvider_CaseInsensitive(t *testing.T) {
 		"README.md": "readme",
 	})
 
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, tempDir)
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, tempDir)
 	lines := []string{"@re"}
 
 	result := provider.GetSuggestions(lines, 0, 3)
@@ -156,7 +156,7 @@ func TestCombinedAutocompleteProvider_DirectoriesFirst(t *testing.T) {
 		"src.txt": "text",
 	})
 
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, tempDir)
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, tempDir)
 	lines := []string{"@src"}
 
 	result := provider.GetSuggestions(lines, 0, 4)
@@ -180,7 +180,7 @@ func TestCombinedAutocompleteProvider_NestedPaths(t *testing.T) {
 		"src/index.ts": "export {};\n",
 	})
 
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, tempDir)
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, tempDir)
 	lines := []string{"@index"}
 
 	result := provider.GetSuggestions(lines, 0, 6)
@@ -207,7 +207,7 @@ func TestCombinedAutocompleteProvider_ImageFiles(t *testing.T) {
 		"icon.png":   "fake png data",
 	})
 
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, tempDir)
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, tempDir)
 	lines := []string{"@photo"}
 
 	result := provider.GetSuggestions(lines, 0, 6)
@@ -262,7 +262,7 @@ func TestCombinedAutocompleteProvider_UnicodeCharacter(t *testing.T) {
 		"file.txt": "content",
 	})
 
-	provider := autocomplete.NewCombinedAutocompleteProvider([]interface{}{}, tempDir)
+	provider := autocomplete.NewCombinedAutocompleteProvider([]any{}, tempDir)
 
 	// "•" is a 3-byte UTF-8 character (U+2022)
 	// Test with Unicode character followed by space before @

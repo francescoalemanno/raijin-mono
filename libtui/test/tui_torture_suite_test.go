@@ -179,10 +179,10 @@ func TestTUI_Torture_VirtualTerminal_RenderConvergence(t *testing.T) {
 
 	rng := rand.New(rand.NewSource(42))
 
-	for i := 0; i < 180; i++ {
+	for i := range 180 {
 		n := 1 + rng.Intn(8)
 		next := make([]string, 0, n)
-		for r := 0; r < n; r++ {
+		for r := range n {
 			base := fmt.Sprintf("r%03d-c%02d", i, r)
 			padding := strings.Repeat("x", rng.Intn(18))
 			line := base + padding

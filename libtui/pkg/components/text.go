@@ -84,10 +84,7 @@ func (t *Text) Render(width int) []string {
 	// Calculate content width (subtract left/right margins)
 	maxPadding := max(0, (width-1)/2)
 	effectivePaddingX := min(t.paddingX, maxPadding)
-	contentWidth := width - effectivePaddingX*2
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
+	contentWidth := max(width-effectivePaddingX*2, 1)
 
 	// Wrap text (this preserves ANSI codes but does NOT pad)
 	wrappedLines := utils.WrapTextWithAnsi(normalizedText, contentWidth)
@@ -116,10 +113,7 @@ func (t *Text) Render(width int) []string {
 		} else {
 			// No background - just pad to width with spaces
 			visibleLen := utils.VisibleWidth(lineWithMargins)
-			paddingNeeded := width - visibleLen
-			if paddingNeeded < 0 {
-				paddingNeeded = 0
-			}
+			paddingNeeded := max(width-visibleLen, 0)
 			padding := strings.Repeat(" ", paddingNeeded)
 			if t.fgColorFn != nil {
 				padding = t.fgColorFn(padding)

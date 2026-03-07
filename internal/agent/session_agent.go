@@ -150,10 +150,7 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 		effectiveMaxOut = libagent.DefaultMaxTokens
 	}
 	if contextWindow > 0 && effectiveMaxOut >= contextWindow {
-		effectiveMaxOut = contextWindow / 2
-		if effectiveMaxOut < 1 {
-			effectiveMaxOut = 1
-		}
+		effectiveMaxOut = max(contextWindow/2, 1)
 	}
 
 	// Prepare the user prompt message for the agent.
@@ -531,35 +528,36 @@ func NewSessionAgentFromConfig(runtimeModel libagent.RuntimeModel, msgService li
 // BuildSystemPrompt constructs the system prompt with skills, tools,
 // AGENTS.md content, and environment info using plain string concatenation.
 func BuildSystemPrompt() string {
-	sp := `<identity>
+	var sp strings.Builder
+	sp.WriteString(`<identity>
 You are an expert coding agent, operating inside Raijin a coding-agent harness.
-</identity>`
+</identity>`)
 
 	// Append available skills.
 	allSkills := skills.GetSkills()
 	if len(allSkills) > 0 {
-		sp += "\n\n<skills>\n"
-		sp += "- Load a skill via the \"read\" tool when the user's request matches one listed above.\n"
-		sp += "- The user is requesting skill loading when either $skillname syntax is used or there is wording that closely matches a skill name or purpose.\n"
+		sp.WriteString("\n\n<skills>\n")
+		sp.WriteString("- Load a skill via the \"read\" tool when the user's request matches one listed above.\n")
+		sp.WriteString("- The user is requesting skill loading when either $skillname syntax is used or there is wording that closely matches a skill name or purpose.\n")
 		for _, s := range allSkills {
-			sp += "  <skill name=\"" + s.Name + "\" path=\"" + s.FilePath + "\">" + s.PromptDescription() + "</skill>\n"
+			sp.WriteString("  <skill name=\"" + s.Name + "\" path=\"" + s.FilePath + "\">" + s.PromptDescription() + "</skill>\n")
 		}
-		sp += "</skills>"
+		sp.WriteString("</skills>")
 	}
 
 	// Append available tools.
 	allTools := tools.RegisterDefaultTools(tools.NewPathRegistry())
 	if len(allTools) > 0 {
-		sp += "\n\n<tools>\nThe following tools are at your disposal\n"
+		sp.WriteString("\n\n<tools>\nThe following tools are at your disposal\n")
 		for _, t := range allTools {
-			sp += renderToolForSystemPrompt(t.Info())
+			sp.WriteString(renderToolForSystemPrompt(t.Info()))
 		}
-		sp += "</tools>"
-		sp += buildToolPreferencesSection(allTools)
+		sp.WriteString("</tools>")
+		sp.WriteString(buildToolPreferencesSection(allTools))
 
 		// Append subprocess pattern guidance only if bash tool is available and we're not already in a subprocess.
 		if hasTool(allTools, "bash") && os.Getenv("RAIJIN_ENV") != "true" {
-			sp += `
+			sp.WriteString(`
 <subprocess>
 The $RAIJIN_BINARY environment variable is set to the path of the raijin executable. 
 When the user prefixes their request with 'subprocess:', they want the query executed in a sub-process.
@@ -570,7 +568,7 @@ Invoke: $RAIJIN_BINARY -p "<enhanced self-contained query>"
 Example: User asks "subprocess: How would you optimize this function?" → 
 You invoke $RAIJIN_BINARY -p "How would you optimize the processData function in internal/processor.go lines 45-62?"
 </subprocess>
-`
+`)
 		}
 	}
 
@@ -581,7 +579,7 @@ You invoke $RAIJIN_BINARY -p "How would you optimize the processData function in
 		if !SameDir(file.Dir, cwd) {
 			header = fmt.Sprintf("Note: this AGENTS.md was loaded from %q. Any relative paths in it are relative to that directory, not the current working directory.\n\n", file.Dir)
 		}
-		sp += "\n\n<memory>\n" + header + file.Content + "\n</memory>"
+		sp.WriteString("\n\n<memory>\n" + header + file.Content + "\n</memory>")
 	}
 
 	// Append environment section.
@@ -593,13 +591,13 @@ You invoke $RAIJIN_BINARY -p "How would you optimize the processData function in
 	if _, err := os.Stat(filepath.Join(cwd, ".git")); err == nil {
 		gitStatus = "yes"
 	}
-	sp += "\n\n<env>\nWorking directory: " + cwd +
+	sp.WriteString("\n\n<env>\nWorking directory: " + cwd +
 		"\nPlatform: " + runtime.GOOS + " (" + runtime.GOARCH + ")" +
 		"\nToday's date: " + time.Now().Format("2006-01-02") +
 		"\nIs git repo: " + gitStatus +
-		"\n</env>"
+		"\n</env>")
 
-	return sp
+	return sp.String()
 }
 
 func renderToolForSystemPrompt(info libagent.ToolInfo) string {
@@ -669,12 +667,13 @@ func buildToolPreferencesSection(allTools []libagent.Tool) string {
 	if len(preferences) == 0 {
 		return ""
 	}
-	sp := "\n\n<tool-preferences>\n"
+	var sp strings.Builder
+	sp.WriteString("\n\n<tool-preferences>\n")
 	for _, pref := range preferences {
-		sp += "- " + pref + "\n"
+		sp.WriteString("- " + pref + "\n")
 	}
-	sp += "</tool-preferences>"
-	return sp
+	sp.WriteString("</tool-preferences>")
+	return sp.String()
 }
 
 func toolPreferenceFor(name string) string {

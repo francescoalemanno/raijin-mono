@@ -230,12 +230,12 @@ func TestEditor_HistoryLimitsTo100(t *testing.T) {
 	editor := components.NewEditor(mockTUI, defaultEditorTheme())
 
 	// Add 102 entries
-	for i := 0; i < 102; i++ {
+	for i := range 102 {
 		editor.AddToHistory(string(rune('a' + i%26)))
 	}
 
 	// Go to oldest - should be at index 101 (not 0)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		editor.HandleInput("\x1b[A")
 	}
 

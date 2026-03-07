@@ -37,13 +37,7 @@ func (g *renderGate) interval(totalBytes int) int {
 	if totalBytes <= 0 {
 		return g.minBytes
 	}
-	interval := totalBytes / g.divisor
-	if interval < g.minBytes {
-		interval = g.minBytes
-	}
-	if interval > g.maxBytes {
-		interval = g.maxBytes
-	}
+	interval := min(max(totalBytes/g.divisor, g.minBytes), g.maxBytes)
 	return interval
 }
 

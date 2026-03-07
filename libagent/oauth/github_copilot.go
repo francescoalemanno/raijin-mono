@@ -58,7 +58,7 @@ func parseURL(raw string) (string, error) {
 func GetGitHubCopilotBaseURL(token, enterpriseDomain string) string {
 	if token != "" {
 		// Token format: tid=...;exp=...;proxy-ep=proxy.individual.githubcopilot.com;...
-		for _, part := range strings.Split(token, ";") {
+		for part := range strings.SplitSeq(token, ";") {
 			kv := strings.SplitN(part, "=", 2)
 			if len(kv) == 2 && kv[0] == "proxy-ep" {
 				apiHost := strings.Replace(kv[1], "proxy.", "api.", 1)

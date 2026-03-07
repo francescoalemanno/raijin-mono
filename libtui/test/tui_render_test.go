@@ -48,7 +48,7 @@ func TestContainer_SequentialMutationAndRender_NoPanic(t *testing.T) {
 	container := &tui.Container{}
 
 	assert.NotPanics(t, func() {
-		for i := 0; i < 3000; i++ {
+		for i := range 3000 {
 			text := components.NewText(fmt.Sprintf("item-%d", i), 0, 0, nil)
 			container.AddChild(text)
 

@@ -45,10 +45,7 @@ func (b *infoBar) Render(width int) []string {
 
 	leftW := utils.VisibleWidth(left)
 	rightW := utils.VisibleWidth(right)
-	gap := width - leftW - rightW
-	if gap < 1 {
-		gap = 1
-	}
+	gap := max(width-leftW-rightW, 1)
 	// Theme the gap spaces with foreground color
 	gapSpaces := theme.Default.Foreground.Ansi24(strings.Repeat(" ", gap))
 	line := left + gapSpaces + right

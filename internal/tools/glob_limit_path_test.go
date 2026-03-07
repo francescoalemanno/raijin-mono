@@ -39,7 +39,7 @@ func TestGlobToolLimitAndAtPathExpansion(t *testing.T) {
 	}
 
 	now := time.Now()
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		name := fmt.Sprintf("f%02d.go", i)
 		p := filepath.Join(sub, name)
 		if err := os.WriteFile(p, []byte("package p\n"), 0o644); err != nil {

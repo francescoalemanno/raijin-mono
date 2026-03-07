@@ -124,10 +124,7 @@ func generateDiffString(oldContent string, newContent string, contextLines int) 
 	output := make([]string, 0)
 	oldLines := strings.Split(oldContent, "\n")
 	newLines := strings.Split(newContent, "\n")
-	maxLineNum := len(oldLines)
-	if len(newLines) > maxLineNum {
-		maxLineNum = len(newLines)
-	}
+	maxLineNum := max(len(newLines), len(oldLines))
 	lineNumWidth := len(strconv.Itoa(maxLineNum))
 
 	oldLineNum := 1

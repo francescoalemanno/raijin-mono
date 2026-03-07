@@ -389,8 +389,8 @@ func knownCatalogItems() []catalogItem {
 
 func resolveCatalogProviderAPIKey(providerID, raw string) string {
 	trimmed := strings.TrimSpace(raw)
-	if strings.HasPrefix(trimmed, "$") {
-		envVar := strings.TrimPrefix(trimmed, "$")
+	if after, ok := strings.CutPrefix(trimmed, "$"); ok {
+		envVar := after
 		if envVar != "" {
 			if value := strings.TrimSpace(os.Getenv(envVar)); value != "" {
 				return value

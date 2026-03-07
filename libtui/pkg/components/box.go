@@ -88,10 +88,7 @@ func (b *Box) Render(width int) []string {
 
 	maxPadding := max(0, (width-1)/2)
 	effectivePaddingX := min(b.paddingX, maxPadding)
-	contentWidth := width - effectivePaddingX*2
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
+	contentWidth := max(width-effectivePaddingX*2, 1)
 	leftPad := strings.Repeat(" ", effectivePaddingX)
 
 	// Render all children
@@ -178,10 +175,7 @@ func (b *Box) applyBg(line string, width int) string {
 		line = utils.TruncateToWidth(line, width, "")
 		visLen = width
 	}
-	padNeeded := width - visLen
-	if padNeeded < 0 {
-		padNeeded = 0
-	}
+	padNeeded := max(width-visLen, 0)
 	padded := line + strings.Repeat(" ", padNeeded)
 
 	if b.bgFn != nil {

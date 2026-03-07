@@ -222,7 +222,7 @@ func antigravityDiscoverProject(ctx context.Context, accessToken string, onProgr
 
 		if resp.StatusCode == http.StatusOK {
 			var payload struct {
-				CloudaicompanionProject interface{} `json:"cloudaicompanionProject"`
+				CloudaicompanionProject any `json:"cloudaicompanionProject"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil {
 				resp.Body.Close()
@@ -231,7 +231,7 @@ func antigravityDiscoverProject(ctx context.Context, accessToken string, onProgr
 					if v != "" {
 						return v
 					}
-				case map[string]interface{}:
+				case map[string]any:
 					if id, ok := v["id"].(string); ok && id != "" {
 						return id
 					}

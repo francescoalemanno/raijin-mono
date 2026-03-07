@@ -580,11 +580,11 @@ func (t *TUI) extractCursorPosition(lines []string, height int) (row, col int, f
 	viewportTop := max(0, len(lines)-height)
 	for row := len(lines) - 1; row >= viewportTop; row-- {
 		line := lines[row]
-		markerIndex := strings.Index(line, CURSOR_MARKER)
-		if markerIndex != -1 {
-			beforeMarker := line[:markerIndex]
+		before, after, ok := strings.Cut(line, CURSOR_MARKER)
+		if ok {
+			beforeMarker := before
 			col = utils.VisibleWidth(beforeMarker)
-			lines[row] = line[:markerIndex] + line[markerIndex+len(CURSOR_MARKER):]
+			lines[row] = before + after
 			return row, col, true
 		}
 	}
@@ -730,7 +730,7 @@ func (t *TUI) doRender() {
 	// Find changed lines
 	firstChanged, lastChanged := -1, -1
 	maxLines := max(len(newLines), len(t.previousLines))
-	for i := 0; i < maxLines; i++ {
+	for i := range maxLines {
 		oldLine := ""
 		if i < len(t.previousLines) {
 			oldLine = t.previousLines[i]
@@ -790,7 +790,7 @@ func (t *TUI) doRender() {
 			if extraLines > 0 {
 				buffer.WriteString("\x1b[1B")
 			}
-			for i := 0; i < extraLines; i++ {
+			for i := range extraLines {
 				buffer.WriteString("\r\x1b[2K")
 				if i < extraLines-1 {
 					buffer.WriteString("\x1b[1B")

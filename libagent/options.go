@@ -3,6 +3,7 @@ package libagent
 import (
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"strings"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -313,9 +314,7 @@ func mergeRawOptions(layers ...map[string]any) map[string]any {
 		if err := json.Unmarshal(data, &decoded); err != nil {
 			continue
 		}
-		for k, v := range decoded {
-			result[k] = v
-		}
+		maps.Copy(result, decoded)
 	}
 	return result
 }

@@ -14,7 +14,7 @@ import (
 
 func (app *ChatApp) setupAutocompleteProvider() {
 	// Build slash commands from built-in command help.
-	var autoItems []interface{}
+	var autoItems []any
 	reserved := builtinSlashCommands()
 	for _, cmd := range commandNamesDescs {
 		autoItems = append(autoItems, autocomplete.AutocompleteItem{

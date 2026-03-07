@@ -29,8 +29,8 @@ func normalizeUnicodeSpaces(path string) string {
 }
 
 func normalizeAtPrefix(path string) string {
-	if strings.HasPrefix(path, "@") {
-		return strings.TrimPrefix(path, "@")
+	if after, ok := strings.CutPrefix(path, "@"); ok {
+		return after
 	}
 	return path
 }

@@ -1222,10 +1222,7 @@ func (app *ChatApp) applyModelAdd(result ModelAddResult) {
 		maxTokens = libagent.DefaultMaxTokens
 	}
 	if result.ContextWindow > 0 && maxTokens >= result.ContextWindow {
-		maxTokens = result.ContextWindow / 2
-		if maxTokens < 1 {
-			maxTokens = 1
-		}
+		maxTokens = max(result.ContextWindow/2, 1)
 	}
 
 	thinkingLevel := libagent.ThinkingLevelMedium
@@ -1271,8 +1268,8 @@ func rebuildRuntimeModel(cfg libagent.ModelConfig) (libagent.RuntimeModel, error
 	cfg = cfg.Normalize()
 	cat := libagent.DefaultCatalog()
 	apiKey := cfg.APIKey
-	if strings.HasPrefix(apiKey, "$") {
-		apiKey = os.Getenv(strings.TrimPrefix(apiKey, "$"))
+	if after, ok := strings.CutPrefix(apiKey, "$"); ok {
+		apiKey = os.Getenv(after)
 	}
 	model, err := cat.NewModel(context.Background(), cfg.Provider, cfg.Model, apiKey)
 	if err != nil {

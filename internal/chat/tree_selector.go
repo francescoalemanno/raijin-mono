@@ -120,7 +120,7 @@ func (m *TreeSelectorComponent) renderLine(entry persist.TreeEntry, selected boo
 		connectorPos = entry.Depth - 1
 	}
 
-	for i := 0; i < totalChars; i++ {
+	for i := range totalChars {
 		level := i / 3
 		pos := i % 3
 

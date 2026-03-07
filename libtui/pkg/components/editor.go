@@ -265,10 +265,7 @@ func NewEditor(tui UILike, theme EditorTheme, options ...EditorOptions) *Editor 
 		opts = options[0]
 	}
 
-	paddingX := opts.PaddingX
-	if paddingX < 0 {
-		paddingX = 0
-	}
+	paddingX := max(opts.PaddingX, 0)
 
 	maxVisible := opts.AutocompleteMaxVisible
 	if maxVisible < 3 {
@@ -566,10 +563,7 @@ func (e *Editor) insertCharacter(char string, skipUndoCoalescing ...bool) {
 		} else if char == "@" {
 			line := e.lines[e.cursorLine]
 			r := []rune(line)
-			col := e.cursorCol
-			if col > len(r) {
-				col = len(r)
-			}
+			col := min(e.cursorCol, len(r))
 			textBeforeCursor := string(r[:col])
 			charBeforeAt := ""
 			if len(textBeforeCursor) >= 2 {
@@ -581,10 +575,7 @@ func (e *Editor) insertCharacter(char string, skipUndoCoalescing ...bool) {
 		} else if char == "$" {
 			line := e.lines[e.cursorLine]
 			r := []rune(line)
-			col := e.cursorCol
-			if col > len(r) {
-				col = len(r)
-			}
+			col := min(e.cursorCol, len(r))
 			textBeforeCursor := string(r[:col])
 			charBeforeDollar := ""
 			if len(textBeforeCursor) >= 2 {
@@ -596,10 +587,7 @@ func (e *Editor) insertCharacter(char string, skipUndoCoalescing ...bool) {
 		} else if regexp.MustCompile(`[a-zA-Z0-9.\-_/]`).MatchString(char) {
 			line := e.lines[e.cursorLine]
 			r := []rune(line)
-			col := e.cursorCol
-			if col > len(r) {
-				col = len(r)
-			}
+			col := min(e.cursorCol, len(r))
 			textBeforeCursor := string(r[:col])
 			if e.isInSlashCommandContext(textBeforeCursor) {
 				e.tryTriggerAutocomplete(false)
@@ -1536,10 +1524,7 @@ func (e *Editor) isAtStartOfMessage() bool {
 	}
 	line := e.lines[e.cursorLine]
 	runes := []rune(line)
-	col := e.cursorCol
-	if col > len(runes) {
-		col = len(runes)
-	}
+	col := min(e.cursorCol, len(runes))
 	beforeCursor := strings.TrimSpace(string(runes[:col]))
 	return beforeCursor == "" || beforeCursor == "/"
 }
@@ -1648,10 +1633,7 @@ func (e *Editor) handleTabCompletion() {
 	}
 	line := e.lines[e.cursorLine]
 	runes := []rune(line)
-	col := e.cursorCol
-	if col > len(runes) {
-		col = len(runes)
-	}
+	col := min(e.cursorCol, len(runes))
 	beforeCursor := string(runes[:col])
 	if e.isInSlashCommandContext(beforeCursor) && !strings.Contains(strings.TrimLeft(beforeCursor, " \t"), " ") {
 		e.tryTriggerAutocomplete(true)
@@ -1884,10 +1866,7 @@ func (e *Editor) applyAutocomplete() {
 func (e *Editor) retriggerAutocompleteIfNeeded() {
 	line := e.lines[e.cursorLine]
 	runes := []rune(line)
-	col := e.cursorCol
-	if col > len(runes) {
-		col = len(runes)
-	}
+	col := min(e.cursorCol, len(runes))
 	textBeforeCursor := string(runes[:col])
 	if e.isInSlashCommandContext(textBeforeCursor) {
 		e.tryTriggerAutocomplete(false)
@@ -1979,10 +1958,7 @@ func (e *Editor) Render(width int) []string {
 	}
 
 	// Get visible lines
-	endOffset := e.scrollOffset + visibleHeight
-	if endOffset > len(layoutLines) {
-		endOffset = len(layoutLines)
-	}
+	endOffset := min(e.scrollOffset+visibleHeight, len(layoutLines))
 	visibleLines := layoutLines[e.scrollOffset:endOffset]
 
 	// Build result
@@ -1992,10 +1968,7 @@ func (e *Editor) Render(width int) []string {
 	horizontal := strings.Repeat("─", width)
 	if e.scrollOffset > 0 {
 		indicator := fmt.Sprintf("─── ↑ %d more ", e.scrollOffset)
-		remaining := width - utils.VisibleWidth(indicator)
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining := max(width-utils.VisibleWidth(indicator), 0)
 		result = append(result, truncLine(e.borderColor(indicator+strings.Repeat("─", remaining))))
 	} else {
 		result = append(result, e.borderColor(horizontal))
@@ -2079,10 +2052,7 @@ func (e *Editor) Render(width int) []string {
 	linesBelow := len(layoutLines) - (e.scrollOffset + len(visibleLines))
 	if linesBelow > 0 {
 		indicator := fmt.Sprintf("─── ↓ %d more ", linesBelow)
-		remaining := width - utils.VisibleWidth(indicator)
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining := max(width-utils.VisibleWidth(indicator), 0)
 		result = append(result, truncLine(e.borderColor(indicator+strings.Repeat("─", remaining))))
 	} else {
 		result = append(result, e.borderColor(horizontal))
@@ -2119,10 +2089,7 @@ func (e *Editor) buildLayoutLines(contentWidth int) []LayoutLine {
 				hasCursor := cursorByteOffset >= chunk.StartIndex && cursorByteOffset <= chunk.EndIndex
 				cursorPos := 0
 				if hasCursor {
-					cursorPos = cursorByteOffset - chunk.StartIndex
-					if cursorPos > len(chunk.Text) {
-						cursorPos = len(chunk.Text)
-					}
+					cursorPos = min(cursorByteOffset-chunk.StartIndex, len(chunk.Text))
 				}
 				lines = append(lines, LayoutLine{
 					Text:        chunk.Text,

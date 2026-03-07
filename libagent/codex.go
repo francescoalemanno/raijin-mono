@@ -2,6 +2,7 @@ package libagent
 
 import (
 	"context"
+	"maps"
 	"strings"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -132,12 +133,8 @@ func codexInjectOptions(call fantasy.Call) fantasy.Call {
 
 	// Merge with any caller-supplied options; caller values take precedence.
 	merged := make(fantasy.ProviderOptions)
-	for k, v := range opts {
-		merged[k] = v
-	}
-	for k, v := range call.ProviderOptions {
-		merged[k] = v
-	}
+	maps.Copy(merged, opts)
+	maps.Copy(merged, call.ProviderOptions)
 	call.ProviderOptions = merged
 	return call
 }
