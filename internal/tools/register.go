@@ -14,7 +14,6 @@ func RegisterDefaultTools(paths *PathRegistry) []libagent.Tool {
 		NewEditTool(),
 		NewWriteTool(),
 		NewBashTool(paths),
-		NewWebFetchTool(),
 	}
 
 	plugins := LoadPluginTools()

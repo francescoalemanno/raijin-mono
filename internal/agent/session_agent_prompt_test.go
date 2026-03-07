@@ -18,8 +18,8 @@ func TestBuildSystemPrompt_IncludesToolPreferencesSection(t *testing.T) {
 	if !strings.Contains(got, "Use the read tool instead of shelling out with cat/sed/head/tail/ls") {
 		t.Fatalf("system prompt missing read preference")
 	}
-	if !strings.Contains(got, "Use the webfetch tool instead of curl/wget in bash") {
-		t.Fatalf("system prompt missing webfetch preference")
+	if !strings.Contains(got, "Use the bash tool only when needed for commands that have no dedicated built-in tool equivalent") {
+		t.Fatalf("system prompt missing bash preference")
 	}
 }
 

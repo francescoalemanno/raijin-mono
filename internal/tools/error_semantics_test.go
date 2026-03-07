@@ -58,24 +58,3 @@ func TestReadToolMissingFileIsError(t *testing.T) {
 		t.Fatalf("expected error response")
 	}
 }
-
-func TestWebFetchToolValidatesURL(t *testing.T) {
-	t.Parallel()
-
-	tool := NewWebFetchTool()
-	resp, err := tool.Run(context.Background(), libagent.ToolCall{Input: `{}`})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !resp.IsError {
-		t.Fatalf("expected error response for empty URL")
-	}
-
-	resp, err = tool.Run(context.Background(), libagent.ToolCall{Input: `{"url":"file:///tmp/a"}`})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !resp.IsError {
-		t.Fatalf("expected error response for file:// URL")
-	}
-}
