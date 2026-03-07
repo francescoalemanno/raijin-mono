@@ -28,7 +28,6 @@ No MCP. No hidden sub-agents. No permission popups.
 | `bash` | Execute shell commands |
 | `grep` | Search file contents |
 | `glob` | Find files by pattern |
-| `webfetch` | Fetch web pages as clean Markdown |
 
 ## What you can do right away
 

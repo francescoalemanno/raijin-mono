@@ -11,7 +11,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-// NewWriteTool creates a write tool.
+// NewWriteTool creates a new tool for writing content to a file.
 func NewWriteTool() libagent.Tool {
 	type writeToolParams struct {
 		Path    string `json:"path" description:"Path to the file to write (relative or absolute)"`
@@ -36,21 +36,21 @@ func NewWriteTool() libagent.Tool {
 		if err := v.WriteFile(params.Path, []byte(params.Content), defaultFilePerm); err != nil {
 			return libagent.NewTextErrorResponse(vfs.DescribeAccessError(params.Path, err)), nil
 		}
-		resp := libagent.NewTextResponse(fmt.Sprintf("Successfully created file %s.", params.Path))
+		resp := libagent.NewTextResponse(fmt.Sprintf("Successfully wrote file %s.", params.Path))
 		return resp, nil
 	}
 
 	renderFunc := func(input json.RawMessage, _ string, _ int) string {
 		var params writeToolParams
 		if err := libagent.ParseJSONInput(input, &params); err != nil {
-			return "create file (failed)"
+			return "write file (failed)"
 		}
 		lines := strings.Count(params.Content, "\n") + 1
 		if params.Content == "" {
 			lines = 0
 		}
 		path := RenderPath(params.Path)
-		header := fmt.Sprintf("create %s (%d lines)", path, lines)
+		header := fmt.Sprintf("wrote %s (%d lines)", path, lines)
 		if params.Content == "" {
 			return header
 		}
@@ -58,7 +58,7 @@ func NewWriteTool() libagent.Tool {
 	}
 
 	return WithRender(
-		libagent.NewParallelTypedTool("write", "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.", handler),
+		libagent.NewParallelTypedTool("write", "Write content to a file. creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.", handler),
 		renderFunc,
 	)
 }
