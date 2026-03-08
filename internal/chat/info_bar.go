@@ -9,22 +9,34 @@ import (
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/utils"
 )
 
-// infoBar renders a single line: left-aligned info + right-aligned model info.
+// infoBar renders a single row made of ordered parts.
+// Parts are spread across the full width; when they don't fit, rightmost parts
+// are dropped until the remaining parts fit.
 type infoBar struct {
-	mu        sync.RWMutex
-	leftInfo  string
-	rightInfo string
+	mu    sync.RWMutex
+	parts []string
 }
 
 func newInfoBar() *infoBar {
 	return &infoBar{}
 }
 
-func (b *infoBar) SetInfo(left, right string) {
+func (b *infoBar) SetParts(parts []string) {
 	b.mu.Lock()
-	b.leftInfo = left
-	b.rightInfo = right
+	b.parts = append([]string(nil), parts...)
 	b.mu.Unlock()
+}
+
+// SetInfo preserves backward compatibility for older callers.
+func (b *infoBar) SetInfo(left, right string) {
+	parts := make([]string, 0, 2)
+	if left != "" {
+		parts = append(parts, left)
+	}
+	if right != "" {
+		parts = append(parts, right)
+	}
+	b.SetParts(parts)
 }
 
 func (b *infoBar) Invalidate() {}
@@ -33,27 +45,73 @@ func (b *infoBar) HandleInput(data string) {}
 
 func (b *infoBar) Render(width int) []string {
 	b.mu.RLock()
-	left, right := b.leftInfo, b.rightInfo
+	parts := append([]string(nil), b.parts...)
 	b.mu.RUnlock()
 
 	if width < 1 {
 		width = 1
 	}
-	if left == "" && right == "" {
+	parts = filterNonEmpty(parts)
+	if len(parts) == 0 {
 		return nil
 	}
 
-	leftW := utils.VisibleWidth(left)
-	rightW := utils.VisibleWidth(right)
-	gap := max(width-leftW-rightW, 1)
-	// Theme the gap spaces with foreground color
-	gapSpaces := theme.Default.Foreground.Ansi24(strings.Repeat(" ", gap))
-	line := left + gapSpaces + right
-	lineWidth := leftW + gap + rightW
-	if lineWidth <= width {
-		return []string{padToWidth(line, width)}
+	for len(parts) > 1 && !partsFit(parts, width) {
+		parts = parts[:len(parts)-1]
 	}
-	return []string{utils.TruncateToWidth(line, width, "")}
+	if len(parts) == 1 {
+		return []string{utils.TruncateToWidthPadded(parts[0], width, "")}
+	}
+
+	total := 0
+	for _, p := range parts {
+		total += utils.VisibleWidth(p)
+	}
+
+	gaps := len(parts) - 1
+	free := width - total
+	if free < gaps {
+		free = gaps
+	}
+	baseGap := free / gaps
+	extra := free % gaps
+
+	var line strings.Builder
+	for i, p := range parts {
+		if i > 0 {
+			gap := baseGap
+			if extra > 0 {
+				gap++
+				extra--
+			}
+			line.WriteString(theme.Default.Foreground.Ansi24(strings.Repeat(" ", gap)))
+		}
+		line.WriteString(p)
+	}
+
+	return []string{padToWidth(line.String(), width)}
+}
+
+func partsFit(parts []string, width int) bool {
+	if len(parts) == 0 {
+		return true
+	}
+	total := 0
+	for _, part := range parts {
+		total += utils.VisibleWidth(part)
+	}
+	return total+(len(parts)-1) <= width
+}
+
+func filterNonEmpty(parts []string) []string {
+	out := parts[:0]
+	for _, p := range parts {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 func padToWidth(line string, width int) string {

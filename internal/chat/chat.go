@@ -256,15 +256,8 @@ func (app *ChatApp) refreshHeader() {
 	// Logo
 	app.logo.SetText(theme.Default.RenderGradient("//////// RAIJIN ////////"))
 
-	// Left side: cwd + context stats + warnings
-	var leftParts []string
-	if app.workingDir != "" {
-		cwd := app.workingDir
-		leftParts = append(leftParts, cwd)
-	}
-
 	// Compute estimated tokens from message content
-	estimatedTokens := int64(2400) // base estimate for the reply; TODO: evaluate base on system prompt and model
+	estimatedTokens := int64(2400)
 	if app.session != nil {
 		if msgs, err := app.session.ListMessages(context.Background()); err == nil {
 			for _, msg := range msgs {
@@ -277,26 +270,37 @@ func (app *ChatApp) refreshHeader() {
 	if contextWindow == 0 {
 		contextWindow = app.runtimeModel.EffectiveContextWindow()
 	}
+
+	// Build parts in priority order: warning, model, ctx%, cwd
+	parts := make([]string, 0, 4)
+
 	if contextWindow > 0 {
 		tokens := max(float64(estimatedTokens), float64(app.totalTokens))
 		pct := float64(tokens) / float64(contextWindow) * 100
-		leftParts = append(leftParts, theme.Default.Muted.Ansi24(fmt.Sprintf("%.1f%%/%s", pct, formatTokenCount(contextWindow))))
+		ctxPart := theme.Default.Muted.Ansi24(fmt.Sprintf("%.1f%%/%s", pct, formatTokenCount(contextWindow)))
+
 		if pct >= 80 {
-			leftParts = append(leftParts, theme.Default.Danger.AnsiBold("LLM about to fail for context exhaustion, run /compact"))
+			parts = append(parts, theme.Default.Danger.AnsiBold("LLM about to fail for context exhaustion, run /compact"))
 		} else if pct >= 45 {
-			leftParts = append(leftParts, theme.Default.Accent.AnsiBold("LLM performance reduced, run /compact"))
+			parts = append(parts, theme.Default.Accent.AnsiBold("LLM performance reduced, run /compact"))
 		}
-	}
-	left := strings.Join(leftParts, "  ")
 
-	// Right side: (provider) model • thinking
-	var right string
-	if app.modelCfg.Provider != "" {
+		if app.modelCfg.Provider != "" {
+			thinking := string(libagent.NormalizeThinkingLevel(app.modelCfg.ThinkingLevel))
+			parts = append(parts, theme.Default.Muted.Ansi24(fmt.Sprintf("(%s) %s • %s", app.modelCfg.Provider, app.modelCfg.Model, thinking)))
+		}
+
+		parts = append(parts, ctxPart)
+	} else if app.modelCfg.Provider != "" {
 		thinking := string(libagent.NormalizeThinkingLevel(app.modelCfg.ThinkingLevel))
-		right = theme.Default.Muted.Ansi24(fmt.Sprintf("(%s) %s • %s", app.modelCfg.Provider, app.modelCfg.Model, thinking))
+		parts = append(parts, theme.Default.Muted.Ansi24(fmt.Sprintf("(%s) %s • %s", app.modelCfg.Provider, app.modelCfg.Model, thinking)))
 	}
 
-	app.header.SetInfo(left, right)
+	if app.workingDir != "" {
+		parts = append(parts, app.workingDir)
+	}
+
+	app.header.SetParts(parts)
 }
 
 func formatTokenCount(tokens int64) string {
