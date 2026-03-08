@@ -51,7 +51,7 @@ func NewSessionSelector(
 	m := &SessionSelectorComponent{
 		searchInput:   components.NewInput(),
 		listContainer: &tui.Container{},
-		hintText:      components.NewText("", 0, 0, nil),
+		hintText:      components.NewText(theme.Default.Muted.Ansi24("Type to filter · ↑/↓ move · ←/→ page · Enter switch · ctrl+x delete · Esc cancel"), 0, 0, nil),
 		titleText:     components.NewText(theme.Default.Accent.Ansi24("SESSIONS"), 0, 0, nil),
 		borderTop:     &borderLine{},
 		borderBottom:  &borderLine{},
@@ -70,6 +70,7 @@ func NewSessionSelector(
 		count:    func() int { return len(m.filtered) },
 		selected: &m.selectedIndex,
 		update:   m.updateList,
+		pageSize: sessionSelectorMaxVisible,
 	}
 
 	m.searchInput.SetOnSubmit(func(_ string) { m.confirmSelection() })
@@ -106,7 +107,7 @@ func (m *SessionSelectorComponent) updateList() {
 	if m.pendingDelete != "" {
 		m.hintText.SetText(theme.Default.Danger.Ansi24("Press ctrl+x again to confirm deletion · Esc to cancel"))
 	} else {
-		m.hintText.SetText(theme.Default.Muted.Ansi24("Type to filter · Enter to switch · ctrl+x delete · Esc to cancel"))
+		m.hintText.SetText(theme.Default.Muted.Ansi24("Type to filter · ↑/↓ move · ←/→ page · Enter switch · ctrl+x delete · Esc cancel"))
 	}
 
 	if len(m.filtered) == 0 {

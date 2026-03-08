@@ -41,7 +41,7 @@ func NewTreeSelector(
 	m := &TreeSelectorComponent{
 		searchInput:   components.NewInput(),
 		listContainer: &tui.Container{},
-		hintText:      components.NewText(theme.Default.Muted.Ansi24("Type to filter · Enter to navigate · Esc to cancel"), 0, 0, nil),
+		hintText:      components.NewText(theme.Default.Muted.Ansi24("Type to filter · ↑/↓ move · ←/→ page · Enter navigate · Esc cancel"), 0, 0, nil),
 		titleText:     components.NewText(theme.Default.Accent.Ansi24("TREE"), 0, 0, nil),
 		borderTop:     &borderLine{},
 		borderBottom:  &borderLine{},
@@ -58,6 +58,7 @@ func NewTreeSelector(
 		count:    func() int { return len(m.filtered) },
 		selected: &m.selectedIndex,
 		update:   m.updateList,
+		pageSize: treeSelectorMaxVisible,
 	}
 
 	m.searchInput.SetOnSubmit(func(_ string) { m.confirmSelection() })

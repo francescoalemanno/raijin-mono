@@ -63,7 +63,7 @@ func NewModelSelector(
 	m := &ModelSelectorComponent{
 		searchInput:   components.NewInput(),
 		listContainer: &tui.Container{},
-		hintText:      components.NewText(theme.Default.Muted.Ansi24("Type to filter · Enter to select · ctrl+x delete · Esc to cancel"), 0, 0, nil),
+		hintText:      components.NewText(theme.Default.Muted.Ansi24("Type to filter · ↑/↓ move · ←/→ page · Enter select · ctrl+x delete · Esc cancel"), 0, 0, nil),
 		titleText:     components.NewText(theme.Default.Accent.Ansi24(title), 0, 0, nil),
 		borderTop:     &borderLine{},
 		borderBottom:  &borderLine{},
@@ -90,6 +90,7 @@ func NewModelSelector(
 		count:    func() int { return len(m.filtered) },
 		selected: &m.selectedIndex,
 		update:   m.updateList,
+		pageSize: modelSelectorMaxVisible,
 	}
 	m.loadModels(store)
 	m.updateList()
@@ -153,7 +154,7 @@ func (m *ModelSelectorComponent) updateList() {
 	if m.pendingDelete != "" {
 		m.hintText.SetText(theme.Default.Danger.Ansi24("Press ctrl+x again to confirm deletion · Esc to cancel"))
 	} else {
-		m.hintText.SetText(theme.Default.Muted.Ansi24("Type to filter · Enter to select · ctrl+x delete · Esc to cancel"))
+		m.hintText.SetText(theme.Default.Muted.Ansi24("Type to filter · ↑/↓ move · ←/→ page · Enter select · ctrl+x delete · Esc cancel"))
 	}
 
 	if len(m.filtered) == 0 {
