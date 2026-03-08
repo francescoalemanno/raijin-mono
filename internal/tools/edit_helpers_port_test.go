@@ -108,10 +108,10 @@ func TestEditHelpers_GenerateDiffString(t *testing.T) {
 	if res.FirstChangedLine == nil || *res.FirstChangedLine != 2 {
 		t.Fatalf("firstChangedLine = %#v, want 2", res.FirstChangedLine)
 	}
-	if !strings.Contains(res.Diff, "-2 two") {
+	if !strings.Contains(res.Diff, "- two") {
 		t.Fatalf("diff missing removed line: %q", res.Diff)
 	}
-	if !strings.Contains(res.Diff, "+2 TWO") {
+	if !strings.Contains(res.Diff, "+ TWO") {
 		t.Fatalf("diff missing added line: %q", res.Diff)
 	}
 }

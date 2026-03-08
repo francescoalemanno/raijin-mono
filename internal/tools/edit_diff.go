@@ -1,8 +1,6 @@
 package tools
 
 import (
-	"fmt"
-	"strconv"
 	"strings"
 	"unicode"
 
@@ -122,11 +120,6 @@ func generateDiffString(oldContent string, newContent string, contextLines int) 
 	diffs = dmp.DiffCharsToLines(diffs, lineArray)
 
 	output := make([]string, 0)
-	oldLines := strings.Split(oldContent, "\n")
-	newLines := strings.Split(newContent, "\n")
-	maxLineNum := max(len(newLines), len(oldLines))
-	lineNumWidth := len(strconv.Itoa(maxLineNum))
-
 	oldLineNum := 1
 	newLineNum := 1
 	lastWasChange := false
@@ -146,12 +139,10 @@ func generateDiffString(oldContent string, newContent string, contextLines int) 
 			}
 			for _, line := range raw {
 				if diff.Type == diffmatchpatch.DiffInsert {
-					lineNum := fmt.Sprintf("%*d", lineNumWidth, newLineNum)
-					output = append(output, fmt.Sprintf("+%s %s", lineNum, line))
+					output = append(output, "+ "+line)
 					newLineNum++
 				} else {
-					lineNum := fmt.Sprintf("%*d", lineNumWidth, oldLineNum)
-					output = append(output, fmt.Sprintf("-%s %s", lineNum, line))
+					output = append(output, "- "+line)
 					oldLineNum++
 				}
 			}
@@ -175,20 +166,19 @@ func generateDiffString(oldContent string, newContent string, contextLines int) 
 			}
 
 			if skipStart > 0 {
-				output = append(output, fmt.Sprintf(" %s ...", strings.Repeat(" ", lineNumWidth)))
+				output = append(output, "  ...")
 				oldLineNum += skipStart
 				newLineNum += skipStart
 			}
 
 			for _, line := range linesToShow {
-				lineNum := fmt.Sprintf("%*d", lineNumWidth, oldLineNum)
-				output = append(output, fmt.Sprintf(" %s %s", lineNum, line))
+				output = append(output, "  "+line)
 				oldLineNum++
 				newLineNum++
 			}
 
 			if skipEnd > 0 {
-				output = append(output, fmt.Sprintf(" %s ...", strings.Repeat(" ", lineNumWidth)))
+				output = append(output, "  ...")
 				oldLineNum += skipEnd
 				newLineNum += skipEnd
 			}

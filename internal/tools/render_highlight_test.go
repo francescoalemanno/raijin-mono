@@ -39,7 +39,7 @@ func TestRenderDiffPreviewHighlightsContextCode(t *testing.T) {
 	var contextLine string
 	for line := range strings.SplitSeq(diff, "\n") {
 		plain := escapePattern.ReplaceAllString(line, "")
-		if strings.Contains(plain, "package") && strings.Contains(plain, "main") && strings.HasPrefix(plain, " 1 ") {
+		if strings.Contains(plain, "package") && strings.Contains(plain, "main") && strings.HasPrefix(plain, "  ") {
 			contextLine = line
 			break
 		}
@@ -67,7 +67,7 @@ func TestRenderDiffPreviewNeutralLinesAreMuted(t *testing.T) {
 	var contextLine string
 	for line := range strings.SplitSeq(diff, "\n") {
 		plain := escapePattern.ReplaceAllString(line, "")
-		if strings.HasPrefix(plain, " 1 ") {
+		if strings.HasPrefix(plain, "  ") {
 			contextLine = line
 			break
 		}

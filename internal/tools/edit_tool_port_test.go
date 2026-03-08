@@ -125,7 +125,7 @@ func TestEditTool_ReplacesTextAndReturnsDiffDetails(t *testing.T) {
 	if details.Diff == "" {
 		t.Fatalf("expected diff to be non-empty")
 	}
-	if !strings.Contains(details.Diff, "+2 Hello, testing!") && !strings.Contains(details.Diff, "testing") {
+	if !strings.Contains(details.Diff, "+ Hello, testing!") && !strings.Contains(details.Diff, "testing") {
 		t.Fatalf("diff does not include replacement text: %q", details.Diff)
 	}
 	if details.FirstChangedLine == nil || *details.FirstChangedLine <= 0 {
