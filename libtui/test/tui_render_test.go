@@ -2,12 +2,15 @@ package test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/components"
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/tui"
+	"github.com/francescoalemanno/raijin-mono/libtui/pkg/utils"
 )
 
 // TestComponent is a simple component for testing.
@@ -67,4 +70,29 @@ func TestContainer_SequentialMutationAndRender_NoPanic(t *testing.T) {
 			_ = container.Render(80)
 		}
 	})
+}
+
+func TestTUI_ClipsRenderedLinesToTerminalWidth(t *testing.T) {
+	term := NewVirtualTerminal(10, 4)
+	ui := tui.NewTUI(term)
+	ui.AddChild(&TestComponent{lines: []string{"01234567890123456789", "short"}})
+	ui.Start()
+	defer ui.Stop()
+
+	assert.Eventually(t, func() bool {
+		return term.GetLine(0) != ""
+	}, time.Second, 10*time.Millisecond)
+
+	viewport := term.GetViewport()
+	if len(viewport) == 0 {
+		t.Fatalf("expected viewport lines")
+	}
+
+	for _, line := range viewport {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		assert.LessOrEqual(t, utils.VisibleWidth(line), 10, "visible width should be clipped to terminal width")
+	}
+	assert.Equal(t, "0123456789", term.GetLine(0))
 }

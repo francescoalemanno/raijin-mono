@@ -591,6 +591,29 @@ func (t *TUI) extractCursorPosition(lines []string, height int) (row, col int, f
 	return 0, 0, false
 }
 
+func sanitizeRenderedLines(lines []string, width int) []string {
+	if width <= 0 || len(lines) == 0 {
+		return lines
+	}
+
+	var clipped []string
+	for i, line := range lines {
+		if utils.VisibleWidth(line) <= width {
+			continue
+		}
+		if clipped == nil {
+			clipped = make([]string, len(lines))
+			copy(clipped, lines)
+		}
+		clipped[i] = utils.SliceByColumn(line, 0, width, true)
+	}
+
+	if clipped != nil {
+		return clipped
+	}
+	return lines
+}
+
 // doRender performs the actual rendering
 func (t *TUI) doRender() {
 	if t.stopped.Load() {
@@ -611,6 +634,7 @@ func (t *TUI) doRender() {
 
 	// Render all components
 	newLines := t.Container.Render(width)
+	newLines = sanitizeRenderedLines(newLines, width)
 
 	// Extract cursor position
 	cursorRow, cursorCol, hasCursor := t.extractCursorPosition(newLines, height)
