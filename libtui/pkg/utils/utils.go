@@ -10,7 +10,7 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-const widthCacheSize = 512
+const widthCacheSize = 8192
 
 // widthCache is a simple FIFO cache for non-ASCII string widths.
 // Protected by widthCacheMu for concurrent access.

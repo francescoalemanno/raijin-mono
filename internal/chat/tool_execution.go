@@ -2,8 +2,11 @@ package chat
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash"
+	"hash/fnv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -39,6 +42,10 @@ type ToolExecutionComponent struct {
 
 	streamingInputBytes int
 	streamingRenderGate *renderGate
+
+	cachedContentHash uint64
+	cachedContent     string
+	hasCachedContent  bool
 }
 
 type toolResult struct {
@@ -116,6 +123,9 @@ func (t *ToolExecutionComponent) UpdateResultWithMedia(output string, isError bo
 
 // SetExpanded controls whether the tool output is fully expanded.
 func (t *ToolExecutionComponent) SetExpanded(expanded bool) {
+	if t.status.IsExpanded() == expanded {
+		return
+	}
 	t.status.SetExpanded(expanded)
 	t.updateContent()
 }
@@ -170,6 +180,11 @@ func (t *ToolExecutionComponent) buildContent() string {
 		args = t.bestArgs()
 	}
 
+	contentHash := t.computeContentHash(args, output, isError)
+	if t.hasCachedContent && contentHash == t.cachedContentHash {
+		return t.cachedContent
+	}
+
 	title, body := t.renderParts(args, output, isError)
 	if t.result != nil && t.result.media != nil && strings.TrimSpace(body) == "" {
 		body = theme.Default.Foreground.Ansi24(fmt.Sprintf("media attached (%s)", t.result.media.MIMEType))
@@ -185,10 +200,15 @@ func (t *ToolExecutionComponent) buildContent() string {
 	}
 	header := icon + theme.Default.Foreground.Ansi24(" ") + theme.Default.ToolTitle.AnsiBold(title)
 
+	content := header
 	if body != "" {
-		return header + "\n" + t.truncateContent(body)
+		content = header + "\n" + t.truncateContent(body)
 	}
-	return header
+
+	t.cachedContentHash = contentHash
+	t.cachedContent = content
+	t.hasCachedContent = true
+	return content
 }
 
 // bestArgs returns the best available args: complete args if present,
@@ -246,6 +266,45 @@ func (t *ToolExecutionComponent) renderParts(args json.RawMessage, output string
 	}
 
 	return title, body
+}
+
+func (t *ToolExecutionComponent) computeContentHash(args json.RawMessage, output string, isError bool) uint64 {
+	h := fnv.New64a()
+	writeHashString(h, t.toolName)
+	writeHashBytes(h, args)
+	writeHashString(h, t.rawInput)
+	writeHashString(h, output)
+	if isError {
+		_, _ = h.Write([]byte{1})
+	} else {
+		_, _ = h.Write([]byte{0})
+	}
+	if t.result != nil && t.result.media != nil {
+		_, _ = h.Write([]byte{1})
+		writeHashString(h, t.result.media.MIMEType)
+	} else {
+		_, _ = h.Write([]byte{0})
+	}
+	if t.status != nil && t.status.IsExpanded() {
+		_, _ = h.Write([]byte{1})
+	} else {
+		_, _ = h.Write([]byte{0})
+	}
+	return h.Sum64()
+}
+
+func writeHashString(h hash.Hash64, s string) {
+	var lenBuf [8]byte
+	binary.LittleEndian.PutUint64(lenBuf[:], uint64(len(s)))
+	_, _ = h.Write(lenBuf[:])
+	_, _ = h.Write([]byte(s))
+}
+
+func writeHashBytes(h hash.Hash64, b []byte) {
+	var lenBuf [8]byte
+	binary.LittleEndian.PutUint64(lenBuf[:], uint64(len(b)))
+	_, _ = h.Write(lenBuf[:])
+	_, _ = h.Write(b)
 }
 
 func compactJSON(raw json.RawMessage, maxRunes int) string {

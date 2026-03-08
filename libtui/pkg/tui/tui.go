@@ -591,13 +591,18 @@ func (t *TUI) extractCursorPosition(lines []string, height int) (row, col int, f
 	return 0, 0, false
 }
 
-func sanitizeRenderedLines(lines []string, width int) []string {
+func sanitizeRenderedLines(lines, previousLines []string, width int, widthUnchanged bool) []string {
 	if width <= 0 || len(lines) == 0 {
 		return lines
 	}
 
 	var clipped []string
 	for i, line := range lines {
+		// If the line is byte-identical to the previous frame and width is unchanged,
+		// it was already sanitized in the prior render; skip expensive width checks.
+		if widthUnchanged && i < len(previousLines) && line == previousLines[i] {
+			continue
+		}
 		if utils.VisibleWidth(line) <= width {
 			continue
 		}
@@ -632,9 +637,13 @@ func (t *TUI) doRender() {
 		return targetScreenRow - currentScreenRow
 	}
 
+	// Width/height changed - need full re-render
+	widthChanged := t.previousWidth != 0 && t.previousWidth != width
+	heightChanged := t.previousHeight != 0 && t.previousHeight != height
+
 	// Render all components
 	newLines := t.Container.Render(width)
-	newLines = sanitizeRenderedLines(newLines, width)
+	newLines = sanitizeRenderedLines(newLines, t.previousLines, width, !widthChanged)
 
 	// Extract cursor position
 	cursorRow, cursorCol, hasCursor := t.extractCursorPosition(newLines, height)
@@ -668,10 +677,6 @@ func (t *TUI) doRender() {
 			}
 		}
 	}
-
-	// Width/height changed - need full re-render
-	widthChanged := t.previousWidth != 0 && t.previousWidth != width
-	heightChanged := t.previousHeight != 0 && t.previousHeight != height
 
 	// Helper for full render
 	fullRender := func(clear bool) {

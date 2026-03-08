@@ -67,6 +67,8 @@ type ProcessTerminal struct {
 	dataChan            chan []byte
 	lastCols            int
 	lastRows            int
+	resizeDebounce      time.Duration
+	resizeTimer         *time.Timer
 }
 
 var (
@@ -97,9 +99,10 @@ func init() {
 func NewProcessTerminal() *ProcessTerminal {
 	writeLogPath := os.Getenv("TAU_TUI_WRITE_LOG")
 	return &ProcessTerminal{
-		writeLogPath: writeLogPath,
-		quitChan:     make(chan struct{}),
-		dataChan:     make(chan []byte, 100),
+		writeLogPath:   writeLogPath,
+		quitChan:       make(chan struct{}),
+		dataChan:       make(chan []byte, 100),
+		resizeDebounce: 8 * time.Millisecond,
 	}
 }
 
@@ -267,6 +270,10 @@ func (pt *ProcessTerminal) Stop() {
 	pt.mu.Lock()
 	kittyActive := pt.kittyProtocolActive
 	pt.kittyProtocolActive = false
+	if pt.resizeTimer != nil {
+		pt.resizeTimer.Stop()
+		pt.resizeTimer = nil
+	}
 	pt.mu.Unlock()
 
 	if kittyActive {
@@ -368,7 +375,7 @@ func (pt *ProcessTerminal) initResizeWatcher() {
 	pt.mu.Unlock()
 
 	go func() {
-		ticker := time.NewTicker(200 * time.Millisecond)
+		ticker := time.NewTicker(8 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
@@ -381,7 +388,7 @@ func (pt *ProcessTerminal) initResizeWatcher() {
 	}()
 }
 
-// checkResize compares current terminal size with last seen size and emits resize callback.
+// checkResize compares current terminal size with last seen size and emits a debounced resize callback.
 func (pt *ProcessTerminal) checkResize() {
 	cols, rows, err := getTerminalSize()
 	if err != nil {
@@ -395,11 +402,29 @@ func (pt *ProcessTerminal) checkResize() {
 		pt.lastRows = rows
 	}
 	handler := pt.resizeHandler
-	pt.mu.Unlock()
-
-	if changed && handler != nil {
-		handler()
+	if !changed || handler == nil {
+		pt.mu.Unlock()
+		return
 	}
+
+	if pt.resizeDebounce <= 0 {
+		pt.mu.Unlock()
+		handler()
+		return
+	}
+
+	if pt.resizeTimer != nil {
+		pt.resizeTimer.Stop()
+	}
+	pt.resizeTimer = time.AfterFunc(pt.resizeDebounce, func() {
+		pt.mu.Lock()
+		h := pt.resizeHandler
+		pt.mu.Unlock()
+		if h != nil {
+			h()
+		}
+	})
+	pt.mu.Unlock()
 }
 
 // readStdin reads from stdin in a separate goroutine

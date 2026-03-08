@@ -24,6 +24,7 @@ type StatusBlock struct {
 
 	state    StatusState
 	expanded bool
+	text     string
 
 	cachedWidth int
 	cachedLines []string
@@ -43,6 +44,10 @@ func NewStatusBlock(ui components.UILike, loaderPrimary, loaderSecondary func(st
 }
 
 func (s *StatusBlock) SetText(text string) {
+	if s.text == text {
+		return
+	}
+	s.text = text
 	s.content.SetText(text)
 	s.invalidateCache()
 }
@@ -50,12 +55,21 @@ func (s *StatusBlock) SetText(text string) {
 // Transition atomically updates both text and state, ensuring no intermediate
 // render can observe a mismatched background/text combination.
 func (s *StatusBlock) Transition(st StatusState, text string) {
-	s.content.SetText(text)
-	if s.state != st {
+	textChanged := s.text != text
+	if textChanged {
+		s.text = text
+		s.content.SetText(text)
+	}
+
+	stateChanged := s.state != st
+	if stateChanged {
 		s.state = st
 		s.applyState()
 	}
-	s.invalidateCache()
+
+	if textChanged || stateChanged {
+		s.invalidateCache()
+	}
 }
 
 func (s *StatusBlock) applyState() {
@@ -78,11 +92,7 @@ func (s *StatusBlock) applyState() {
 func (s *StatusBlock) State() StatusState { return s.state }
 
 func (s *StatusBlock) SetExpanded(expanded bool) {
-	if s.expanded == expanded {
-		return
-	}
 	s.expanded = expanded
-	s.invalidateCache()
 }
 
 func (s *StatusBlock) IsExpanded() bool { return s.expanded }
