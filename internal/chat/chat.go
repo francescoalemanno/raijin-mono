@@ -78,6 +78,7 @@ type ChatApp struct {
 	contextWindow      int64
 	thinkingLevelDirty bool
 	suppressTextEvents bool
+	statusOverride     string
 	activeModalDone    func()
 	activeModalID      uint64
 	nextModalID        uint64
@@ -325,7 +326,11 @@ func renderWorkingDir() string {
 func (app *ChatApp) refreshStatus() {
 	switch app.state {
 	case stateRunning:
-		app.showStatusLoader("Working")
+		message := "Working"
+		if app.statusOverride != "" {
+			message = app.statusOverride
+		}
+		app.showStatusLoader(message)
 	default:
 		app.stopLoader()
 	}
@@ -417,6 +422,7 @@ func (app *ChatApp) resetConversationView(showWelcome bool) {
 	app.replyComponent = nil
 	app.currentThinking = ""
 	app.thinkingComponent = nil
+	app.statusOverride = ""
 	app.activeModalDone = nil
 	app.activeModalID = 0
 	app.totalTokens = 0
@@ -600,6 +606,8 @@ func (app *ChatApp) handleEvent(event libagent.AgentEvent) {
 			app.onToolExecutionStart(event)
 		case libagent.AgentEventTypeMessageEnd:
 			app.onMessageEnd(event)
+		case libagent.AgentEventTypeRetry:
+			app.onRetry(event.RetryMessage)
 		}
 		app.refreshStatus()
 		app.refreshHeader()
@@ -610,6 +618,9 @@ func (app *ChatApp) onMessageUpdate(event libagent.AgentEvent) {
 	delta := event.Delta
 	if delta == nil {
 		return
+	}
+	if app.statusOverride != "" {
+		app.statusOverride = ""
 	}
 	switch delta.Type {
 	case "text_delta":
@@ -698,6 +709,58 @@ func (app *ChatApp) onToolResult(id, output string, isError bool, mediaType, med
 func (app *ChatApp) onStreaming() {
 	app.flushReply()
 	app.state = stateRunning
+	app.statusOverride = ""
+}
+
+func (app *ChatApp) onRetry(message string) {
+	if message == "" {
+		return
+	}
+	app.resetInFlightRender()
+	app.statusOverride = message
+}
+
+func (app *ChatApp) resetInFlightRender() {
+	if app.replyComponent != nil {
+		app.removeHistoryComponent(app.replyComponent, true)
+	}
+	if app.thinkingComponent != nil {
+		app.removeHistoryComponent(app.thinkingComponent, true)
+	}
+	app.replyComponent = nil
+	app.thinkingComponent = nil
+	app.currentReply = ""
+	app.currentThinking = ""
+	for id, comp := range app.pendingTools {
+		app.removeHistoryComponent(comp, true)
+		delete(app.pendingTools, id)
+	}
+}
+
+func (app *ChatApp) removeHistoryComponent(target tui.Component, removeLeadingSpacer bool) {
+	if target == nil {
+		return
+	}
+	idx := -1
+	for i := range app.items {
+		if app.items[i].component == target {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		app.history.RemoveChild(target)
+		return
+	}
+	if removeLeadingSpacer && idx > 0 {
+		if spacer, ok := app.items[idx-1].component.(*components.Spacer); ok {
+			app.history.RemoveChild(spacer)
+			app.items = append(app.items[:idx-1], app.items[idx:]...)
+			idx--
+		}
+	}
+	app.history.RemoveChild(target)
+	app.items = append(app.items[:idx], app.items[idx+1:]...)
 }
 
 // ---------------------------------------------------------------------------

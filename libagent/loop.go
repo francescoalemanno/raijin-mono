@@ -137,8 +137,23 @@ func runLoop(
 			}
 
 			// Stream the assistant response.
-			assistantMsg, plannedCalls, err := streamAssistantResponse(ctx, currentCtx, cfg, eventCh)
-			if err != nil {
+			var (
+				assistantMsg *AssistantMessage
+				plannedCalls []plannedToolCall
+				err          error
+			)
+			for attempt := 0; ; attempt++ {
+				assistantMsg, plannedCalls, err = streamAssistantResponse(ctx, currentCtx, cfg, eventCh)
+				if err == nil {
+					break
+				}
+				var retryErr *retryableStreamError
+				if errors.As(err, &retryErr) && attempt < maxRetries {
+					if waitErr := emitRetryAndWait(ctx, attempt+1, maxRetries, eventCh, retryErr); waitErr != nil {
+						return newMessages, waitErr
+					}
+					continue
+				}
 				return newMessages, err
 			}
 			newMessages = append(newMessages, assistantMsg)
@@ -276,7 +291,7 @@ func streamAssistantResponse(
 		ProviderOptions: cfg.ProviderOptions,
 		MaxOutputTokens: cfg.MaxOutputTokens,
 	}
-	streamResp, err := cfg.Model.Stream(ctx, call)
+	streamResp, err := streamWithRetry(ctx, cfg.Model, call, eventCh)
 	if err != nil {
 		assistantMsg := errorAssistantMessage(err)
 		currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
@@ -291,8 +306,7 @@ func streamAssistantResponse(
 		Timestamp: time.Now(),
 	}
 
-	// Emit message_start with empty message.
-	sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageStart, Message: assistantMsg})
+	messageStarted := false
 
 	// Track active text/tool-input builders.
 	textByID := map[string]string{}
@@ -302,6 +316,13 @@ func streamAssistantResponse(
 	toolInputOrder := make([]string, 0, 4)
 
 	for part := range streamResp {
+		if !messageStarted && part.Type != fantasy.StreamPartTypeWarnings {
+			if part.Type == fantasy.StreamPartTypeError && isRetryableError(part.Error) {
+				return nil, nil, &retryableStreamError{cause: part.Error}
+			}
+			sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageStart, Message: assistantMsg})
+			messageStarted = true
+		}
 		switch part.Type {
 		case fantasy.StreamPartTypeTextStart:
 			textByID[part.ID] = ""
@@ -407,6 +428,9 @@ func streamAssistantResponse(
 			assistantMsg.Usage = part.Usage
 
 		case fantasy.StreamPartTypeError:
+			if isRetryableError(part.Error) {
+				return nil, nil, &retryableStreamError{cause: part.Error}
+			}
 			assistantMsg.FinishReason = fantasy.FinishReasonError
 			assistantMsg.Error = part.Error
 		}
@@ -480,6 +504,10 @@ func streamAssistantResponse(
 	if assistantMsg.FinishReason == fantasy.FinishReasonLength {
 		assistantMsg.FinishReason = fantasy.FinishReasonError
 		assistantMsg.Error = fmt.Errorf("language model response was truncated: output token limit reached")
+	}
+
+	if !messageStarted {
+		sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageStart, Message: assistantMsg})
 	}
 
 	// Append assistant message to context.
@@ -810,6 +838,93 @@ func collectUsedToolCallIDs(messages []Message) map[string]struct{} {
 		}
 	}
 	return used
+}
+
+const (
+	maxRetries = 5
+	baseDelay  = 1 * time.Second
+	maxDelay   = 8 * time.Second
+)
+
+type retryableStreamError struct {
+	cause error
+}
+
+func (e *retryableStreamError) Error() string {
+	if e == nil || e.cause == nil {
+		return "retryable stream error"
+	}
+	return e.cause.Error()
+}
+
+func (e *retryableStreamError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func retryDelay(attempt int) time.Duration {
+	delay := baseDelay * time.Duration(1<<uint(max(attempt-1, 0)))
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	return delay
+}
+
+func emitRetryAndWait(ctx context.Context, attempt, maxAttempts int, eventCh chan<- AgentEvent, err error) error {
+	delay := retryDelay(attempt)
+	prefix := "Connection error"
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		prefix = err.Error()
+	}
+	sendEvent(eventCh, AgentEvent{Type: AgentEventTypeRetry, RetryMessage: fmt.Sprintf("%s: retry %d/%d in %v...", prefix, attempt, maxAttempts, delay)})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(delay):
+		return nil
+	}
+}
+
+// streamWithRetry wraps the model.Stream call with exponential backoff retry logic
+// for transient connection errors.
+func streamWithRetry(ctx context.Context, model fantasy.LanguageModel, call fantasy.Call, eventCh chan<- AgentEvent) (fantasy.StreamResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			if err := emitRetryAndWait(ctx, attempt, maxRetries, eventCh, lastErr); err != nil {
+				return nil, err
+			}
+		}
+
+		streamResp, err := model.Stream(ctx, call)
+		if err == nil {
+			return streamResp, nil
+		}
+
+		lastErr = err
+		if !isRetryableError(err) {
+			return nil, err
+		}
+	}
+
+	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
+}
+
+// isRetryableError returns true for all errors except context cancellation.
+// We retry on all other errors because transient network failures are common
+// and hard to reliably detect across different providers.
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check using errors.Is for standard context errors
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	// Retry everything else including DNS errors like "no such host"
+	return true
 }
 
 // errorAssistantMessage wraps an error into an AssistantMessage with FinishReasonError.

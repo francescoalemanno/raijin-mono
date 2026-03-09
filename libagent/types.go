@@ -176,6 +176,8 @@ const (
 	AgentEventTypeToolExecutionUpdate AgentEventType = "tool_execution_update"
 	// AgentEventTypeToolExecutionEnd is emitted when a tool completes.
 	AgentEventTypeToolExecutionEnd AgentEventType = "tool_execution_end"
+	// AgentEventTypeRetry is emitted when retrying a failed stream due to connection error.
+	AgentEventTypeRetry AgentEventType = "retry"
 )
 
 // StreamDelta describes a single streaming increment from the assistant.
@@ -214,6 +216,9 @@ type AgentEvent struct {
 	ToolArgs    string
 	ToolResult  string
 	ToolIsError bool
+
+	// Retry only: message describing the retry attempt
+	RetryMessage string
 }
 
 // AgentContext carries the complete conversation state passed to the loop.
