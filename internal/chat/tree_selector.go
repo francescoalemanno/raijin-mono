@@ -54,6 +54,14 @@ func NewTreeSelector(
 	m.searchInput.SetPaddingColorFn(theme.Default.Foreground.Ansi24)
 
 	m.filtered = append([]persist.TreeEntry(nil), entries...)
+
+	// Find the leaf entry (most recent currently active) and position cursor there.
+	for i, e := range m.filtered {
+		if e.IsLeaf {
+			m.selectedIndex = i
+			break
+		}
+	}
 	m.nav = listNavigator{
 		count:    func() int { return len(m.filtered) },
 		selected: &m.selectedIndex,
