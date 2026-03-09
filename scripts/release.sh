@@ -4,7 +4,7 @@
 # Usage: ./scripts/release.sh [patch|minor|major] [--dry-run]
 # Default: patch
 
-set -e
+set -euo pipefail
 
 # Colors
 RED='\033[0;31m'
@@ -15,7 +15,6 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 VERSION_FILE="internal/version/VERSION"
-BUILD_DIR="build"
 BUMP_TYPE="${1:-patch}"
 DRY_RUN=false
 
@@ -47,33 +46,23 @@ esac
 # Check prerequisites
 print_header "Checking Prerequisites"
 
-# Check git
 if ! command -v git &> /dev/null; then
     echo -e "${RED}Error: git is not installed${NC}"
     exit 1
 fi
 
-# Check Go
-if ! command -v go &> /dev/null; then
-    echo -e "${RED}Error: Go is not installed${NC}"
-    exit 1
-fi
-
-# Check GitHub CLI
 if ! command -v gh &> /dev/null; then
     echo -e "${RED}Error: GitHub CLI (gh) is not installed${NC}"
     echo "Install from: https://cli.github.com/"
     exit 1
 fi
 
-# Check gh authentication
 if ! gh auth status &> /dev/null; then
     echo -e "${RED}Error: Not authenticated with GitHub CLI${NC}"
     echo "Run: gh auth login"
     exit 1
 fi
 
-# Get repository info
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
 if [ -z "$REPO" ]; then
     echo -e "${RED}Error: Could not determine repository. Ensure you're in a git repository with GitHub remote.${NC}"
@@ -82,18 +71,15 @@ fi
 
 echo -e "${GREEN}Repository: $REPO${NC}"
 echo -e "${GREEN}GitHub CLI: authenticated${NC}"
-echo -e "${GREEN}Go version: $(go version | awk '{print $3}')${NC}"
 
 # Get current version
 print_header "Version Bump"
 
-CURRENT_VERSION=$(cat "$VERSION_FILE" | tr -d '[:space:]')
+CURRENT_VERSION=$(tr -d '[:space:]' < "$VERSION_FILE")
 echo -e "${BLUE}Current version: $CURRENT_VERSION${NC}"
 
-# Parse version components
 IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
 
-# Calculate new version
 case "$BUMP_TYPE" in
     major)
         NEW_MAJOR=$((MAJOR + 1))
@@ -134,7 +120,6 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
     exit 1
 fi
 
-# Dry run mode
 if [ "$DRY_RUN" = true ]; then
     echo ""
     echo -e "${YELLOW}DRY RUN MODE - No changes will be made${NC}"
@@ -142,13 +127,12 @@ if [ "$DRY_RUN" = true ]; then
     echo "  1. Update $VERSION_FILE to $NEW_VERSION"
     echo "  2. Commit: 'chore(release): bump version to $NEW_VERSION'"
     echo "  3. Create tag: $TAG"
-    echo "  4. Build binaries for all platforms"
-    echo "  5. Create GitHub release with release notes"
-    echo "  6. Push commit and tag to origin"
+    echo "  4. Generate improved categorized release notes"
+    echo "  5. Push commit and tag to origin"
+    echo "  6. Create GitHub release (no binary assets uploaded)"
     exit 0
 fi
 
-# Confirm
 read -p "Proceed with release? [y/N] " -n 1 -r
 echo ""
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -171,168 +155,108 @@ echo -e "${GREEN}Created commit: $(git rev-parse --short HEAD)${NC}"
 git tag -a "$TAG" -m "Release $TAG"
 echo -e "${GREEN}Created annotated tag: $TAG${NC}"
 
-# Build binaries
-print_header "Building Binaries"
-
-# Clean previous builds
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-
-# Run build script
-if ! ./build-all.sh; then
-    echo -e "${RED}Build failed!${NC}"
-    echo "You may need to revert the commit and delete the tag:"
-    echo "  git reset --soft HEAD~1"
-    echo "  git tag -d $TAG"
-    exit 1
-fi
-
-# Verify binaries were created
-BINARIES=$(ls -1 "$BUILD_DIR"/raijin-* 2>/dev/null || echo "")
-if [ -z "$BINARIES" ]; then
-    echo -e "${RED}Error: No binaries found in $BUILD_DIR/${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}Built $(echo "$BINARIES" | wc -l | tr -d ' ') binaries${NC}"
-
 # Generate release notes
 print_header "Generating Release Notes"
 
-# Get the previous tag for comparison
 PREVIOUS_TAG=$(git describe --tags --abbrev=0 "$TAG"^ 2>/dev/null || echo "")
 
 if [ -z "$PREVIOUS_TAG" ]; then
-    # First release - show all commits
-    COMMITS=$(git log --pretty=format:"- %s" --no-merges)
+    RANGE="$TAG"
     COMPARE_URL=""
 else
-    # Show commits since last tag
-    COMMITS=$(git log --pretty=format:"- %s" --no-merges "$PREVIOUS_TAG".."$TAG")
+    RANGE="$PREVIOUS_TAG..$TAG"
     COMPARE_URL="https://github.com/$REPO/compare/$PREVIOUS_TAG...$TAG"
 fi
 
-# Group commits by type
-FEATURES=$(echo "$COMMITS" | grep "^- feat" || true)
-FIXES=$(echo "$COMMITS" | grep "^- fix" || true)
-BUILD=$(echo "$COMMITS" | grep "^- build" || true)
-DOCS=$(echo "$COMMITS" | grep "^- docs" || true)
-REFACTOR=$(echo "$COMMITS" | grep "^- refactor" || true)
-PERF=$(echo "$COMMITS" | grep "^- perf" || true)
-TESTS=$(echo "$COMMITS" | grep "^- test" || true)
-CHORE=$(echo "$COMMITS" | grep "^- chore" || true)
-STYLE=$(echo "$COMMITS" | grep "^- style" || true)
-CI=$(echo "$COMMITS" | grep "^- ci" || true)
-OTHER=$(echo "$COMMITS" | grep -v "^- feat\|^- fix\|^- build\|^- docs\|^- refactor\|^- perf\|^- test\|^- chore\|^- style\|^- ci" || true)
-
-# Create release notes
+COMMITS_FILE=$(mktemp)
 RELEASE_NOTES_FILE=$(mktemp)
+
+cleanup() {
+    rm -f "$COMMITS_FILE" "$RELEASE_NOTES_FILE"
+}
+trap cleanup EXIT
+
+git log --pretty=format:'%s' --no-merges $RANGE > "$COMMITS_FILE"
+TOTAL_COMMITS=$(grep -c '.' "$COMMITS_FILE" || true)
+
+# Category filters (conventional commits + aliases)
+BREAKING=$(grep -E '^[[:space:]]*(feat|fix|perf|refactor|build|docs|test|ci|chore|style)(\([^)]+\))?!:' "$COMMITS_FILE" || true)
+FEATURES=$(grep -E '^[[:space:]]*feat(\([^)]+\))?:' "$COMMITS_FILE" || true)
+FIXES=$(grep -E '^[[:space:]]*fix(\([^)]+\))?:' "$COMMITS_FILE" || true)
+PERF=$(grep -E '^[[:space:]]*perf(\([^)]+\))?:' "$COMMITS_FILE" || true)
+REFACTOR=$(grep -E '^[[:space:]]*refactor(\([^)]+\))?:' "$COMMITS_FILE" || true)
+BUILD=$(grep -E '^[[:space:]]*build(\([^)]+\))?:' "$COMMITS_FILE" || true)
+DOCS=$(grep -E '^[[:space:]]*docs(\([^)]+\))?:' "$COMMITS_FILE" || true)
+TESTS=$(grep -E '^[[:space:]]*test(\([^)]+\))?:' "$COMMITS_FILE" || true)
+CI=$(grep -E '^[[:space:]]*ci(\([^)]+\))?:' "$COMMITS_FILE" || true)
+CHORE=$(grep -E '^[[:space:]]*chore(\([^)]+\))?:' "$COMMITS_FILE" || true)
+STYLE=$(grep -E '^[[:space:]]*style(\([^)]+\))?:' "$COMMITS_FILE" || true)
+OTHER=$(grep -Ev '^[[:space:]]*(feat|fix|perf|refactor|build|docs|test|ci|chore|style)(\([^)]+\))?!?:' "$COMMITS_FILE" || true)
+
+format_section() {
+    section_title="$1"
+    section_content="$2"
+
+    if [ -n "$section_content" ]; then
+        echo "### $section_title" >> "$RELEASE_NOTES_FILE"
+        echo "$section_content" | sed -E 's/^[[:space:]]*/- /' >> "$RELEASE_NOTES_FILE"
+        echo "" >> "$RELEASE_NOTES_FILE"
+    fi
+}
+
 {
+    echo "## Release $TAG"
+    echo ""
+    echo "- **Version**: $NEW_VERSION"
+    echo "- **Total commits**: $TOTAL_COMMITS"
+    if [ -n "$PREVIOUS_TAG" ]; then
+        echo "- **From**: $PREVIOUS_TAG"
+    else
+        echo "- **From**: initial release"
+    fi
+    echo ""
     echo "## What's Changed"
     echo ""
+} > "$RELEASE_NOTES_FILE"
 
-    if [ -n "$FEATURES" ]; then
-        echo "### Features"
-        echo "$FEATURES"
+format_section "⚠️ Breaking Changes" "$BREAKING"
+format_section "🚀 Features" "$FEATURES"
+format_section "🐛 Bug Fixes" "$FIXES"
+format_section "⚡ Performance" "$PERF"
+format_section "♻️ Refactoring" "$REFACTOR"
+format_section "🏗️ Build System" "$BUILD"
+format_section "📝 Documentation" "$DOCS"
+format_section "✅ Tests" "$TESTS"
+format_section "🔁 CI/CD" "$CI"
+format_section "🧹 Chores" "$CHORE"
+format_section "🎨 Style" "$STYLE"
+format_section "📦 Other" "$OTHER"
+
+if [ "$TOTAL_COMMITS" -eq 0 ]; then
+    {
+        echo "No changes since previous release."
         echo ""
-    fi
+    } >> "$RELEASE_NOTES_FILE"
+fi
 
-    if [ -n "$FIXES" ]; then
-        echo "### Bug Fixes"
-        echo "$FIXES"
-        echo ""
-    fi
-
-    if [ -n "$PERF" ]; then
-        echo "### Performance Improvements"
-        echo "$PERF"
-        echo ""
-    fi
-
-    if [ -n "$REFACTOR" ]; then
-        echo "### Code Refactoring"
-        echo "$REFACTOR"
-        echo ""
-    fi
-
-    if [ -n "$BUILD" ]; then
-        echo "### Build System"
-        echo "$BUILD"
-        echo ""
-    fi
-
-    if [ -n "$DOCS" ]; then
-        echo "### Documentation"
-        echo "$DOCS"
-        echo ""
-    fi
-
-    if [ -n "$TESTS" ]; then
-        echo "### Tests"
-        echo "$TESTS"
-        echo ""
-    fi
-
-    if [ -n "$CI" ]; then
-        echo "### CI/CD"
-        echo "$CI"
-        echo ""
-    fi
-
-    if [ -n "$CHORE" ]; then
-        echo "### Chores"
-        echo "$CHORE"
-        echo ""
-    fi
-
-    if [ -n "$STYLE" ]; then
-        echo "### Code Style"
-        echo "$STYLE"
-        echo ""
-    fi
-
-    if [ -n "$OTHER" ]; then
-        echo "### Other Changes"
-        echo "$OTHER"
-        echo ""
-    fi
-
-    if [ -z "$COMMITS" ]; then
-        echo "No changes since $PREVIOUS_TAG"
-        echo ""
-    fi
-
-    echo "## Binaries"
+{
+    echo "## Installation"
     echo ""
-    echo "| Platform | Architecture | Binary |"
-    echo "|----------|--------------|--------|"
-    ls -1 "$BUILD_DIR" | grep "^raijin-" | while read -r binary; do
-        case "$binary" in
-            raijin-linux-amd64)     echo "| Linux | amd64 | \`$binary\` |" ;;
-            raijin-linux-arm64)     echo "| Linux | arm64 | \`$binary\` |" ;;
-            raijin-darwin-amd64)    echo "| macOS | amd64 | \`$binary\` |" ;;
-            raijin-darwin-arm64)    echo "| macOS | arm64 | \`$binary\` |" ;;
-            raijin-windows-amd64.exe) echo "| Windows | amd64 | \`$binary\` |" ;;
-            raijin-windows-arm64.exe) echo "| Windows | arm64 | \`$binary\` |" ;;
-        esac
-    done
+    echo "Install using the official installer (builds from source of this release tag):"
     echo ""
-    echo "## Checksums"
-    echo ""
-    echo '```'
-    (cd "$BUILD_DIR" && sha256sum raijin-* 2>/dev/null || shasum -a 256 raijin-* 2>/dev/null || echo "Checksums generated locally")
+    echo '```sh'
+    echo 'curl -fsSL https://raw.githubusercontent.com/francescoalemanno/raijin-mono/main/scripts/install.sh | sh'
     echo '```'
     echo ""
-
     if [ -n "$COMPARE_URL" ]; then
         echo "---"
         echo "**Full Changelog**: $COMPARE_URL"
     fi
-} > "$RELEASE_NOTES_FILE"
+} >> "$RELEASE_NOTES_FILE"
 
 echo -e "${GREEN}Release notes generated${NC}"
 
-# Push commit and tag before creating release
+# Push commit and tag
 print_header "Pushing to Remote"
 
 echo -e "${BLUE}Pushing commit and tag to origin...${NC}"
@@ -341,7 +265,7 @@ git push origin "$TAG"
 
 echo -e "${GREEN}Pushed to origin${NC}"
 
-# Create GitHub release
+# Create GitHub release (without binary upload)
 print_header "Creating GitHub Release"
 
 echo -e "${BLUE}Creating release $TAG...${NC}"
@@ -349,15 +273,10 @@ echo -e "${BLUE}Creating release $TAG...${NC}"
 if ! gh release create "$TAG" \
     --repo "$REPO" \
     --title "$TAG" \
-    --notes-file "$RELEASE_NOTES_FILE" \
-    "$BUILD_DIR"/*; then
+    --notes-file "$RELEASE_NOTES_FILE"; then
     echo -e "${RED}Failed to create GitHub release${NC}"
-    echo "Release notes saved to: $RELEASE_NOTES_FILE"
     exit 1
 fi
-
-# Cleanup temp file
-rm -f "$RELEASE_NOTES_FILE"
 
 echo -e "${GREEN}Created GitHub release: https://github.com/$REPO/releases/tag/$TAG${NC}"
 
@@ -367,6 +286,4 @@ print_header "Release Complete"
 echo -e "${GREEN}Version: $NEW_VERSION${NC}"
 echo -e "${GREEN}Tag: $TAG${NC}"
 echo -e "${GREEN}Release: https://github.com/$REPO/releases/tag/$TAG${NC}"
-echo ""
-echo -e "${CYAN}Binaries uploaded:${NC}"
-ls -lh "$BUILD_DIR"/raijin-* | awk '{printf "  %s (%s)\n", $9, $5}'
+echo -e "${GREEN}Assets uploaded: none${NC}"

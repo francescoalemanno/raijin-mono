@@ -6,14 +6,12 @@ A complete local release workflow that:
 1. Bumps the version number (patch/minor/major)
 2. Commits the version change
 3. Creates an annotated git tag
-4. Builds binaries for all platforms
-5. Generates categorized release notes from commits
-6. Creates a GitHub release with all binaries attached
-7. Pushes commit and tag to origin
+4. Generates improved categorized release notes from commits
+5. Creates a GitHub release (without binary assets)
+6. Pushes commit and tag to origin
 
 ### Prerequisites
 
-- Go 1.24+ installed
 - Git configured with access to push to the repository
 - GitHub CLI (`gh`) installed and authenticated
 - Run from repository root: `./scripts/release.sh`
@@ -36,7 +34,8 @@ A complete local release workflow that:
 
 ### Release Notes Format
 
-The script automatically categorizes commits by conventional commit prefix:
+The script categorizes commits by conventional commit prefix, with a release summary and install instructions:
+- **Breaking Changes** (`type!:`)
 - **Features** (`feat:`)
 - **Bug Fixes** (`fix:`)
 - **Performance** (`perf:`)
@@ -47,17 +46,13 @@ The script automatically categorizes commits by conventional commit prefix:
 - **CI/CD** (`ci:`)
 - **Chores** (`chore:`)
 - **Code Style** (`style:`)
+- **Other** (non-conventional commits)
 
-### What Gets Uploaded
+### Assets
 
-| Platform | Architecture | Binary |
-|----------|--------------|--------|
-| Linux | amd64 | `raijin-linux-amd64` |
-| Linux | arm64 | `raijin-linux-arm64` |
-| macOS | amd64 | `raijin-darwin-amd64` |
-| macOS | arm64 | `raijin-darwin-arm64` |
-| Windows | amd64 | `raijin-windows-amd64.exe` |
-| Windows | arm64 | `raijin-windows-arm64.exe` |
+No binary assets are uploaded to the GitHub release.
+
+Users install via `scripts/install.sh`, which downloads the source for the latest release tag and builds locally with Go.
 
 ### Safety Checks
 
@@ -66,12 +61,3 @@ The script validates:
 - The new tag does not already exist
 - GitHub CLI is installed and authenticated
 - All prerequisites are met before making any changes
-
-### Recovery
-
-If the build fails after commit/tag creation:
-```bash
-# Revert the commit and delete the tag
-git reset --soft HEAD~1
-git tag -d v0.1.1
-```
