@@ -157,12 +157,6 @@ staticcheck ./...
 gofumpt -l -w .
 ```
 
-Cross-platform release builds:
-
-```bash
-./build-all.sh
-```
-
 ## Credits
 
 Special mention to Mario Zechner, creator of Pi. Raijin shares a similar philosophy, and the TUI foundation is ported from his TypeScript work.

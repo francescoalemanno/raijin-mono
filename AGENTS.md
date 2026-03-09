@@ -33,13 +33,6 @@ gofumpt -l -w .
 # Testing Guidelines
 - Write unit tests using standard Go testing with `*_test.go` files
 
-# Build for Release
-Run the provided build script for cross-platform builds:
-```bash
-./build-all.sh
-```
-This script creates binaries for multiple architectures in the `build/` directory.
-
 <AMP-SPECIFIC-INSTRUCTIONS>
 - Do not use subagents.
 - After using oracle, ask for user feedback.
