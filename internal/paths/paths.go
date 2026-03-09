@@ -59,10 +59,10 @@ func UserPluginsDir() string {
 // Relative path constants for use with filepath.Join or RaijinPath.
 const (
 	// Project-relative paths
-	ProjectAgentsDirRel  = ".agents"
-	ProjectSkillsDirRel  = ".agents/skills"
-	ProjectPromptsDirRel = ".agents/prompts"
-	ProjectPluginsDirRel = ".agents/plugins"
+	ProjectAgentsDirRel  = "./.agents"
+	ProjectSkillsDirRel  = "./.agents/skills"
+	ProjectPromptsDirRel = "./.agents/prompts"
+	ProjectPluginsDirRel = "./.agents/plugins"
 
 	// User config subpaths (relative to raijin/)
 	UserSkillsDirRel  = "agents/skills"

@@ -12,12 +12,12 @@ func TestReplaceNamed(t *testing.T) {
 	t.Parallel()
 
 	got := ReplaceNamed(
-		`dirs={{PROJECT_AGENTS_DIR}}/{{PROJECT_SKILLS_DIR}} prompts={{PROJECT_PROMPTS_DIR}}`,
+		`skills={{PROJECT_SKILLS_DIR}} prompts={{PROJECT_PROMPTS_DIR}}`,
 		DefaultNamedValues("demo"),
 		BracesStyle(),
 	)
 
-	want := "dirs=.agents/.agents/skills prompts=.agents/prompts"
+	want := "skills=./.agents/skills prompts=./.agents/prompts"
 	if got != want {
 		t.Fatalf("ReplaceNamed() = %q, want %q", got, want)
 	}
