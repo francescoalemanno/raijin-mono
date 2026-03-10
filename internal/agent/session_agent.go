@@ -555,21 +555,6 @@ You are an expert coding agent, operating inside Raijin a coding-agent harness.
 		sp.WriteString("</tools>")
 		sp.WriteString(buildToolPreferencesSection(allTools))
 
-		// Append subprocess pattern guidance only if bash tool is available and we're not already in a subprocess.
-		if hasTool(allTools, "bash") && os.Getenv("RAIJIN_ENV") != "true" {
-			sp.WriteString(`
-<subprocess>
-The $RAIJIN_BINARY environment variable is set to the path of the raijin executable. 
-When the user prefixes their request with 'subprocess:', they want the query executed in a sub-process.
-The subprocess is STATELESS with no access to session history or files. 
-You MUST enhance the query to be self-contained: include minimal necessary context (file paths, code snippets), 
-avoid pronouns without referents, and make it explicit.
-Invoke: $RAIJIN_BINARY -p "<enhanced self-contained query>"
-Example: User asks "subprocess: How would you optimize this function?" → 
-You invoke $RAIJIN_BINARY -p "How would you optimize the processData function in internal/processor.go lines 45-62?"
-</subprocess>
-`)
-		}
 	}
 
 	// Append AGENTS.md content.
@@ -679,28 +664,18 @@ func buildToolPreferencesSection(allTools []libagent.Tool) string {
 func toolPreferenceFor(name string) string {
 	switch name {
 	case "read":
-		return "Use the read tool instead of shelling out with cat/sed/head/tail/ls for inspecting files and directories."
+		return "Always use the read tool instead of shelling out with cat/sed/head/tail/ls for inspecting files and directories."
 	case "glob":
-		return "Use the glob tool instead of find/ls pipelines when locating files by pattern."
+		return "Always use the glob tool instead of find/ls pipelines when locating files by pattern."
 	case "grep":
-		return "Use the grep tool instead of running grep/ripgrep in bash for content search."
+		return "Always use the grep tool instead of running grep/ripgrep in bash for content search."
 	case "edit":
-		return "Use the edit tool instead of perl/sed/awk/python one-liners for surgical in-place edits."
+		return "Always use the edit tool instead of perl/sed/awk/python one-liners for surgical in-place edits."
 	case "write":
-		return "Use the write tool instead of shell redirection (>, >>, cat <<EOF) when creating or overwriting files."
+		return "Always use the write tool instead of shell redirection (>, >>, cat <<EOF) when creating or overwriting files."
 	case "bash":
-		return "Use the bash tool only when needed for commands that have no dedicated built-in tool equivalent. Never respond to the user via cat or similar shell tools — respond directly."
+		return "Always use the bash tool only when needed for commands that have no dedicated built-in tool equivalent. Never respond to the user via cat or similar shell tools — respond directly."
 	default:
-		return "Use the " + name + " tool instead of using bash or shell scripts as equivalents for that task."
+		return "Always use the " + name + " tool instead of using bash or shell scripts as equivalents for that task."
 	}
-}
-
-// hasTool checks if a tool with the given normalized name exists in the list.
-func hasTool(tools []libagent.Tool, name string) bool {
-	for _, t := range tools {
-		if core.Normalize(t.Info().Name) == name {
-			return true
-		}
-	}
-	return false
 }

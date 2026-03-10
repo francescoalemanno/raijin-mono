@@ -15,10 +15,10 @@ func TestBuildSystemPrompt_IncludesToolPreferencesSection(t *testing.T) {
 	if !strings.Contains(got, "</tool-preferences>") {
 		t.Fatalf("system prompt missing tool-preferences closing tag")
 	}
-	if !strings.Contains(got, "Use the read tool instead of shelling out with cat/sed/head/tail/ls") {
+	if !strings.Contains(got, "Always use the read tool instead of shelling out with cat/sed/head/tail/ls") {
 		t.Fatalf("system prompt missing read preference")
 	}
-	if !strings.Contains(got, "Use the bash tool only when needed for commands that have no dedicated built-in tool equivalent") {
+	if !strings.Contains(got, "Always use the bash tool only when needed for commands that have no dedicated built-in tool equivalent") {
 		t.Fatalf("system prompt missing bash preference")
 	}
 }
@@ -29,7 +29,7 @@ func TestToolPreferenceFor_BuiltinAndPluginDefaults(t *testing.T) {
 	if got := toolPreferenceFor("grep"); !strings.Contains(got, "instead of running grep/ripgrep in bash") {
 		t.Fatalf("grep preference mismatch: %q", got)
 	}
-	if got := toolPreferenceFor("myplugin"); got != "Use the myplugin tool instead of using bash or shell scripts as equivalents for that task." {
+	if got := toolPreferenceFor("myplugin"); got != "Always use the myplugin tool instead of using bash or shell scripts as equivalents for that task." {
 		t.Fatalf("plugin preference mismatch: %q", got)
 	}
 }
