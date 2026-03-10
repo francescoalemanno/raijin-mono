@@ -547,7 +547,7 @@ func TestEditTool_RejectsEmptyOldText(t *testing.T) {
 	if !resp.IsError {
 		t.Fatalf("expected error response")
 	}
-	if !strings.Contains(resp.Content, "oldText and newText cannot be empty") {
+	if !strings.Contains(resp.Content, "oldText cannot be empty") {
 		t.Fatalf("unexpected error content: %q", resp.Content)
 	}
 	if !strings.Contains(resp.Content, "surrounding context") {
@@ -555,7 +555,7 @@ func TestEditTool_RejectsEmptyOldText(t *testing.T) {
 	}
 }
 
-func TestEditTool_RejectsEmptyNewText(t *testing.T) {
+func TestEditTool_AllowsEmptyNewTextForDeletion(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -571,14 +571,11 @@ func TestEditTool_RejectsEmptyNewText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run edit: %v", err)
 	}
-	if !resp.IsError {
-		t.Fatalf("expected error response")
+	if resp.IsError {
+		t.Fatalf("unexpected error response: %s", resp.Content)
 	}
-	if !strings.Contains(resp.Content, "oldText and newText cannot be empty") {
-		t.Fatalf("unexpected error content: %q", resp.Content)
-	}
-	if !strings.Contains(resp.Content, "surrounding context") {
-		t.Fatalf("expected advice about context in error: %q", resp.Content)
+	if got := mustReadFile(t, file); got != "hello \n" {
+		t.Fatalf("file content = %q, want %q", got, "hello \\n")
 	}
 }
 
@@ -601,7 +598,7 @@ func TestEditTool_RejectsWhitespaceOnlyOldText(t *testing.T) {
 	if !resp.IsError {
 		t.Fatalf("expected error response")
 	}
-	if !strings.Contains(resp.Content, "oldText and newText cannot be empty") {
+	if !strings.Contains(resp.Content, "oldText cannot be empty") {
 		t.Fatalf("unexpected error content: %q", resp.Content)
 	}
 	if !strings.Contains(resp.Content, "surrounding context") {
@@ -609,7 +606,7 @@ func TestEditTool_RejectsWhitespaceOnlyOldText(t *testing.T) {
 	}
 }
 
-func TestEditTool_RejectsWhitespaceOnlyNewText(t *testing.T) {
+func TestEditTool_AllowsWhitespaceOnlyNewText(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -625,13 +622,10 @@ func TestEditTool_RejectsWhitespaceOnlyNewText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run edit: %v", err)
 	}
-	if !resp.IsError {
-		t.Fatalf("expected error response")
+	if resp.IsError {
+		t.Fatalf("unexpected error response: %s", resp.Content)
 	}
-	if !strings.Contains(resp.Content, "oldText and newText cannot be empty") {
-		t.Fatalf("unexpected error content: %q", resp.Content)
-	}
-	if !strings.Contains(resp.Content, "surrounding context") {
-		t.Fatalf("expected advice about context in error: %q", resp.Content)
+	if got := mustReadFile(t, file); got != "hello    \n\t  \n" {
+		t.Fatalf("file content = %q, want %q", got, "hello    \\n\\t  \\n")
 	}
 }
