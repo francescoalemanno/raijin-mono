@@ -385,6 +385,14 @@ var zenGeneratedModels = []ModelInfo{
 		DefaultMaxTokens: 131072,
 		CanReason:        true,
 	},
+	{
+		ProviderID:       ZenProviderID,
+		ModelID:          "nemotron-3-super-free",
+		Name:             "Nemotron 3 Super Free",
+		ContextWindow:    1000000,
+		DefaultMaxTokens: 128000,
+		CanReason:        true,
+	},
 }
 
 var zenGoGeneratedModels = []ModelInfo{
