@@ -148,11 +148,20 @@ func runLoop(
 					break
 				}
 				var retryErr *retryableStreamError
-				if errors.As(err, &retryErr) && attempt < maxRetries {
-					if waitErr := emitRetryAndWait(ctx, attempt+1, maxRetries, eventCh, retryErr); waitErr != nil {
-						return newMessages, waitErr
+				if errors.As(err, &retryErr) {
+					if attempt < maxRetries {
+						if waitErr := emitRetryAndWait(ctx, attempt+1, maxRetries, eventCh, retryErr); waitErr != nil {
+							return newMessages, waitErr
+						}
+						continue
 					}
-					continue
+					finalErr := fmt.Errorf("failed after %d retries: %w", maxRetries, retryErr)
+					assistantMsg = errorAssistantMessage(finalErr)
+					currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
+					sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageStart, Message: assistantMsg})
+					sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageEnd, Message: assistantMsg})
+					plannedCalls = nil
+					break
 				}
 				return newMessages, err
 			}
@@ -291,8 +300,11 @@ func streamAssistantResponse(
 		ProviderOptions: cfg.ProviderOptions,
 		MaxOutputTokens: cfg.MaxOutputTokens,
 	}
-	streamResp, err := streamWithRetry(ctx, cfg.Model, call, eventCh)
+	streamResp, err := cfg.Model.Stream(ctx, call)
 	if err != nil {
+		if isRetryableError(err) {
+			return nil, nil, &retryableStreamError{cause: err}
+		}
 		assistantMsg := errorAssistantMessage(err)
 		currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
 		sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageStart, Message: assistantMsg})
@@ -885,31 +897,6 @@ func emitRetryAndWait(ctx context.Context, attempt, maxAttempts int, eventCh cha
 	case <-time.After(delay):
 		return nil
 	}
-}
-
-// streamWithRetry wraps the model.Stream call with exponential backoff retry logic
-// for transient connection errors.
-func streamWithRetry(ctx context.Context, model fantasy.LanguageModel, call fantasy.Call, eventCh chan<- AgentEvent) (fantasy.StreamResponse, error) {
-	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			if err := emitRetryAndWait(ctx, attempt, maxRetries, eventCh, lastErr); err != nil {
-				return nil, err
-			}
-		}
-
-		streamResp, err := model.Stream(ctx, call)
-		if err == nil {
-			return streamResp, nil
-		}
-
-		lastErr = err
-		if !isRetryableError(err) {
-			return nil, err
-		}
-	}
-
-	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
 }
 
 // isRetryableError returns true for all errors except context cancellation.

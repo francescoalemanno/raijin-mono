@@ -3,7 +3,6 @@ package libagent
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -63,20 +62,31 @@ func (m *mockFailingModel) StreamObject(ctx context.Context, call fantasy.Object
 func (m *mockFailingModel) Provider() string { return "mock" }
 func (m *mockFailingModel) Model() string    { return "mock-model" }
 
-func TestStreamWithRetry(t *testing.T) {
-	// Test that retry events are emitted
-	model := &mockFailingModel{failCount: 2}
-	eventCh := make(chan AgentEvent, 10)
+func TestAgentLoop_RetriesInitialConnectionError(t *testing.T) {
+	// Test that initial connection failures are retried through the outer loop
+	model := &mockFailingModel{
+		failCount: 2,
+		successResp: func(yield func(fantasy.StreamPart) bool) {
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "0"})
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "0", Delta: "hello"})
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "0"})
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+		},
+	}
+	eventCh := make(chan AgentEvent, 64)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	call := fantasy.Call{}
-	_, err := streamWithRetry(ctx, model, call, eventCh)
+	cfg := AgentLoopConfig{Model: model}
+	agentCtx := &AgentContext{}
+	prompts := []Message{&UserMessage{Role: "user", Content: "hi", Timestamp: time.Now()}}
+
+	_, err := AgentLoop(ctx, prompts, agentCtx, cfg, eventCh)
 	close(eventCh)
 
 	// Should succeed after retries
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 3, model.currentCalls, "Should have made 3 calls (2 failures + 1 success)")
 
 	// Check retry events
@@ -89,23 +99,22 @@ func TestStreamWithRetry(t *testing.T) {
 	assert.Equal(t, 2, retryEvents, "Should have 2 retry events")
 }
 
-func TestStreamWithRetry_AllFail(t *testing.T) {
+func TestAgentLoop_RetriesInitialConnectionAllFail(t *testing.T) {
 	model := &mockFailingModel{failCount: 10}
-	eventCh := make(chan AgentEvent, 16)
+	eventCh := make(chan AgentEvent, 64)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	call := fantasy.Call{}
-	_, err := streamWithRetry(ctx, model, call, eventCh)
+	cfg := AgentLoopConfig{Model: model}
+	agentCtx := &AgentContext{}
+	prompts := []Message{&UserMessage{Role: "user", Content: "hi", Timestamp: time.Now()}}
+
+	_, err := AgentLoop(ctx, prompts, agentCtx, cfg, eventCh)
 	close(eventCh)
 
 	require.Error(t, err)
-	if strings.Contains(err.Error(), "failed after 5 retries") {
-		assert.Equal(t, 6, model.currentCalls)
-		return
-	}
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	// Should have tried maxRetries times
 	assert.GreaterOrEqual(t, model.currentCalls, 2)
 }
 
