@@ -348,6 +348,14 @@ var zenGeneratedModels = []ModelInfo{
 		CostPer1MInCached: 0.08,
 	},
 	{
+		ProviderID:       ZenProviderID,
+		ModelID:          "mimo-v2-flash-free",
+		Name:             "MiMo V2 Flash Free",
+		ContextWindow:    262144,
+		DefaultMaxTokens: 65536,
+		CanReason:        true,
+	},
+	{
 		ProviderID:        ZenProviderID,
 		ModelID:           "minimax-m2.1",
 		Name:              "MiniMax M2.1",

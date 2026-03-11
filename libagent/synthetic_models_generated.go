@@ -45,11 +45,10 @@ var syntheticGeneratedModels = []ModelInfo{
 		ModelID:          "hf:Qwen/Qwen3.5-397B-A17B",
 		Name:             "Qwen/Qwen3.5-397B-A17B",
 		ContextWindow:    262144,
-		DefaultMaxTokens: 65536,
-		CanReason:        true,
+		DefaultMaxTokens: 16384,
 		SupportsImages:   true,
 		CostPer1MIn:      0.6,
-		CostPer1MOut:     3,
+		CostPer1MOut:     3.6,
 	},
 	{
 		ProviderID:       SyntheticProviderID,
