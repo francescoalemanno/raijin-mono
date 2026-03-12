@@ -35,7 +35,8 @@ func TestCatalog_FindModel_KnownProvider(t *testing.T) {
 		// Custom providers intentionally return a zero catwalk.Provider.
 		if string(p.ID) == libagent.CodexProviderID ||
 			string(p.ID) == libagent.SyntheticProviderID ||
-			string(p.ID) == libagent.ZenProviderID {
+			string(p.ID) == libagent.ZenProviderID ||
+			string(p.ID) == libagent.ZenGoProviderID {
 			assert.Equal(t, catwalk.InferenceProvider(""), prov.ID)
 		} else {
 			assert.Equal(t, p.ID, prov.ID)
