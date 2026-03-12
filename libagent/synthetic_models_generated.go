@@ -128,6 +128,16 @@ var syntheticGeneratedModels = []ModelInfo{
 	},
 	{
 		ProviderID:       SyntheticProviderID,
+		ModelID:          "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
+		Name:             "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
+		ContextWindow:    262144,
+		DefaultMaxTokens: 65536,
+		CanReason:        true,
+		CostPer1MIn:      0.6,
+		CostPer1MOut:     3,
+	},
+	{
+		ProviderID:       SyntheticProviderID,
 		ModelID:          "hf:openai/gpt-oss-120b",
 		Name:             "openai/gpt-oss-120b",
 		ContextWindow:    131072,
