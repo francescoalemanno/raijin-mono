@@ -7,7 +7,6 @@ import (
 	"github.com/francescoalemanno/raijin-mono/libtui/pkg/utils"
 )
 
-
 func TestInfoBar_PriorityOrderWarningModelCtxCwd(t *testing.T) {
 	t.Parallel()
 
