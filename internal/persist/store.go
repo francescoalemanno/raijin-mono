@@ -45,6 +45,7 @@ const (
 	jTypeMsgUpdate  jType = "msg.update" // message updated (streaming)
 	jTypeTitle      jType = "title"      // session title changed
 	jTypeCompaction jType = "compaction" // compaction checkpoint
+	jTypeNavigate   jType = "navigate"   // tree navigation persisted leaf
 )
 
 // jEntry is the NDJSON envelope written to the journal file.
@@ -67,6 +68,9 @@ type jEntry struct {
 	Summary      string `json:"summary,omitempty"`
 	FirstKeptID  string `json:"first_kept_id,omitempty"`
 	TokensBefore int64  `json:"tokens_before,omitempty"`
+
+	// jTypeNavigate
+	LeafID *string `json:"leaf_id,omitempty"`
 }
 
 // jMsg is the serialisable form of a runtime libagent message.
@@ -306,23 +310,47 @@ func (st *Store) AppendCompaction(summary, firstKeptID string, tokensBefore int6
 // For all other node types the leaf is set to target itself.
 func (st *Store) Navigate(targetID string) (editorText string, err error) {
 	st.mu.Lock()
-	defer st.mu.Unlock()
-
 	node, ok := st.nodes[targetID]
 	if !ok {
+		st.mu.Unlock()
 		return "", errors.New("persist: navigate: node not found")
 	}
 
+	leafID := targetID
 	if node.msg != nil {
 		if um, ok := node.msg.(*libagent.UserMessage); ok {
 			editorText = strings.TrimSpace(um.Content)
-			st.leafID = node.parentID
-			return editorText, nil
+			leafID = node.parentID
 		}
 	}
 
-	st.leafID = targetID
-	return "", nil
+	sessionID := st.current
+	if sessionID == "" {
+		st.mu.Unlock()
+		return "", ErrSessionNotFound
+	}
+	if err := st.flushHeaderLocked(sessionID); err != nil {
+		st.mu.Unlock()
+		return "", err
+	}
+	entry := jEntry{
+		Typ:    jTypeNavigate,
+		LeafID: &leafID,
+	}
+	st.mu.Unlock()
+
+	if err := st.appendEntry(sessionID, entry); err != nil {
+		return "", err
+	}
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.leafID = leafID
+	if sess, ok := st.sessions[sessionID]; ok {
+		sess.UpdatedAt = time.Now().Unix()
+		st.sessions[sessionID] = sess
+	}
+	return editorText, nil
 }
 
 // GetTree returns all tree entries for the current session using Pi's
@@ -934,6 +962,17 @@ func replayJournal(path string, sessionID string) (
 				if parent, ok := nodes[entry.ParentID]; ok {
 					parent.children = append(parent.children, entry.ID)
 				}
+			}
+		case jTypeNavigate:
+			if entry.LeafID == nil {
+				continue
+			}
+			if *entry.LeafID == "" {
+				leafID = ""
+				continue
+			}
+			if _, ok := nodes[*entry.LeafID]; ok {
+				leafID = *entry.LeafID
 			}
 		}
 	}

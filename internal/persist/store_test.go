@@ -28,6 +28,25 @@ func newEphemeralTestStore(t *testing.T) (*Store, Session) {
 	return st, sess
 }
 
+func reloadTestStore(t *testing.T, src *Store, sessionID string) *Store {
+	t.Helper()
+	st := &Store{
+		dir:      src.dir,
+		sessions: make(map[string]Session),
+		nodes:    make(map[string]*treeNode),
+	}
+	if err := st.loadSessionIndex(); err != nil {
+		t.Fatalf("loadSessionIndex: %v", err)
+	}
+	st.mu.Lock()
+	st.current = sessionID
+	st.mu.Unlock()
+	if err := st.loadSessionTree(sessionID); err != nil {
+		t.Fatalf("loadSessionTree: %v", err)
+	}
+	return st
+}
+
 func TestCreateAndListMessages(t *testing.T) {
 	t.Parallel()
 
@@ -189,6 +208,38 @@ func TestReplayJournal_RoundTrip(t *testing.T) {
 	msgs, _ := st2.Messages().List(ctx, sess.ID)
 	if len(msgs) != 2 {
 		t.Fatalf("after reload: got %d msgs, want 2", len(msgs))
+	}
+}
+
+func TestNavigate_ReplayRoundTrip_PersistsAssistantSelection(t *testing.T) {
+	t.Parallel()
+
+	st, sess := newEphemeralTestStore(t)
+	ctx := context.Background()
+	ms := st.Messages()
+
+	_, _ = ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "first"})  //nolint:errcheck
+	a1, _ := ms.Create(ctx, sess.ID, testAssistant("answer one", nil))                     //nolint:errcheck
+	_, _ = ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "second"}) //nolint:errcheck
+
+	if _, err := st.Navigate(libagent.MessageID(a1)); err != nil {
+		t.Fatalf("Navigate: %v", err)
+	}
+
+	st2 := reloadTestStore(t, st, sess.ID)
+	if st2.leafID != libagent.MessageID(a1) {
+		t.Fatalf("leafID after reload = %q, want %q", st2.leafID, libagent.MessageID(a1))
+	}
+
+	msgs, err := st2.Messages().List(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("List after reload: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("after reload: got %d msgs, want 2", len(msgs))
+	}
+	if got := libagent.AssistantText(msgs[1].(*libagent.AssistantMessage)); got != "answer one" {
+		t.Fatalf("assistant text after reload = %q, want %q", got, "answer one")
 	}
 }
 
@@ -394,6 +445,78 @@ func TestGetTree_AllVisibleEntriesNavigateToBijectiveToolCoupling(t *testing.T) 
 		if !libagent.HasBijectiveToolCoupling(msgs) {
 			t.Fatalf("visible tree entry %s navigates to non-bijective tool history", entry.ID)
 		}
+	}
+}
+
+func TestNavigate_ReplayRoundTrip_UserSelectionRestoresParentLeaf(t *testing.T) {
+	t.Parallel()
+
+	st, sess := newEphemeralTestStore(t)
+	ctx := context.Background()
+	ms := st.Messages()
+
+	u1, _ := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "first question"}) //nolint:errcheck
+	_, _ = ms.Create(ctx, sess.ID, testAssistant("answer", nil))                                     //nolint:errcheck
+	_, _ = ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "second question"})  //nolint:errcheck
+
+	editorText, err := st.Navigate(libagent.MessageID(u1))
+	if err != nil {
+		t.Fatalf("Navigate: %v", err)
+	}
+	if editorText != "first question" {
+		t.Fatalf("editorText = %q, want %q", editorText, "first question")
+	}
+
+	st2 := reloadTestStore(t, st, sess.ID)
+	if st2.leafID != "" {
+		t.Fatalf("leafID after reload = %q, want root", st2.leafID)
+	}
+
+	msgs, err := st2.Messages().List(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("List after reload: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("after reload: got %d msgs, want 0", len(msgs))
+	}
+}
+
+func TestNavigate_ReplayRoundTrip_NewMessagesOverrideStoredSelection(t *testing.T) {
+	t.Parallel()
+
+	st, sess := newEphemeralTestStore(t)
+	ctx := context.Background()
+	ms := st.Messages()
+
+	_, _ = ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "root"}) //nolint:errcheck
+	a1, _ := ms.Create(ctx, sess.ID, testAssistant("branch point", nil))                 //nolint:errcheck
+	_, _ = ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "old"})  //nolint:errcheck
+	_, _ = ms.Create(ctx, sess.ID, testAssistant("old answer", nil))                     //nolint:errcheck
+
+	if _, err := st.Navigate(libagent.MessageID(a1)); err != nil {
+		t.Fatalf("Navigate: %v", err)
+	}
+
+	_, _ = ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "new"}) //nolint:errcheck
+	a3, _ := ms.Create(ctx, sess.ID, testAssistant("new answer", nil))                  //nolint:errcheck
+
+	st2 := reloadTestStore(t, st, sess.ID)
+	if st2.leafID != libagent.MessageID(a3) {
+		t.Fatalf("leafID after reload = %q, want %q", st2.leafID, libagent.MessageID(a3))
+	}
+
+	msgs, err := st2.Messages().List(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("List after reload: %v", err)
+	}
+	if len(msgs) != 4 {
+		t.Fatalf("after reload: got %d msgs, want 4", len(msgs))
+	}
+	if got := msgs[2].(*libagent.UserMessage).Content; got != "new" {
+		t.Fatalf("new branch user content = %q, want %q", got, "new")
+	}
+	if got := libagent.AssistantText(msgs[3].(*libagent.AssistantMessage)); got != "new answer" {
+		t.Fatalf("new branch assistant text = %q, want %q", got, "new answer")
 	}
 }
 
