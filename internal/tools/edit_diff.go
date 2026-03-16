@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"strings"
 	"unicode"
 
@@ -139,10 +140,10 @@ func generateDiffString(oldContent string, newContent string, contextLines int) 
 			}
 			for _, line := range raw {
 				if diff.Type == diffmatchpatch.DiffInsert {
-					output = append(output, "+ "+line)
+					output = append(output, formatDiffLine("+", newLineNum, line))
 					newLineNum++
 				} else {
-					output = append(output, "- "+line)
+					output = append(output, formatDiffLine("-", oldLineNum, line))
 					oldLineNum++
 				}
 			}
@@ -172,7 +173,7 @@ func generateDiffString(oldContent string, newContent string, contextLines int) 
 			}
 
 			for _, line := range linesToShow {
-				output = append(output, "  "+line)
+				output = append(output, formatContextLine(newLineNum, line))
 				oldLineNum++
 				newLineNum++
 			}
@@ -190,4 +191,12 @@ func generateDiffString(oldContent string, newContent string, contextLines int) 
 	}
 
 	return EditToolDetails{Diff: strings.Join(output, "\n"), FirstChangedLine: firstChangedLine}
+}
+
+func formatDiffLine(prefix string, lineNo int, content string) string {
+	return fmt.Sprintf("%s %d | %s", prefix, lineNo, content)
+}
+
+func formatContextLine(lineNo int, content string) string {
+	return fmt.Sprintf("  %d | %s", lineNo, content)
 }

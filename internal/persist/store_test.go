@@ -2,6 +2,7 @@ package persist
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -77,6 +78,27 @@ func TestCreateAndListMessages(t *testing.T) {
 	}
 	if msgs[0].(*libagent.UserMessage).Content != "hello" {
 		t.Fatalf("msgs[0] content = %q, want hello", msgs[0].(*libagent.UserMessage).Content)
+	}
+}
+
+func TestEnsureSessionPersistedWithoutMessages(t *testing.T) {
+	t.Parallel()
+
+	st, sess := newEphemeralTestStore(t)
+	if err := st.EnsureSessionPersisted(sess.ID); err != nil {
+		t.Fatalf("EnsureSessionPersisted: %v", err)
+	}
+
+	st2 := &Store{
+		dir:      st.dir,
+		sessions: make(map[string]Session),
+		nodes:    make(map[string]*treeNode),
+	}
+	if err := st2.loadSessionIndex(); err != nil {
+		t.Fatalf("loadSessionIndex: %v", err)
+	}
+	if _, err := st2.GetSession(sess.ID); err != nil {
+		t.Fatalf("GetSession after persist: %v", err)
 	}
 }
 
@@ -208,6 +230,78 @@ func TestReplayJournal_RoundTrip(t *testing.T) {
 	msgs, _ := st2.Messages().List(ctx, sess.ID)
 	if len(msgs) != 2 {
 		t.Fatalf("after reload: got %d msgs, want 2", len(msgs))
+	}
+}
+
+func TestReplayJournal_RoundTrip_PreservesReasoningProviderMetadata(t *testing.T) {
+	t.Parallel()
+
+	st, sess := newEphemeralTestStore(t)
+	ctx := context.Background()
+	ms := st.Messages()
+
+	_, err := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "persist"})
+	if err != nil {
+		t.Fatalf("Create user: %v", err)
+	}
+	st.mu.Lock()
+	parentID := st.leafID
+	st.mu.Unlock()
+	if parentID == "" {
+		t.Fatal("expected non-empty leaf after creating user message")
+	}
+
+	seedAssistant := libagent.NewAssistantMessage("answer", "summary from raw", nil, libagent.UnixMilliToTime(1))
+	seedAssistant.Completed = true
+	seedMsg := messageToJMsg(seedAssistant)
+	if seedMsg.Assistant == nil {
+		t.Fatal("messageToJMsg returned nil assistant payload")
+	}
+	if len(seedMsg.AssistantContent) == 0 {
+		t.Fatal("messageToJMsg returned empty assistant_content")
+	}
+	// Clear flattened fields so replay must recover from raw assistant_content.
+	seedMsg.Assistant.Text = ""
+	seedMsg.Assistant.Reasoning = ""
+	seedMsg.Assistant.ToolCalls = nil
+	seedMsg.Assistant.Meta.ID = "assistant-raw"
+	seedMsg.Assistant.Meta.SessionID = sess.ID
+	var rawContent json.RawMessage
+	rawContent = append(rawContent, seedMsg.AssistantContent...)
+
+	assistantID := "assistant-raw"
+	entry := jEntry{
+		Typ:      jTypeMsg,
+		ID:       assistantID,
+		ParentID: parentID,
+		Msg: &jMsg{
+			Kind:             "assistant",
+			Assistant:        seedMsg.Assistant,
+			AssistantContent: rawContent,
+		},
+	}
+	if err := st.appendEntry(sess.ID, entry); err != nil {
+		t.Fatalf("appendEntry: %v", err)
+	}
+
+	reloaded := reloadTestStore(t, st, sess.ID)
+	gotMsgs, err := reloaded.Messages().List(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("List after reload: %v", err)
+	}
+	if len(gotMsgs) != 2 {
+		t.Fatalf("got %d messages, want 2", len(gotMsgs))
+	}
+
+	gotAssistant, ok := gotMsgs[1].(*libagent.AssistantMessage)
+	if !ok {
+		t.Fatalf("message[1] type=%T want *AssistantMessage", gotMsgs[1])
+	}
+	if got := libagent.AssistantReasoning(gotAssistant); got != "summary from raw" {
+		t.Fatalf("assistant reasoning=%q want %q", got, "summary from raw")
+	}
+	if got := libagent.AssistantText(gotAssistant); got != "answer" {
+		t.Fatalf("assistant text=%q want %q", got, "answer")
 	}
 }
 
@@ -527,4 +621,55 @@ func treeContainsID(entries []TreeEntry, id string) bool {
 		}
 	}
 	return false
+}
+
+func TestRemoveSession_AllowsRemovingActiveSessionAndSwitchesCurrent(t *testing.T) {
+	t.Parallel()
+
+	st, s1 := newEphemeralTestStore(t)
+	if err := st.EnsureSessionPersisted(s1.ID); err != nil {
+		t.Fatalf("EnsureSessionPersisted(s1): %v", err)
+	}
+	s2, err := st.CreateEphemeral()
+	if err != nil {
+		t.Fatalf("CreateEphemeral(s2): %v", err)
+	}
+	if err := st.EnsureSessionPersisted(s2.ID); err != nil {
+		t.Fatalf("EnsureSessionPersisted(s2): %v", err)
+	}
+
+	if err := st.SetCurrent(s1.ID); err != nil {
+		t.Fatalf("SetCurrent(s1): %v", err)
+	}
+
+	if err := st.RemoveSession(s1.ID); err != nil {
+		t.Fatalf("RemoveSession(active): %v", err)
+	}
+
+	if got := st.CurrentSessionID(); got != s2.ID {
+		t.Fatalf("CurrentSessionID() = %q, want %q", got, s2.ID)
+	}
+	if _, err := st.GetSession(s1.ID); err == nil {
+		t.Fatalf("expected removed session %q to be absent", s1.ID)
+	}
+}
+
+func TestRemoveSession_RemovingLastActiveSessionClearsCurrent(t *testing.T) {
+	t.Parallel()
+
+	st, s1 := newEphemeralTestStore(t)
+	if err := st.EnsureSessionPersisted(s1.ID); err != nil {
+		t.Fatalf("EnsureSessionPersisted(s1): %v", err)
+	}
+
+	if err := st.RemoveSession(s1.ID); err != nil {
+		t.Fatalf("RemoveSession(active): %v", err)
+	}
+
+	if got := st.CurrentSessionID(); got != "" {
+		t.Fatalf("CurrentSessionID() = %q, want empty", got)
+	}
+	if got := len(st.ListSessionSummaries()); got != 0 {
+		t.Fatalf("ListSessionSummaries len = %d, want 0", got)
+	}
 }

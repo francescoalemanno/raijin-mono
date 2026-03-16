@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -24,9 +25,21 @@ func NewWriteTool() libagent.Tool {
 		if params.Path == "" {
 			return libagent.NewTextErrorResponse("path is required"), nil
 		}
+		if vfs.IsEmbedded(params.Path) {
+			return libagent.NewTextErrorResponse(vfs.DescribeAccessError(params.Path, vfs.ErrReadOnly)), nil
+		}
 
 		if ctx.Err() != nil {
 			return libagent.ToolResponse{}, ctx.Err()
+		}
+
+		oldContent := ""
+		oldExists := false
+		if existing, err := v.ReadFile(params.Path); err == nil {
+			oldContent = string(existing)
+			oldExists = true
+		} else if !errors.Is(err, vfs.ErrNotFound) {
+			return libagent.NewTextErrorResponse(vfs.DescribeAccessError(params.Path, err)), nil
 		}
 
 		if err := v.MkdirAll(filepath.Dir(params.Path), defaultDirPerm); err != nil {
@@ -36,7 +49,14 @@ func NewWriteTool() libagent.Tool {
 		if err := v.WriteFile(params.Path, []byte(params.Content), defaultFilePerm); err != nil {
 			return libagent.NewTextErrorResponse(vfs.DescribeAccessError(params.Path, err)), nil
 		}
-		resp := libagent.NewTextResponse(fmt.Sprintf("Successfully wrote file %s.", params.Path))
+
+		details := generateDiffString(oldContent, params.Content, 4)
+		summary := fmt.Sprintf("Successfully wrote file %s.", params.Path)
+		if !oldExists {
+			summary = fmt.Sprintf("Successfully created file %s.", params.Path)
+		}
+		resp := libagent.NewTextResponse(summary)
+		resp = libagent.WithResponseMetadata(resp, details)
 		return resp, nil
 	}
 

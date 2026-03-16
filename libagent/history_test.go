@@ -3,6 +3,9 @@ package libagent
 import (
 	"testing"
 	"time"
+
+	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openai"
 )
 
 func TestSanitizeHistory_PreservesAssistantStructuredContent(t *testing.T) {
@@ -76,6 +79,50 @@ func TestSanitizeHistory_PreservesAssistantTextFromStructuredContent(t *testing.
 	}
 	if AssistantText(am) != "hello from content" {
 		t.Fatalf("assistant text=%q want %q", AssistantText(am), "hello from content")
+	}
+}
+
+func TestSanitizeHistory_PreservesMetadataOnlyReasoningContent(t *testing.T) {
+	t.Parallel()
+
+	encrypted := "encrypted-signature"
+	assistant := &AssistantMessage{
+		Role:      "assistant",
+		Completed: true,
+		Content: fantasy.ResponseContent{
+			fantasy.ReasoningContent{
+				Text: "",
+				ProviderMetadata: fantasy.ProviderMetadata{
+					openai.Name: &openai.ResponsesReasoningMetadata{
+						ItemID:           "reasoning-item-1",
+						EncryptedContent: &encrypted,
+						Summary:          []string{"summary"},
+					},
+				},
+			},
+		},
+		Timestamp: time.Now(),
+	}
+
+	got := SanitizeHistory([]Message{assistant})
+	if len(got) != 1 {
+		t.Fatalf("len(got)=%d want 1", len(got))
+	}
+
+	am, ok := got[0].(*AssistantMessage)
+	if !ok {
+		t.Fatalf("message[0] type=%T want *AssistantMessage", got[0])
+	}
+	reasoning := am.Content.Reasoning()
+	if len(reasoning) != 1 {
+		t.Fatalf("reasoning parts=%d want 1", len(reasoning))
+	}
+	md := openai.GetReasoningMetadata(fantasy.ProviderOptions(reasoning[0].ProviderMetadata))
+	if md == nil || md.EncryptedContent == nil {
+		t.Fatalf("reasoning metadata missing after sanitize: %#v", md)
+	}
+	if got := *md.EncryptedContent; got != encrypted {
+		t.Fatalf("encrypted content=%q want %q", got, encrypted)
 	}
 }
 

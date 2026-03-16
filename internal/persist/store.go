@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -75,10 +76,11 @@ type jEntry struct {
 
 // jMsg is the serialisable form of a runtime libagent message.
 type jMsg struct {
-	Kind       string                      `json:"kind"`
-	User       *libagent.UserMessage       `json:"user,omitempty"`
-	Assistant  *libagent.AssistantMessage  `json:"assistant,omitempty"`
-	ToolResult *libagent.ToolResultMessage `json:"tool_result,omitempty"`
+	Kind             string                      `json:"kind"`
+	User             *libagent.UserMessage       `json:"user,omitempty"`
+	Assistant        *libagent.AssistantMessage  `json:"assistant,omitempty"`
+	AssistantContent json.RawMessage             `json:"assistant_content,omitempty"`
+	ToolResult       *libagent.ToolResultMessage `json:"tool_result,omitempty"`
 }
 
 // treeNode is one in-memory node in the session's message tree.
@@ -222,21 +224,47 @@ func (st *Store) CreateEphemeral() (Session, error) {
 }
 
 // RemoveSession permanently deletes a session from memory and from disk.
+// If the removed session is active, current is reassigned to the most recently
+// updated remaining session (or cleared when none remain).
 func (st *Store) RemoveSession(sessionID string) error {
 	st.mu.Lock()
 	if _, ok := st.sessions[sessionID]; !ok {
 		st.mu.Unlock()
 		return ErrSessionNotFound
 	}
-	if st.current == sessionID {
-		st.mu.Unlock()
-		return errors.New("persist: cannot remove the active session")
-	}
+	removingActive := st.current == sessionID
 	delete(st.sessions, sessionID)
+	nextCurrent := st.current
+	if removingActive {
+		nextCurrent = latestSessionIDLocked(st.sessions)
+		st.current = nextCurrent
+		st.nodes = make(map[string]*treeNode)
+		st.order = nil
+		st.leafID = ""
+		st.titled = false
+		st.pending = false
+	}
 	st.mu.Unlock()
 
 	_ = os.Remove(st.journalPath(sessionID))
+	if removingActive {
+		st.saveState(nextCurrent)
+	}
 	return nil
+}
+
+func latestSessionIDLocked(sessions map[string]Session) string {
+	var (
+		bestID  string
+		bestUpd int64
+	)
+	for id, sess := range sessions {
+		if bestID == "" || sess.UpdatedAt > bestUpd || (sess.UpdatedAt == bestUpd && id < bestID) {
+			bestID = id
+			bestUpd = sess.UpdatedAt
+		}
+	}
+	return bestID
 }
 
 // AppendCompaction appends a compaction checkpoint entry to the current session.
@@ -627,10 +655,11 @@ func (st *Store) appendEntryLocked(sessionID string, entry jEntry) error {
 
 type stateFile struct {
 	CurrentSessionID string `json:"current_session_id"`
+	PID              int    `json:"pid,omitempty"`
 }
 
 func (st *Store) saveStateLocked(sessionID string) {
-	data, _ := json.Marshal(stateFile{CurrentSessionID: sessionID})
+	data, _ := json.Marshal(stateFile{CurrentSessionID: sessionID, PID: os.Getpid()})
 	_ = os.WriteFile(st.statePath(), data, filePerm)
 }
 
@@ -654,6 +683,50 @@ func (st *Store) loadState() {
 	if _, ok := st.sessions[sf.CurrentSessionID]; ok {
 		st.current = sf.CurrentSessionID
 	}
+}
+
+// CurrentSessionID returns the ID of the currently active session.
+func (st *Store) CurrentSessionID() string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.current
+}
+
+// EnsureSessionPersisted flushes an ephemeral session header so the session is
+// visible to future process invocations even before the first message is sent.
+func (st *Store) EnsureSessionPersisted(sessionID string) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if sessionID == "" {
+		return ErrSessionNotFound
+	}
+	if _, ok := st.sessions[sessionID]; !ok {
+		return ErrSessionNotFound
+	}
+	return st.flushHeaderLocked(sessionID)
+}
+
+// IsSessionOwnedByOtherProcess reads state.json and checks whether another
+// live process owns the current session (based on the PID field).
+func (st *Store) IsSessionOwnedByOtherProcess() bool {
+	data, err := os.ReadFile(st.statePath())
+	if err != nil {
+		return false
+	}
+	var sf stateFile
+	if json.Unmarshal(data, &sf) != nil || sf.PID == 0 {
+		return false
+	}
+	if sf.PID == os.Getpid() {
+		return false
+	}
+	p, err := os.FindProcess(sf.PID)
+	if err != nil {
+		return false
+	}
+	// Signal 0 checks if process exists without actually signaling it
+	err = p.Signal(syscall.Signal(0))
+	return err == nil
 }
 
 // loadSessionIndex scans the journal directory and replays only session-level
@@ -990,12 +1063,15 @@ func messageToJMsg(m libagent.Message) jMsg {
 		return jMsg{Kind: "user", User: libagent.CloneMessage(msg).(*libagent.UserMessage)}
 	case *libagent.AssistantMessage:
 		clone := libagent.CloneMessage(msg).(*libagent.AssistantMessage)
-		clone.Text = libagent.AssistantText(clone)
-		clone.Reasoning = libagent.AssistantReasoning(clone)
-		clone.ToolCalls = libagent.AssistantToolCalls(clone)
+		if len(clone.Content) > 0 {
+			clone.Text = libagent.AssistantText(clone)
+			clone.Reasoning = libagent.AssistantReasoning(clone)
+			clone.ToolCalls = libagent.AssistantToolCalls(clone)
+		}
+		content := libagent.MarshalAssistantContent(clone.Content)
 		clone.Content = nil
 		clone.Error = nil
-		return jMsg{Kind: "assistant", Assistant: clone}
+		return jMsg{Kind: "assistant", Assistant: clone, AssistantContent: content}
 	case *libagent.ToolResultMessage:
 		return jMsg{Kind: "tool_result", ToolResult: libagent.CloneMessage(msg).(*libagent.ToolResultMessage)}
 	default:
@@ -1015,9 +1091,16 @@ func jMsgToMessage(jm jMsg) (libagent.Message, bool) {
 			return nil, false
 		}
 		clone := libagent.CloneMessage(jm.Assistant).(*libagent.AssistantMessage)
+		if len(jm.AssistantContent) > 0 {
+			clone.Content = libagent.UnmarshalAssistantContent(jm.AssistantContent)
+		}
 		if len(clone.Content) == 0 {
 			hydrated := libagent.NewAssistantMessage(clone.Text, clone.Reasoning, clone.ToolCalls, clone.Timestamp)
 			clone.Content = hydrated.Content
+		} else {
+			clone.Text = libagent.AssistantText(clone)
+			clone.Reasoning = libagent.AssistantReasoning(clone)
+			clone.ToolCalls = libagent.AssistantToolCalls(clone)
 		}
 		return clone, true
 	case "tool_result":

@@ -44,9 +44,22 @@ func DefaultConvertToLLM(_ context.Context, messages []Message) ([]fantasy.Messa
 			for _, c := range msg.Content {
 				switch v := c.(type) {
 				case fantasy.TextContent:
-					parts = append(parts, fantasy.TextPart{Text: v.Text})
+					parts = append(parts, fantasy.TextPart{
+						Text:            v.Text,
+						ProviderOptions: fantasy.ProviderOptions(v.ProviderMetadata),
+					})
 				case fantasy.ReasoningContent:
-					parts = append(parts, fantasy.ReasoningPart{Text: v.Text})
+					parts = append(parts, fantasy.ReasoningPart{
+						Text:            v.Text,
+						ProviderOptions: fantasy.ProviderOptions(v.ProviderMetadata),
+					})
+				case fantasy.FileContent:
+					parts = append(parts, fantasy.FilePart{
+						Filename:        "",
+						MediaType:       v.MediaType,
+						Data:            v.Data,
+						ProviderOptions: fantasy.ProviderOptions(v.ProviderMetadata),
+					})
 				case fantasy.ToolCallContent:
 					input := normalizeToolCallJSON(v.Input)
 					parts = append(parts, fantasy.ToolCallPart{
@@ -54,6 +67,13 @@ func DefaultConvertToLLM(_ context.Context, messages []Message) ([]fantasy.Messa
 						ToolName:         v.ToolName,
 						Input:            input,
 						ProviderExecuted: v.ProviderExecuted,
+						ProviderOptions:  fantasy.ProviderOptions(v.ProviderMetadata),
+					})
+				case fantasy.ToolResultContent:
+					parts = append(parts, fantasy.ToolResultPart{
+						ToolCallID:      v.ToolCallID,
+						Output:          v.Result,
+						ProviderOptions: fantasy.ProviderOptions(v.ProviderMetadata),
 					})
 				}
 			}

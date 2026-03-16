@@ -114,7 +114,7 @@ func LoginOpenAICodex(ctx context.Context, cb LoginCallbacks) (Credentials, erro
 	}
 
 	if cb.OnProgress != nil {
-		cb.OnProgress("Authentication successful.")
+		cb.OnProgress("OAuth tokens acquired.")
 	}
 	return Credentials{
 		Access:  result.AccessToken,

@@ -1,12 +1,10 @@
 package tools
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/francescoalemanno/raijin-mono/internal/theme"
-	tuiutils "github.com/francescoalemanno/raijin-mono/libtui/pkg/utils"
 )
 
 // RenderPath formats a path for display:
@@ -50,7 +48,7 @@ func renderCodePreview(path, content string) string {
 	if content == "" {
 		return ""
 	}
-	return tuiutils.HighlightCodeANSI(content, "", path, theme.Default.ChromaStyle())
+	return highlightCodeANSI(content, "", path, defaultCodeStyle())
 }
 
 func renderDiffPreview(path, oldStr, newStr string) string {
@@ -58,16 +56,40 @@ func renderDiffPreview(path, oldStr, newStr string) string {
 	if details.Diff == "" {
 		return ""
 	}
+	return renderDiffText(details.Diff)
+}
+
+// RenderDiffText renders plain diff text using TUI diff colors.
+func RenderDiffText(diff string) string {
+	return renderDiffText(diff)
+}
+
+// DiffFromMetadata extracts diff text from tool metadata, if present.
+func DiffFromMetadata(metadata string) string {
+	if strings.TrimSpace(metadata) == "" {
+		return ""
+	}
+	var details EditToolDetails
+	if err := json.Unmarshal([]byte(metadata), &details); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(details.Diff)
+}
+
+func renderDiffText(diff string) string {
+	if strings.TrimSpace(diff) == "" {
+		return ""
+	}
 
 	var b strings.Builder
-	for line := range strings.SplitSeq(details.Diff, "\n") {
+	for line := range strings.SplitSeq(diff, "\n") {
 		switch {
 		case strings.HasPrefix(line, "+"):
-			b.WriteString(theme.Default.DiffAdded.Ansi24(line))
+			b.WriteString(diffAddedStyle.Render(line))
 		case strings.HasPrefix(line, "-"):
-			b.WriteString(theme.Default.DiffRemoved.Ansi24(line))
+			b.WriteString(diffRemovedStyle.Render(line))
 		default:
-			b.WriteString(theme.Default.Muted.Ansi24(line))
+			b.WriteString(diffContextStyle.Render(line))
 		}
 		b.WriteByte('\n')
 	}

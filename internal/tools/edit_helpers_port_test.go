@@ -2,6 +2,7 @@ package tools
 
 import (
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -108,10 +109,10 @@ func TestEditHelpers_GenerateDiffString(t *testing.T) {
 	if res.FirstChangedLine == nil || *res.FirstChangedLine != 2 {
 		t.Fatalf("firstChangedLine = %#v, want 2", res.FirstChangedLine)
 	}
-	if !strings.Contains(res.Diff, "- two") {
+	if !regexp.MustCompile(`(?m)^-\s+\d+\s+\|\s+two$`).MatchString(res.Diff) {
 		t.Fatalf("diff missing removed line: %q", res.Diff)
 	}
-	if !strings.Contains(res.Diff, "+ TWO") {
+	if !regexp.MustCompile(`(?m)^\+\s+\d+\s+\|\s+TWO$`).MatchString(res.Diff) {
 		t.Fatalf("diff missing added line: %q", res.Diff)
 	}
 }

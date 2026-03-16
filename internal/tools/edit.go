@@ -98,7 +98,7 @@ func createEditTool(cwd string) libagent.Tool {
 		return resp, nil
 	}
 
-	renderFunc := func(input json.RawMessage, output string, _ int) string {
+	renderFunc := func(input json.RawMessage, _ string, _ int) string {
 		var params editParams
 		if err := libagent.ParseJSONInput(input, &params); err != nil {
 			return "edit (failed)"
@@ -106,10 +106,6 @@ func createEditTool(cwd string) libagent.Tool {
 		header := fmt.Sprintf("edit %s", RenderPath(params.Path))
 		if params.OldText == "" && params.NewText == "" {
 			return header
-		}
-
-		if diff := renderDiffPreview(params.Path, params.OldText, params.NewText); diff != "" {
-			return header + "\n" + diff
 		}
 		return header
 	}

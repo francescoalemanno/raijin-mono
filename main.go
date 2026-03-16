@@ -7,19 +7,20 @@ import (
 	"os"
 	"strings"
 
-	libagent "github.com/francescoalemanno/raijin-mono/libagent"
-
-	"github.com/francescoalemanno/raijin-mono/internal/chat"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
+	"github.com/francescoalemanno/raijin-mono/internal/oneshot"
 	"github.com/francescoalemanno/raijin-mono/internal/profiling"
-	"github.com/francescoalemanno/raijin-mono/internal/theme"
+	"github.com/francescoalemanno/raijin-mono/internal/shellinit"
 	"github.com/francescoalemanno/raijin-mono/internal/version"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 func main() {
 	versionFlag := flag.Bool("version", false, "show version")
-	themeFlag := flag.String("theme", "dark", "color theme (dark, light)")
-	oneShotPrompt := flag.String("p", "", "run one-shot prompt in CLI mode")
+	newFlag := flag.Bool("new", false, "force a new session")
+	initFlag := flag.String("init", "", "print shell integration script (zsh, bash, fish)")
+	completionsFlag := flag.Bool("completions", false, "print available commands for shell completion")
+	completeFlag := flag.String("complete", "", "print completion candidates for a token")
 	profileDirFlag := flag.String("profile-dir", "", "write live profiling artifacts under this directory")
 	pprofAddrFlag := flag.String("pprof-addr", "", "serve runtime pprof on this address (for example 127.0.0.1:6060)")
 	flag.Parse()
@@ -29,9 +30,23 @@ func main() {
 		os.Exit(0)
 	}
 
-	if !theme.SetTheme(*themeFlag) {
-		fmt.Fprintf(os.Stderr, "error: unknown theme %q; available themes: %s\n", *themeFlag, strings.Join(theme.AvailableThemes(), ", "))
-		os.Exit(1)
+	if shell := strings.TrimSpace(*initFlag); shell != "" {
+		script, err := shellinit.Init(shell)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Print(script)
+		os.Exit(0)
+	}
+
+	if *completionsFlag {
+		fmt.Println(shellinit.Completions())
+		os.Exit(0)
+	}
+	if token := strings.TrimSpace(*completeFlag); token != "" {
+		fmt.Println(shellinit.Complete(token))
+		os.Exit(0)
 	}
 
 	profiler, err := profiling.Start(profiling.Options{
@@ -56,50 +71,71 @@ func main() {
 		}()
 	}
 
-	var runtimeModel libagent.RuntimeModel
-	var modelCfg libagent.ModelConfig
+	store, _ := modelconfig.LoadModelStore()
+	modelCfg, runtimeModel := loadDefaultRuntimeModel(store)
+	modelCfg = modelCfg.Normalize()
 
-	if store, err := modelconfig.LoadModelStore(); err == nil && store != nil {
-		if mc, ok := store.GetDefault(); ok {
-			modelCfg = mc.Normalize()
-			apiKey := modelCfg.APIKey
-			if after, ok0 := strings.CutPrefix(apiKey, "$"); ok0 {
-				apiKey = os.Getenv(after)
-			}
-			cat := libagent.DefaultCatalog()
-			if model, err := cat.NewModel(context.Background(), modelCfg.Provider, modelCfg.Model, apiKey); err == nil {
-				info, _, _ := cat.FindModel(modelCfg.Provider, modelCfg.Model)
-				providerType, catalogOpts := cat.FindModelOptions(modelCfg.Provider, modelCfg.Model)
-				runtimeModel = libagent.RuntimeModel{
-					Model:                  model,
-					ModelInfo:              info,
-					ModelCfg:               modelCfg,
-					ProviderType:           providerType,
-					CatalogProviderOptions: catalogOpts,
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "warning: failed to configure model (%v); select another model to continue\n", err)
-			}
-		}
-	}
+	runtimeModel = buildRuntimeModel(modelCfg, runtimeModel)
 
-	oneShot := strings.TrimSpace(*oneShotPrompt)
-	if oneShot != "" {
-		if len(flag.Args()) > 0 {
-			fmt.Fprintln(os.Stderr, "error: positional prompt arguments cannot be combined with -p")
-			os.Exit(1)
-		}
-		response, err := chat.RunOneShot(runtimeModel, modelCfg, oneShot)
-		if err != nil {
+	oneShotText := strings.TrimSpace(strings.Join(flag.Args(), " "))
+	if oneShotText == "" {
+		if err := runSubprocessREPL(os.Args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
 			os.Exit(1)
 		}
-		fmt.Println(response)
 		return
 	}
 
-	if err := chat.RunChatWithPrompt(runtimeModel, modelCfg, strings.Join(flag.Args(), " ")); err != nil {
+	opts := oneshot.Options{
+		RuntimeModel: runtimeModel,
+		ModelCfg:     modelCfg,
+		Store:        store,
+		ForceNew:     *newFlag,
+	}
+	if err := oneshot.Run(opts, oneShotText); err != nil {
 		fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
 		os.Exit(1)
+	}
+}
+
+func loadDefaultRuntimeModel(store *modelconfig.ModelStore) (libagent.ModelConfig, libagent.RuntimeModel) {
+	if store == nil {
+		return libagent.ModelConfig{}, libagent.RuntimeModel{}
+	}
+	mc, ok := store.GetDefault()
+	if !ok {
+		return libagent.ModelConfig{}, libagent.RuntimeModel{}
+	}
+	cfg := mc.Normalize()
+	return cfg, buildRuntimeModel(cfg, libagent.RuntimeModel{})
+}
+
+func buildRuntimeModel(modelCfg libagent.ModelConfig, current libagent.RuntimeModel) libagent.RuntimeModel {
+	provider := strings.TrimSpace(modelCfg.Provider)
+	model := strings.TrimSpace(modelCfg.Model)
+	if provider == "" || model == "" {
+		return current
+	}
+
+	apiKey := modelCfg.APIKey
+	if after, ok := strings.CutPrefix(apiKey, "$"); ok {
+		apiKey = os.Getenv(after)
+	}
+
+	cat := libagent.DefaultCatalog()
+	resolved, err := cat.NewModel(context.Background(), provider, model, apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to configure model (%v); select another model to continue\n", err)
+		return current
+	}
+
+	info, _, _ := cat.FindModel(provider, model)
+	providerType, catalogOpts := cat.FindModelOptions(provider, model)
+	return libagent.RuntimeModel{
+		Model:                  resolved,
+		ModelInfo:              info,
+		ModelCfg:               modelCfg,
+		ProviderType:           providerType,
+		CatalogProviderOptions: catalogOpts,
 	}
 }

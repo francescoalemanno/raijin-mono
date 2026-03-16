@@ -33,11 +33,6 @@ gofumpt -l -w .
 # Testing Guidelines
 - Write unit tests using standard Go testing with `*_test.go` files
 
-<AMP-SPECIFIC-INSTRUCTIONS>
-- Do not use subagents.
-- After using oracle, ask for user feedback.
-</AMP-SPECIFIC-INSTRUCTIONS>
-
 # Implementation instructions
 - Before implementing a new tool, examine the read tool and the bash tool to identify patterns to follow.
 - When the user requests catalog updates:

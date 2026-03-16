@@ -72,7 +72,7 @@ Project skills override user skills, which override built-in skills.
 3. **Create the skill directory**: `mkdir -p {{PROJECT_SKILLS_DIR}}/<skill-name>/`.
 4. **Write `{{SKILL_FILE}}`** inside that directory using the body structure above.
 5. **Verify** the frontmatter `name` matches the directory name.
-6. **Report** the skill name, location, and how to invoke it (`$<skill-name>` or via the skill tool).
+6. **Report** the skill name, location, and how to invoke it (`+<skill-name>` or via the skill tool).
 
 ### Updating an existing skill
 

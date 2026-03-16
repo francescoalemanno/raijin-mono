@@ -45,8 +45,6 @@ var allowlist = map[string]string{
 	// Rule 2: llmbridge importing internal
 	"llmbridge/pkg/config/load.go":               modulePath + "/internal/paths",
 	"llmbridge/pkg/config/openai_codex_oauth.go": modulePath + "/internal/paths",
-	// Rule 3: libtui importing internal
-	"libtui/pkg/tui/tui.go": modulePath + "/internal/paths",
 }
 
 func isAllowlisted(repoRelFile, imp string) bool {
@@ -93,41 +91,29 @@ func TestImportPolicy(t *testing.T) {
 		for _, imp := range f.Imports {
 			impPath := strings.Trim(imp.Path.Value, `"`)
 
-			// Rule 1: only libagent may import charm libraries.
-			if isCharmImport(impPath) && dir != "libagent" {
+			// Rule 1: only libagent, internal/oneshot, and internal/tools may import charm libraries.
+			if isCharmImport(impPath) &&
+				dir != "libagent" &&
+				!strings.HasPrefix(relPath, filepath.Join("internal", "oneshot")+string(os.PathSeparator)) &&
+				!strings.HasPrefix(relPath, filepath.Join("internal", "tools")+string(os.PathSeparator)) {
 				violations = append(violations, violation{
 					file:    relPath,
 					imp:     impPath,
 					ruleNum: 1,
-					reason:  "only libagent/ may import charm.land/charmbracelet libraries",
+					reason:  "only libagent/, internal/oneshot/, and internal/tools/ may import charm.land/charmbracelet libraries",
 				})
 			}
 
-			// Rule 2: llmbridge must not import internal, libtui, or cmd.
+			// Rule 2: llmbridge must not import internal or cmd.
 			if dir == "llmbridge" {
 				if local, ok := isLocalImport(impPath); ok {
 					target := topLevelDir(local)
-					if target == "internal" || target == "libtui" || target == "cmd" {
+					if target == "internal" || target == "cmd" {
 						violations = append(violations, violation{
 							file:    relPath,
 							imp:     impPath,
 							ruleNum: 2,
 							reason:  "llmbridge/ must not import " + target + "/",
-						})
-					}
-				}
-			}
-
-			// Rule 3: libtui must not import other repo packages.
-			if dir == "libtui" {
-				if local, ok := isLocalImport(impPath); ok {
-					target := topLevelDir(local)
-					if target != "libtui" {
-						violations = append(violations, violation{
-							file:    relPath,
-							imp:     impPath,
-							ruleNum: 3,
-							reason:  "libtui/ must not import " + target + "/",
 						})
 					}
 				}
