@@ -7,9 +7,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/chzyer/readline"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
@@ -21,7 +24,20 @@ import (
 const (
 	replPrompt             = "raijin❯ "
 	replContinuationPrompt = "    ...❯ "
+
+	replANSIReset  = "\033[0m"
+	replANSIDim    = "\033[2m"
+	replANSIBold   = "\033[1m"
+	replANSIBlue   = "\033[38;5;39m"
+	replANSIPurple = "\033[38;5;141m"
+	replANSIAmber  = "\033[38;5;214m"
+	replANSIGreen  = "\033[38;5;42m"
+	replANSIRed    = "\033[38;5;196m"
 )
+
+type replRunStats struct {
+	Duration time.Duration
+}
 
 func runSubprocessREPL(baseArgs []string) error {
 	stdinFD := int(os.Stdin.Fd())
@@ -53,8 +69,7 @@ func runSubprocessREPL(baseArgs []string) error {
 	}
 	defer rl.Close()
 
-	fmt.Fprintln(os.Stdout)
-	fmt.Fprintln(os.Stdout, "raijin repl mode (subprocess). ctrl+d or /exit to quit.")
+	printREPLWelcome(status)
 	printStatusLine(status)
 
 	var multilines []string
@@ -91,20 +106,113 @@ func runSubprocessREPL(baseArgs []string) error {
 			return nil
 		}
 
-		if err := runREPLSubprocess(baseArgs, prompt); err != nil {
-			fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
+		stats, runErr := runREPLSubprocess(baseArgs, prompt)
+		if runErr != nil {
+			fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(runErr))
 		}
+		printRunFeedback(stats, runErr)
 		status.update(baseArgs)
 		printStatusLine(status)
 	}
 }
 
+func printREPLWelcome(status *replStatus) {
+	fmt.Fprintln(os.Stdout)
+	title := replStyleAccent("Raijin REPL")
+	mode := replStyleDim("subprocess mode")
+	fmt.Fprintf(os.Stdout, "%s %s\n", title, mode)
+	fmt.Fprintln(os.Stdout, replStyleDim("ctrl+d or /exit to quit · tab autocomplete"))
+	if status.rightPrompt() == "" {
+		fmt.Fprintln(os.Stdout, replStyleWarn("No model configured: use /add-model"))
+	}
+}
+
+func printRunFeedback(stats replRunStats, runErr error) {
+	if stats.Duration <= 0 {
+		return
+	}
+
+	icon := replStyleOK("✓")
+	if runErr != nil {
+		icon = replStyleErr("✗")
+	}
+
+	fmt.Fprintf(os.Stdout, "%s %s\n", icon, replStyleDim(formatDurationCompact(stats.Duration)))
+}
+
 func printStatusLine(status *replStatus) {
 	if info := status.rightPrompt(); info != "" {
-		fmt.Fprintf(os.Stdout, "\n\033[2m%s\033[0m\n", info)
+		fmt.Fprintf(os.Stdout, "\n%s %s\n", replStyleInfo("◉"), renderStyledStatusLine(info))
 	} else {
 		fmt.Fprintln(os.Stdout)
 	}
+}
+
+func renderStyledStatusLine(label string) string {
+	parts := strings.Split(label, " · ")
+	if len(parts) == 0 {
+		return replStyleDim(label)
+	}
+
+	styled := make([]string, 0, len(parts))
+	for i, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		switch {
+		case strings.HasPrefix(trimmed, "ctx:"):
+			styled = append(styled, styleContextToken(trimmed))
+		case isReasoningLabel(trimmed):
+			styled = append(styled, replStyleWarn(trimmed))
+		case i == 0:
+			styled = append(styled, replStyleModel(trimmed))
+		case looksLikePath(trimmed):
+			styled = append(styled, replStyleDim(trimmed))
+		default:
+			styled = append(styled, replStyleDim(trimmed))
+		}
+	}
+
+	return strings.Join(styled, replStyleDim(" · "))
+}
+
+func styleContextToken(token string) string {
+	pct, ok := parseContextPercent(token)
+	if !ok {
+		return replStyleDim(token)
+	}
+	switch {
+	case pct >= 85:
+		return replStyleErr(token)
+	case pct >= 60:
+		return replStyleWarn(token)
+	default:
+		return replStyleOK(token)
+	}
+}
+
+func parseContextPercent(token string) (float64, bool) {
+	raw := strings.TrimSpace(strings.TrimPrefix(token, "ctx:"))
+	raw = strings.TrimSuffix(raw, "%")
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func isReasoningLabel(label string) bool {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "low", "medium", "high", "max", "(not configured)":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikePath(v string) bool {
+	return strings.HasPrefix(v, "~") || strings.HasPrefix(v, "/") || strings.HasPrefix(v, ".")
 }
 
 func replHistoryPath() string {
@@ -142,12 +250,7 @@ func (c *replAutoCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	}
 
 	context := string(line[:pos])
-	raw := strings.TrimSpace(shellinit.Complete(context))
-	if raw == "" {
-		return nil, 0
-	}
-
-	candidates := splitNonEmptyLines(raw)
+	candidates := replCompletionCandidates(context)
 	if len(candidates) == 0 {
 		return nil, 0
 	}
@@ -254,10 +357,13 @@ func compactCwd() string {
 	return cwd
 }
 
-func runREPLSubprocess(baseArgs []string, prompt string) error {
+func runREPLSubprocess(baseArgs []string, prompt string) (replRunStats, error) {
+	started := time.Now()
+	stats := replRunStats{}
+
 	exePath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("resolve executable path: %w", err)
+		return stats, fmt.Errorf("resolve executable path: %w", err)
 	}
 	args := replSubprocessArgs(baseArgs, prompt)
 
@@ -266,14 +372,38 @@ func runREPLSubprocess(baseArgs []string, prompt string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
-	if err := cmd.Run(); err != nil {
+
+	waitErr := runCommandIgnoringInterrupt(cmd)
+	stats.Duration = time.Since(started)
+	if waitErr != nil {
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return fmt.Errorf("subprocess exited with code %d", exitErr.ExitCode())
+		if errors.As(waitErr, &exitErr) {
+			return stats, fmt.Errorf("subprocess exited with code %d", exitErr.ExitCode())
 		}
-		return fmt.Errorf("run subprocess: %w", err)
+		return stats, fmt.Errorf("run subprocess: %w", waitErr)
 	}
-	return nil
+
+	return stats, nil
+}
+
+func runCommandIgnoringInterrupt(cmd *exec.Cmd) error {
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
+	return cmd.Run()
+}
+
+func formatDurationCompact(d time.Duration) string {
+	if d < time.Millisecond {
+		return "<1ms"
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.2fs", d.Seconds())
+	}
+	return d.Round(100 * time.Millisecond).String()
 }
 
 func replSubprocessArgs(baseArgs []string, prompt string) []string {
@@ -327,12 +457,7 @@ func replCompleteLineWithMatches(line string, pos int, key rune, showMatches fun
 	}
 
 	context := line[:pos]
-	raw := strings.TrimSpace(shellinit.Complete(context))
-	if raw == "" {
-		return line, pos, true
-	}
-
-	candidates := splitNonEmptyLines(raw)
+	candidates := replCompletionCandidates(context)
 	if len(candidates) == 0 {
 		return line, pos, true
 	}
@@ -352,6 +477,11 @@ func replCompleteLineWithMatches(line string, pos int, key rune, showMatches fun
 	newLine := line[:tokenStart] + replacement + line[tokenEnd:]
 	newPos := tokenStart + len(replacement)
 	return newLine, newPos, true
+}
+
+func replCompletionCandidates(context string) []string {
+	raw := strings.TrimSpace(shellinit.Complete(context))
+	return splitNonEmptyLines(raw)
 }
 
 func replTokenBounds(line string, pos int) (start, end int) {
@@ -410,3 +540,32 @@ func longestCommonPrefix(items []string) string {
 	}
 	return prefix
 }
+
+func isTerminalFD(file *os.File) bool {
+	if file == nil {
+		return false
+	}
+	return term.IsTerminal(int(file.Fd()))
+}
+
+func replSupportsColor() bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	return isTerminalFD(os.Stdout)
+}
+
+func replColor(style, text string) string {
+	if !replSupportsColor() {
+		return text
+	}
+	return style + text + replANSIReset
+}
+
+func replStyleDim(text string) string    { return replColor(replANSIDim, text) }
+func replStyleAccent(text string) string { return replColor(replANSIBold+replANSIBlue, text) }
+func replStyleModel(text string) string  { return replColor(replANSIBold+replANSIPurple, text) }
+func replStyleWarn(text string) string   { return replColor(replANSIBold+replANSIAmber, text) }
+func replStyleOK(text string) string     { return replColor(replANSIBold+replANSIGreen, text) }
+func replStyleErr(text string) string    { return replColor(replANSIBold+replANSIRed, text) }
+func replStyleInfo(text string) string   { return replColor(replANSIBold+replANSIBlue, text) }

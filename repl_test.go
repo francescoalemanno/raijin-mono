@@ -174,3 +174,25 @@ func TestLongestCommonPrefix(t *testing.T) {
 		t.Fatalf("longestCommonPrefix = %q, want %q", got, "/s")
 	}
 }
+
+func TestParseContextPercent(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   float64
+		wantOK bool
+	}{
+		{in: "ctx:12.3%", want: 12.3, wantOK: true},
+		{in: "ctx:99", want: 99, wantOK: true},
+		{in: "ctx:unknown", want: 0, wantOK: false},
+	}
+
+	for _, tc := range cases {
+		got, ok := parseContextPercent(tc.in)
+		if ok != tc.wantOK {
+			t.Fatalf("parseContextPercent(%q) ok = %v, want %v", tc.in, ok, tc.wantOK)
+		}
+		if ok && got != tc.want {
+			t.Fatalf("parseContextPercent(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
