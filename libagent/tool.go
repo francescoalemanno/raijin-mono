@@ -189,8 +189,9 @@ func (a *adaptedTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy
 		return fantasy.ToolResponse{}, err
 	}
 	fr := fantasy.ToolResponse{
-		Content: resp.Content,
-		IsError: resp.IsError,
+		Content:  resp.Content,
+		Metadata: resp.Metadata,
+		IsError:  resp.IsError,
 	}
 	if resp.Type == ToolResponseTypeMedia {
 		fr.Type = "image"

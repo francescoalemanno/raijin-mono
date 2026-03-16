@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/chzyer/readline"
+	"github.com/francescoalemanno/raijin-mono/internal/oneshot"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
 	"github.com/francescoalemanno/raijin-mono/internal/shellinit"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -24,15 +25,6 @@ import (
 const (
 	replPrompt             = "raijin❯ "
 	replContinuationPrompt = "    ...❯ "
-
-	replANSIReset  = "\033[0m"
-	replANSIDim    = "\033[2m"
-	replANSIBold   = "\033[1m"
-	replANSIBlue   = "\033[38;5;39m"
-	replANSIPurple = "\033[38;5;141m"
-	replANSIAmber  = "\033[38;5;214m"
-	replANSIGreen  = "\033[38;5;42m"
-	replANSIRed    = "\033[38;5;196m"
 )
 
 type replRunStats struct {
@@ -118,12 +110,12 @@ func runSubprocessREPL(baseArgs []string) error {
 
 func printREPLWelcome(status *replStatus) {
 	fmt.Fprintln(os.Stdout)
-	title := replStyleAccent("Raijin REPL")
-	mode := replStyleDim("subprocess mode")
+	title := oneshot.RenderThemedAccent("Raijin REPL")
+	mode := oneshot.RenderThemedDim("subprocess mode")
 	fmt.Fprintf(os.Stdout, "%s %s\n", title, mode)
-	fmt.Fprintln(os.Stdout, replStyleDim("ctrl+d or /exit to quit · tab autocomplete"))
+	fmt.Fprintln(os.Stdout, oneshot.RenderThemedDim("ctrl+d or /exit to quit · tab autocomplete"))
 	if status.rightPrompt() == "" {
-		fmt.Fprintln(os.Stdout, replStyleWarn("No model configured: use /add-model"))
+		fmt.Fprintln(os.Stdout, oneshot.RenderThemedWarn("No model configured: use /add-model"))
 	}
 }
 
@@ -132,17 +124,17 @@ func printRunFeedback(stats replRunStats, runErr error) {
 		return
 	}
 
-	icon := replStyleOK("✓")
+	icon := oneshot.RenderThemedOK("✓")
 	if runErr != nil {
-		icon = replStyleErr("✗")
+		icon = oneshot.RenderThemedErr("✗")
 	}
 
-	fmt.Fprintf(os.Stdout, "%s %s\n", icon, replStyleDim(formatDurationCompact(stats.Duration)))
+	fmt.Fprintf(os.Stdout, "%s %s\n", icon, oneshot.RenderThemedDim(formatDurationCompact(stats.Duration)))
 }
 
 func printStatusLine(status *replStatus) {
 	if info := status.rightPrompt(); info != "" {
-		fmt.Fprintf(os.Stdout, "\n%s %s\n", replStyleInfo("◉"), renderStyledStatusLine(info))
+		fmt.Fprintf(os.Stdout, "\n%s %s\n", oneshot.RenderThemedInfo("◉"), renderStyledStatusLine(info))
 	} else {
 		fmt.Fprintln(os.Stdout)
 	}
@@ -151,7 +143,7 @@ func printStatusLine(status *replStatus) {
 func renderStyledStatusLine(label string) string {
 	parts := strings.Split(label, " · ")
 	if len(parts) == 0 {
-		return replStyleDim(label)
+		return oneshot.RenderThemedDim(label)
 	}
 
 	styled := make([]string, 0, len(parts))
@@ -161,31 +153,31 @@ func renderStyledStatusLine(label string) string {
 		case strings.HasPrefix(trimmed, "ctx:"):
 			styled = append(styled, styleContextToken(trimmed))
 		case isReasoningLabel(trimmed):
-			styled = append(styled, replStyleWarn(trimmed))
+			styled = append(styled, oneshot.RenderThemedWarn(trimmed))
 		case i == 0:
-			styled = append(styled, replStyleModel(trimmed))
+			styled = append(styled, oneshot.RenderThemedModel(trimmed))
 		case looksLikePath(trimmed):
-			styled = append(styled, replStyleDim(trimmed))
+			styled = append(styled, oneshot.RenderThemedDim(trimmed))
 		default:
-			styled = append(styled, replStyleDim(trimmed))
+			styled = append(styled, oneshot.RenderThemedDim(trimmed))
 		}
 	}
 
-	return strings.Join(styled, replStyleDim(" · "))
+	return strings.Join(styled, oneshot.RenderThemedDim(" · "))
 }
 
 func styleContextToken(token string) string {
 	pct, ok := parseContextPercent(token)
 	if !ok {
-		return replStyleDim(token)
+		return oneshot.RenderThemedDim(token)
 	}
 	switch {
 	case pct >= 85:
-		return replStyleErr(token)
+		return oneshot.RenderThemedErr(token)
 	case pct >= 60:
-		return replStyleWarn(token)
+		return oneshot.RenderThemedWarn(token)
 	default:
-		return replStyleOK(token)
+		return oneshot.RenderThemedOK(token)
 	}
 }
 
@@ -540,32 +532,3 @@ func longestCommonPrefix(items []string) string {
 	}
 	return prefix
 }
-
-func isTerminalFD(file *os.File) bool {
-	if file == nil {
-		return false
-	}
-	return term.IsTerminal(int(file.Fd()))
-}
-
-func replSupportsColor() bool {
-	if os.Getenv("NO_COLOR") != "" {
-		return false
-	}
-	return isTerminalFD(os.Stdout)
-}
-
-func replColor(style, text string) string {
-	if !replSupportsColor() {
-		return text
-	}
-	return style + text + replANSIReset
-}
-
-func replStyleDim(text string) string    { return replColor(replANSIDim, text) }
-func replStyleAccent(text string) string { return replColor(replANSIBold+replANSIBlue, text) }
-func replStyleModel(text string) string  { return replColor(replANSIBold+replANSIPurple, text) }
-func replStyleWarn(text string) string   { return replColor(replANSIBold+replANSIAmber, text) }
-func replStyleOK(text string) string     { return replColor(replANSIBold+replANSIGreen, text) }
-func replStyleErr(text string) string    { return replColor(replANSIBold+replANSIRed, text) }
-func replStyleInfo(text string) string   { return replColor(replANSIBold+replANSIBlue, text) }

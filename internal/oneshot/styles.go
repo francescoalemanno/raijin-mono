@@ -59,3 +59,38 @@ func renderDimText(s string) string {
 func renderBoldText(s string) string {
 	return oneshotBoldStyle.Render(s)
 }
+
+// RenderThemedDim renders muted text using the shared adaptive theme.
+func RenderThemedDim(s string) string {
+	return oneshotDimStyle.Render(s)
+}
+
+// RenderThemedAccent renders accent text using the shared adaptive theme.
+func RenderThemedAccent(s string) string {
+	return oneshotInfoIconStyle.Render(s)
+}
+
+// RenderThemedModel renders provider/model text using the shared adaptive theme.
+func RenderThemedModel(s string) string {
+	return oneshotProviderStyle.Render(s)
+}
+
+// RenderThemedWarn renders warning text using the shared adaptive theme.
+func RenderThemedWarn(s string) string {
+	return oneshotWarnIconStyle.Render(s)
+}
+
+// RenderThemedOK renders success text using the shared adaptive theme.
+func RenderThemedOK(s string) string {
+	return oneshotOkIconStyle.Render(s)
+}
+
+// RenderThemedErr renders error text using the shared adaptive theme.
+func RenderThemedErr(s string) string {
+	return oneshotErrIconStyle.Render(s)
+}
+
+// RenderThemedInfo renders info text using the shared adaptive theme.
+func RenderThemedInfo(s string) string {
+	return oneshotInfoIconStyle.Render(s)
+}
