@@ -2,15 +2,33 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/francescoalemanno/raijin-mono/internal/vfs"
 	"github.com/francescoalemanno/raijin-mono/libagent"
 )
+
+func RenderWriteSingleLinePreview(toolCallParams string) string {
+	return renderSingleLineForTool("write", toolCallParams, renderWriteToolPreview)
+}
+
+func RenderWriteFinalRender(toolCallParams, _ string, toolResultMetadata string) string {
+	return renderDiffAwareFinal(RenderWriteSingleLinePreview, toolCallParams, toolResultMetadata)
+}
+
+func renderWriteToolPreview(name string, params map[string]any) string {
+	path := stringParam(params, "path")
+	content := stringParam(params, "content")
+	if path == "" {
+		return renderGenericPreview(name, params)
+	}
+	if content == "" {
+		return fmt.Sprintf("%s %s", name, path)
+	}
+	return fmt.Sprintf("%s %s (%d chars)", name, path, len(content))
+}
 
 // NewWriteTool creates a new tool for writing content to a file.
 func NewWriteTool() libagent.Tool {
@@ -60,25 +78,9 @@ func NewWriteTool() libagent.Tool {
 		return resp, nil
 	}
 
-	renderFunc := func(input json.RawMessage, _ string, _ int) string {
-		var params writeToolParams
-		if err := libagent.ParseJSONInput(input, &params); err != nil {
-			return "write file (failed)"
-		}
-		lines := strings.Count(params.Content, "\n") + 1
-		if params.Content == "" {
-			lines = 0
-		}
-		path := RenderPath(params.Path)
-		header := fmt.Sprintf("wrote %s (%d lines)", path, lines)
-		if params.Content == "" {
-			return header
-		}
-		return header + "\n" + renderCodePreview(params.Path, params.Content)
-	}
-
-	return WithRender(
+	return WrapTool(
 		libagent.NewParallelTypedTool("write", "Write content to a file. creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.", handler),
-		renderFunc,
+		RenderWriteSingleLinePreview,
+		RenderWriteFinalRender,
 	)
 }
