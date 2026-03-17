@@ -3,7 +3,6 @@ package oneshot
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -36,7 +35,7 @@ func TestRendererFinalToolStatusIncludesArgsFromExecutionStart(t *testing.T) {
 	})
 
 	last := lastNonEmptyLine(stderr.String())
-	if !strings.Contains(last, `{"path":"README.md"}`) {
+	if !strings.Contains(last, "README.md") {
 		t.Fatalf("expected final tool status to include args, got %q", last)
 	}
 }
@@ -70,7 +69,7 @@ func TestRendererFinalToolStatusIncludesArgsFromStreamedInput(t *testing.T) {
 	})
 
 	last := lastNonEmptyLine(stderr.String())
-	if !strings.Contains(last, `{"command":"echo hi"}`) {
+	if !strings.Contains(last, "echo hi") {
 		t.Fatalf("expected final tool status to include streamed args, got %q", last)
 	}
 }
@@ -259,15 +258,14 @@ func TestRendererUserMessageRendersWithPrefix(t *testing.T) {
 
 func TestRendererToolResultRendersDiffPreviewForEditLikeTools(t *testing.T) {
 	var stderr bytes.Buffer
-	renderableEdit := tools.WithRender(
+	editTool := tools.WrapTool(
 		libagent.NewParallelTypedTool("edit", "test", func(context.Context, map[string]any, libagent.ToolCall) (libagent.ToolResponse, error) {
 			return libagent.NewTextResponse("ok"), nil
 		}),
-		func(_ json.RawMessage, _ string, _ int) string {
-			return "edit ./PLAN.md"
-		},
+		tools.RenderEditSingleLinePreview,
+		tools.RenderEditFinalRender,
 	)
-	r := newRenderer(&stderr, &bytes.Buffer{}, []libagent.Tool{renderableEdit}, false)
+	r := newRenderer(&stderr, &bytes.Buffer{}, []libagent.Tool{editTool}, false)
 
 	r.handleEvent(libagent.AgentEvent{
 		Type:  libagent.AgentEventTypeMessageUpdate,
@@ -291,18 +289,10 @@ func TestRendererToolResultRendersDiffPreviewForEditLikeTools(t *testing.T) {
 
 func TestRendererToolResultSkipsLargeOutputPreviewForNonEditTools(t *testing.T) {
 	var stderr bytes.Buffer
-	renderableBash := tools.WithRender(
-		libagent.NewParallelTypedTool("bash", "test", func(context.Context, map[string]any, libagent.ToolCall) (libagent.ToolResponse, error) {
-			return libagent.NewTextResponse("ok"), nil
-		}),
-		func(_ json.RawMessage, output string, _ int) string {
-			if output == "" {
-				return "$ echo hi"
-			}
-			return "$ echo hi\nshould-not-be-rendered"
-		},
-	)
-	r := newRenderer(&stderr, &bytes.Buffer{}, []libagent.Tool{renderableBash}, false)
+	bashTool := libagent.NewParallelTypedTool("bash", "test", func(context.Context, map[string]any, libagent.ToolCall) (libagent.ToolResponse, error) {
+		return libagent.NewTextResponse("ok"), nil
+	})
+	r := newRenderer(&stderr, &bytes.Buffer{}, []libagent.Tool{bashTool}, false)
 
 	r.handleEvent(libagent.AgentEvent{
 		Type:  libagent.AgentEventTypeMessageUpdate,
