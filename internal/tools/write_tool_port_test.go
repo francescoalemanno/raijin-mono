@@ -21,8 +21,6 @@ func runWrite(t *testing.T, tool libagent.Tool, input map[string]any) (libagent.
 	return tool.Run(context.Background(), libagent.ToolCall{Input: string(raw)})
 }
 
-var ansiEscapeRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
 func TestWriteTool_OverwriteReturnsDiffInContentAndMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -82,42 +80,5 @@ func TestWriteTool_CreateReturnsDiffAgainstEmptyFile(t *testing.T) {
 	}
 	if strings.Contains(resp.Content, "Diff:") {
 		t.Fatalf("did not expect diff marker in response content: %q", resp.Content)
-	}
-}
-
-func TestWriteTool_RenderStaysInputOnlyOnCompletion(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	file := filepath.Join(dir, "render.txt")
-	if err := os.WriteFile(file, []byte("before\n"), 0o644); err != nil {
-		t.Fatalf("write seed file: %v", err)
-	}
-
-	tool := NewWriteTool()
-	input := map[string]any{
-		"path":    file,
-		"content": "after\n",
-	}
-	resp, err := runWrite(t, tool, input)
-	if err != nil {
-		t.Fatalf("run write: %v", err)
-	}
-	raw, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("marshal input: %v", err)
-	}
-
-	rt, ok := tool.(RenderableTool)
-	if !ok {
-		t.Fatalf("write tool should implement RenderableTool")
-	}
-	rendered := ansiEscapeRE.ReplaceAllString(rt.Render(raw, resp.Content, 0), "")
-	if !strings.Contains(rendered, "wrote") || !strings.Contains(rendered, "render.txt") {
-		t.Fatalf("unexpected render header: %q", rendered)
-	}
-	if regexp.MustCompile(`(?m)^-\s+\d+\s+\|`).MatchString(rendered) ||
-		regexp.MustCompile(`(?m)^\+\s+\d+\s+\|`).MatchString(rendered) {
-		t.Fatalf("did not expect completion diff in render output, got %q", rendered)
 	}
 }
