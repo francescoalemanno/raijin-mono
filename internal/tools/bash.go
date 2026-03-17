@@ -3,7 +3,6 @@ package tools
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +22,23 @@ type bashParams struct {
 type bashToolDetails struct {
 	Truncation     *TruncationResult `json:"truncation,omitempty"`
 	FullOutputPath string            `json:"fullOutputPath,omitempty"`
+}
+
+func RenderBashSingleLinePreview(toolCallParams string) string {
+	return renderSingleLineForTool("bash", toolCallParams, renderBashToolPreview)
+}
+
+func renderBashToolPreview(name string, params map[string]any) string {
+	command := stringParam(params, "command")
+	timeout := intParam(params, "timeout")
+	if command == "" {
+		return renderGenericPreview(name, params)
+	}
+	commandPreview := truncateForPreview(strings.TrimSpace(command), 72)
+	if timeout > 0 {
+		return fmt.Sprintf("%s %s (timeout=%ds)", name, commandPreview, timeout)
+	}
+	return fmt.Sprintf("%s %s", name, commandPreview)
 }
 
 // NewBashTool creates a bash tool with optional path registry for extra PATH directories.
@@ -149,25 +165,14 @@ func NewBashTool(paths *PathRegistry) libagent.Tool {
 		return resp, nil
 	}
 
-	renderFunc := func(input json.RawMessage, output string, _ int) string {
-		var params bashParams
-		if err := libagent.ParseJSONInput(input, &params); err != nil {
-			return "bash (failed)"
-		}
-		header := fmt.Sprintf("$ %s", params.Command)
-		if output == "" {
-			return header
-		}
-		return header + "\n" + output
-	}
-
-	return WithRender(
+	return WrapTool(
 		libagent.NewParallelTypedTool("bash", fmt.Sprintf(
 			"Execute non-interactive bash scripts in the current working directory. Returns stdout and stderr. Output is truncated to last %d lines or %dKB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
 			DefaultMaxLines,
 			DefaultMaxBytes/1024,
 		), handler),
-		renderFunc,
+		RenderBashSingleLinePreview,
+		nil,
 	)
 }
 
