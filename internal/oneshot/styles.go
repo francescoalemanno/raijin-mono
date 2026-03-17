@@ -18,7 +18,6 @@ var (
 	oneshotNormalStyle   = adaptiveStyle("0", "7")
 	oneshotProviderStyle = adaptiveStyle("5", "13").Bold(true)
 	oneshotDimStyle      = lipgloss.NewStyle().Faint(true)
-	oneshotBoldStyle     = lipgloss.NewStyle().Bold(true)
 
 	oneshotUserPrefixStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "2", Dark: "10"}).Bold(true)
 	oneshotInfoIconStyle   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "4", Dark: "12"}).Bold(true)
@@ -54,10 +53,6 @@ func renderStatusTimestamp(ts string) string {
 
 func renderDimText(s string) string {
 	return oneshotDimStyle.Render(s)
-}
-
-func renderBoldText(s string) string {
-	return oneshotBoldStyle.Render(s)
 }
 
 // RenderThemedDim renders muted text using the shared adaptive theme.
