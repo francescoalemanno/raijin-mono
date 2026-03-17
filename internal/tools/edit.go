@@ -20,6 +20,72 @@ type editParams struct {
 	NewText string `json:"newText" description:"New text to replace the old text with"`
 }
 
+func RenderEditSingleLinePreview(toolCallParams string) string {
+	return renderSingleLineForTool("edit", toolCallParams, renderEditToolPreview)
+}
+
+func RenderEditFinalRender(toolCallParams, _ string, toolResultMetadata string) string {
+	return renderDiffAwareFinal(RenderEditSingleLinePreview, toolCallParams, toolResultMetadata)
+}
+
+func renderEditToolPreview(name string, params map[string]any) string {
+	path := stringParam(params, "path")
+	oldText := stringParam(params, "oldText")
+	newText := stringParam(params, "newText")
+	switch {
+	case path != "" && (oldText != "" || newText != ""):
+		return fmt.Sprintf("%s %s (%d→%d chars)", name, path, len(oldText), len(newText))
+	case path != "":
+		return fmt.Sprintf("%s %s", name, path)
+	default:
+		return renderGenericPreview(name, params)
+	}
+}
+
+func renderDiffAwareFinal(
+	singleLinePreview func(toolCallParams string) string,
+	toolCallParams string,
+	toolResultMetadata string,
+) string {
+	preview := singleLinePreview(toolCallParams)
+	if diff := diffFromToolMetadata(toolResultMetadata); diff != "" {
+		return preview + "\n" + renderToolDiffText(diff)
+	}
+	return preview
+}
+
+func diffFromToolMetadata(metadata string) string {
+	if strings.TrimSpace(metadata) == "" {
+		return ""
+	}
+	var details EditToolDetails
+	if err := json.Unmarshal([]byte(metadata), &details); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(details.Diff)
+}
+
+func renderToolDiffText(diff string) string {
+	if strings.TrimSpace(diff) == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	for line := range strings.SplitSeq(diff, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+"):
+			b.WriteString(diffAddedStyle.Render(line))
+		case strings.HasPrefix(line, "-"):
+			b.WriteString(diffRemovedStyle.Render(line))
+		default:
+			b.WriteString(diffContextStyle.Render(line))
+		}
+		b.WriteByte('\n')
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // NewEditTool creates an edit tool.
 func NewEditTool() libagent.Tool {
 	cwd, err := os.Getwd()
@@ -98,20 +164,9 @@ func createEditTool(cwd string) libagent.Tool {
 		return resp, nil
 	}
 
-	renderFunc := func(input json.RawMessage, _ string, _ int) string {
-		var params editParams
-		if err := libagent.ParseJSONInput(input, &params); err != nil {
-			return "edit (failed)"
-		}
-		header := fmt.Sprintf("edit %s", RenderPath(params.Path))
-		if params.OldText == "" && params.NewText == "" {
-			return header
-		}
-		return header
-	}
-
-	return WithRender(
+	return WrapTool(
 		libagent.NewParallelTypedTool("edit", editDescription, handler),
-		renderFunc,
+		RenderEditSingleLinePreview,
+		RenderEditFinalRender,
 	)
 }
