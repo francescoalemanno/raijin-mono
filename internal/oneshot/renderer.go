@@ -1,7 +1,6 @@
 package oneshot
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -23,7 +22,7 @@ type pendingLine struct {
 	id        string
 	toolName  string
 	label     string
-	args      json.RawMessage
+	args      string
 	rawInput  strings.Builder
 	startTime time.Time
 	ended     bool
@@ -138,9 +137,9 @@ func (r *renderer) onMessageUpdate(event libagent.AgentEvent) {
 func (r *renderer) onToolStart(id, name, input string) {
 	if p, ok := r.pending[id]; ok {
 		if strings.TrimSpace(input) != "" {
-			p.args = json.RawMessage(input)
+			p.args = input
 		}
-		p.label = r.renderToolLabel(p.toolName, r.bestArgs(p))
+		r.updatePendingLabel(p)
 		return
 	}
 	r.flushThinking()
@@ -150,9 +149,9 @@ func (r *renderer) onToolStart(id, name, input string) {
 		startTime: time.Now(),
 	}
 	if strings.TrimSpace(input) != "" {
-		p.args = json.RawMessage(input)
+		p.args = input
 	}
-	p.label = r.renderToolLabel(name, r.bestArgs(p))
+	p.label = r.renderToolLabel(name, r.bestParams(p))
 	r.pending[id] = p
 	r.emitPending(renderStatusInfo("●"), p.label)
 }
@@ -160,9 +159,9 @@ func (r *renderer) onToolStart(id, name, input string) {
 func (r *renderer) onToolUpdate(id, name, input string) {
 	if p, ok := r.pending[id]; ok {
 		if strings.TrimSpace(input) != "" {
-			p.args = json.RawMessage(input)
+			p.args = input
 		}
-		p.label = r.renderToolLabel(p.toolName, r.bestArgs(p))
+		r.updatePendingLabel(p)
 		return
 	}
 	if strings.TrimSpace(id) == "" {
@@ -172,13 +171,9 @@ func (r *renderer) onToolUpdate(id, name, input string) {
 }
 
 func (r *renderer) onToolInputDelta(id, delta string) {
-	// Update label but don't re-render every delta to avoid flicker
 	if p, ok := r.pending[id]; ok {
 		p.rawInput.WriteString(delta)
-		// Prefer complete args from execution-start if present.
-		if len(p.args) == 0 {
-			p.label = r.renderToolLabel(p.toolName, r.bestArgs(p))
-		}
+		r.updatePendingLabel(p)
 	}
 }
 
@@ -195,9 +190,9 @@ func (r *renderer) onToolEnd(id, name, input, output string, isError bool) {
 		}
 	}
 	if strings.TrimSpace(input) != "" {
-		p.args = json.RawMessage(input)
+		p.args = input
 	}
-	p.label = r.renderToolLabel(p.toolName, r.bestArgs(p))
+	p.label = r.renderToolLabel(p.toolName, r.bestParams(p))
 	p.ended = true
 	p.endResult = output
 	p.endError = isError
@@ -211,7 +206,7 @@ func (r *renderer) onMessageEnd(event libagent.AgentEvent) {
 		r.renderUserMessage(m)
 	case *libagent.ToolResultMessage:
 		if p, ok := r.pending[m.ToolCallID]; ok {
-			label := r.renderToolLabelForResult(p.toolName, r.bestArgs(p), m.Content, m.Metadata)
+			label := r.renderToolLabelForResult(p.toolName, r.bestParams(p), m.Content, m.Metadata)
 			dur := time.Since(p.startTime)
 			suffix := fmt.Sprintf(" (%s)", formatDuration(dur))
 			if m.IsError {
@@ -257,22 +252,14 @@ func (r *renderer) renderUserMessage(m *libagent.UserMessage) {
 	}
 }
 
-func (r *renderer) bestArgs(p *pendingLine) json.RawMessage {
+func (r *renderer) bestParams(p *pendingLine) string {
 	if p == nil {
-		return nil
+		return ""
 	}
-	if len(p.args) > 0 && json.Valid(p.args) {
+	if strings.TrimSpace(p.args) != "" {
 		return p.args
 	}
-	raw := strings.TrimSpace(p.rawInput.String())
-	if raw == "" {
-		return nil
-	}
-	rawArgs := json.RawMessage(raw)
-	if !json.Valid(rawArgs) {
-		return nil
-	}
-	return rawArgs
+	return p.rawInput.String()
 }
 
 func (r *renderer) startThinking() {
@@ -313,7 +300,7 @@ func (r *renderer) flushCompletedTools() {
 		if !p.ended {
 			continue
 		}
-		label := r.renderToolLabelForResult(p.toolName, r.bestArgs(p), p.endResult, "")
+		label := r.renderToolLabelForResult(p.toolName, r.bestParams(p), p.endResult, "")
 		dur := time.Since(p.startTime)
 		suffix := fmt.Sprintf(" (%s)", formatDuration(dur))
 		if p.endError {
@@ -500,74 +487,37 @@ func (r *renderer) closePendingInlineForStdout() {
 	r.pendingWidth = 0
 }
 
-func (r *renderer) renderToolLabel(name string, args json.RawMessage) string {
-	return r.renderToolLabelWithOutput(name, args, "", "")
+func (r *renderer) renderToolLabel(name, params string) string {
+	return r.renderToolLabelWithOutput(name, params, "", "")
 }
 
-func (r *renderer) renderToolLabelForResult(name string, args json.RawMessage, output, metadata string) string {
-	return r.renderToolLabelWithOutput(name, args, output, metadata)
+func (r *renderer) renderToolLabelForResult(name, params, output, metadata string) string {
+	return r.renderToolLabelWithOutput(name, params, output, metadata)
 }
 
-func (r *renderer) renderToolLabelWithOutput(name string, args json.RawMessage, output, metadata string) string {
-	includeOutput := shouldIncludeToolResultPreview(name)
-	renderOutput := ""
-	if includeOutput {
-		renderOutput = output
-	}
-
+func (r *renderer) renderToolLabelWithOutput(name, params, output, metadata string) string {
 	tool := tools.FindTool(r.tools, name)
-	if tool == nil {
-		label := renderBoldText(name) + r.compactArgs(args)
-		if includeOutput {
-			if diff := tools.DiffFromMetadata(metadata); diff != "" {
-				return label + "\n" + tools.RenderDiffText(diff)
-			}
+	if wrapped, ok := tool.(tools.WrappedTool); ok {
+		if strings.TrimSpace(output) == "" && strings.TrimSpace(metadata) == "" {
+			return wrapped.SingleLinePreview(params)
 		}
-		return label
+		return wrapped.FinalRender(params, output, metadata)
 	}
-	argsForRender := args
-	if len(argsForRender) == 0 {
-		argsForRender = json.RawMessage("{}")
-	}
-	if rt, ok := tool.(tools.RenderableTool); ok && json.Valid(argsForRender) {
-		rendered := rt.Render(argsForRender, renderOutput, 0)
-		if first, rest, hasRest := strings.Cut(rendered, "\n"); strings.TrimSpace(first) != "" {
-			label := renderBoldText(first)
-			if includeOutput {
-				if diff := tools.DiffFromMetadata(metadata); diff != "" {
-					return label + "\n" + tools.RenderDiffText(diff)
-				}
-			}
-			if includeOutput && hasRest {
-				body := strings.TrimSpace(rest)
-				if body != "" {
-					return label + "\n" + body
-				}
-			}
-			return label
-		}
-	}
-	return renderBoldText(name) + r.compactArgs(args)
+	return tools.RenderGenericSingleLinePreview(name, params)
 }
 
-func shouldIncludeToolResultPreview(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "edit", "write", "create":
-		return true
-	default:
-		return false
+func (r *renderer) updatePendingLabel(p *pendingLine) {
+	if p == nil {
+		return
 	}
-}
-
-func (r *renderer) compactArgs(args json.RawMessage) string {
-	if len(args) == 0 || !json.Valid(args) {
-		return ""
+	next := r.renderToolLabel(p.toolName, r.bestParams(p))
+	if next == p.label {
+		return
 	}
-	s := string(args)
-	if len(s) > 80 {
-		s = s[:77] + "..."
+	p.label = next
+	if r.isTTY {
+		r.emitPending(renderStatusInfo("●"), p.label)
 	}
-	return renderDimText(" " + s)
 }
 
 func formatDuration(d time.Duration) string {
