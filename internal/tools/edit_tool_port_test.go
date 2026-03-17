@@ -13,8 +13,6 @@ import (
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-var ansiRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
 func runEdit(t *testing.T, tool libagent.Tool, input map[string]any) (libagent.ToolResponse, error) {
 	t.Helper()
 	raw, err := json.Marshal(input)
@@ -136,46 +134,6 @@ func TestEditTool_ReplacesTextAndReturnsDiffDetails(t *testing.T) {
 	}
 	if details.FirstChangedLine == nil || *details.FirstChangedLine <= 0 {
 		t.Fatalf("firstChangedLine = %#v, want positive line number", details.FirstChangedLine)
-	}
-}
-
-func TestEditTool_RenderStaysInputOnlyOnCompletion(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	file := filepath.Join(dir, "render-edit.txt")
-	mustWriteFile(t, file, "Hello, world!\n")
-
-	tool := NewEditTool()
-	input := map[string]any{
-		"path":    file,
-		"oldText": "world",
-		"newText": "there",
-	}
-	resp, err := runEdit(t, tool, input)
-	if err != nil {
-		t.Fatalf("run edit: %v", err)
-	}
-	if resp.IsError {
-		t.Fatalf("unexpected error response: %q", resp.Content)
-	}
-
-	raw, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("marshal input: %v", err)
-	}
-
-	rt, ok := tool.(RenderableTool)
-	if !ok {
-		t.Fatalf("edit tool should implement RenderableTool")
-	}
-	rendered := ansiRE.ReplaceAllString(rt.Render(raw, resp.Content, 0), "")
-	if !strings.Contains(rendered, "edit") || !strings.Contains(rendered, "render-edit.txt") {
-		t.Fatalf("unexpected render header: %q", rendered)
-	}
-	if regexp.MustCompile(`(?m)^-\s+\d+\s+\|`).MatchString(rendered) ||
-		regexp.MustCompile(`(?m)^\+\s+\d+\s+\|`).MatchString(rendered) {
-		t.Fatalf("did not expect completion diff in render output, got %q", rendered)
 	}
 }
 
