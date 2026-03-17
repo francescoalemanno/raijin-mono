@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"github.com/francescoalemanno/raijin-mono/internal/shellinit"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -21,7 +23,7 @@ import (
 
 const (
 	replPrompt             = "raijin❯ "
-	replContinuationPrompt = "    ...❯ "
+	replContinuationPrompt = "   ...❯ "
 	replPickerModeComplete = "complete"
 	replPickerModeMention  = "mention"
 )
@@ -65,9 +67,7 @@ type replModel struct {
 	status       string
 	statusLoaded bool
 
-	pendingLines []string
-	buf          []rune
-	cursor       int
+	editor textarea.Model
 
 	history       []string
 	historyIndex  int
@@ -80,6 +80,30 @@ type replPickerExec struct {
 	query      string
 	candidates []string
 	selected   string
+}
+
+func newREPLEditor() textarea.Model {
+	editor := textarea.New()
+	editor.ShowLineNumbers = false
+	editor.Prompt = ""
+	editor.Placeholder = ""
+	editor.EndOfBufferCharacter = ' '
+	editor.SetVirtualCursor(true)
+	editor.SetHeight(1)
+	editor.KeyMap.WordBackward = key.NewBinding(
+		key.WithKeys("alt+left", "ctrl+left", "alt+b"),
+		key.WithHelp("alt+left", "word backward"),
+	)
+	editor.KeyMap.WordForward = key.NewBinding(
+		key.WithKeys("alt+right", "ctrl+right", "alt+f"),
+		key.WithHelp("alt+right", "word forward"),
+	)
+	editor.KeyMap.InsertNewline = key.NewBinding(
+		key.WithKeys("alt+enter", "ctrl+j"),
+		key.WithHelp("alt+enter", "newline"),
+	)
+	editor.Focus()
+	return editor
 }
 
 func RunSubprocessREPL(baseArgs []string) error {
@@ -98,6 +122,7 @@ func RunSubprocessREPL(baseArgs []string) error {
 		baseArgs:     append([]string(nil), baseArgs...),
 		status:       initialStatus,
 		statusLoaded: true,
+		editor:       newREPLEditor(),
 		historyIndex: -1,
 	}
 	p := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
@@ -113,6 +138,7 @@ func (m replModel) Init() tea.Cmd {
 }
 
 func (m replModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.ensureEditor()
 	switch msg := msg.(type) {
 	case replStatusMsg:
 		m.status = msg.label
@@ -128,83 +154,86 @@ func (m replModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err != nil {
 			return m, tea.Println(RenderThemedErr(libagent.FormatErrorForCLI(err)))
 		}
-		m.setBufferString(line, utf8.RuneCountInString(line))
+		m.resetHistoryNav()
+		m.setEditorState(line, runePosForByteOffset(line, replPickerCursorBytePos(msg.req, msg.selected)))
+		return m, nil
 	case tea.PasteMsg:
-		m.insertText(msg.Content)
+		return m, m.updateEditor(msg)
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
-			m.pendingLines = nil
-			m.buf = nil
-			m.cursor = 0
+			m.editor.Reset()
 			m.resetHistoryNav()
+			return m, nil
 		case "ctrl+d":
-			if len(m.pendingLines) == 0 && len(m.buf) == 0 {
+			if m.editor.Value() == "" {
 				return m, tea.Quit
 			}
-			m.deleteForward()
+			return m, m.updateEditor(msg)
 		case "tab":
 			return m.handleTab()
 		case "enter":
 			return m.submit()
-		case "backspace", "ctrl+h":
-			m.deleteBackward()
-		case "delete":
-			m.deleteForward()
-		case "left":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "right":
-			if m.cursor < len(m.buf) {
-				m.cursor++
-			}
-		case "home", "ctrl+a":
-			m.cursor = 0
-		case "end", "ctrl+e":
-			m.cursor = len(m.buf)
 		case "up":
 			m.historyPrev()
+			return m, nil
 		case "down":
 			m.historyNext()
-		default:
-			if text := msg.Key().Text; text != "" {
-				m.insertText(text)
-			}
+			return m, nil
 		}
+		switch {
+		case key.Matches(msg, replInputBeginBinding()):
+			m.editor.MoveToBegin()
+			return m, nil
+		case key.Matches(msg, replInputEndBinding()):
+			m.editor.MoveToEnd()
+			return m, nil
+		}
+		return m, m.updateEditor(msg)
 	}
 	return m, nil
 }
 
 func (m replModel) View() tea.View {
+	m.ensureEditor()
 	var b strings.Builder
-
-	for _, line := range m.pendingLines {
-		b.WriteString(replContinuationPrompt)
-		b.WriteString(line)
-		b.WriteByte('\n')
+	lines := strings.Split(m.editor.Value(), "\n")
+	if len(lines) == 0 {
+		lines = []string{""}
 	}
-
-	prompt := replPrompt
-	if len(m.pendingLines) > 0 {
-		prompt = replContinuationPrompt
+	cursorLine := m.editor.Line()
+	cursorColumn := m.editor.Column()
+	for i, line := range lines {
+		prompt := replContinuationPrompt
+		if i == 0 {
+			prompt = replPrompt
+		}
+		b.WriteString(prompt)
+		if i == cursorLine {
+			b.WriteString(renderBufferWithCursor([]rune(line), cursorColumn))
+		} else {
+			b.WriteString(line)
+		}
+		if i < len(lines)-1 {
+			b.WriteByte('\n')
+		}
 	}
-	b.WriteString(prompt)
-	b.WriteString(renderBufferWithCursor(m.buf, m.cursor))
 
 	return tea.NewView(b.String())
 }
 
 func (m *replModel) handleTab() (tea.Model, tea.Cmd) {
-	line := string(m.buf)
-	bytePos := byteOffsetForRunePos(line, m.cursor)
+	m.ensureEditor()
+	line := m.editor.Value()
+	bytePos := byteOffsetForRunePos(line, m.editorRunePos())
 	newLine, newBytePos, req, ok := replBuildPickerRequest(line, bytePos)
 	if !ok {
 		return *m, nil
 	}
 	if req == nil {
 		if newLine != line {
-			m.setBufferString(newLine, runePosForByteOffset(newLine, newBytePos))
+			m.resetHistoryNav()
+			m.setEditorState(newLine, runePosForByteOffset(newLine, newBytePos))
 		}
 		return *m, nil
 	}
@@ -212,20 +241,17 @@ func (m *replModel) handleTab() (tea.Model, tea.Cmd) {
 }
 
 func (m *replModel) submit() (tea.Model, tea.Cmd) {
-	line := string(m.buf)
+	m.ensureEditor()
+	line := m.editor.Value()
 	if continuation, ok := replMultilineContinuation(line); ok {
-		m.pendingLines = append(m.pendingLines, continuation)
-		m.buf = nil
-		m.cursor = 0
+		next := continuation + "\n"
+		m.setEditorState(next, utf8.RuneCountInString(next))
 		m.resetHistoryNav()
 		return *m, nil
 	}
 
-	lines := append(append([]string(nil), m.pendingLines...), line)
-	prompt := strings.TrimSpace(strings.Join(lines, "\n"))
-	m.pendingLines = nil
-	m.buf = nil
-	m.cursor = 0
+	prompt := strings.TrimSpace(line)
+	m.editor.Reset()
 	m.resetHistoryNav()
 
 	if prompt == "" {
@@ -243,43 +269,24 @@ func (m *replModel) submit() (tea.Model, tea.Cmd) {
 	return *m, cmd
 }
 
-func (m *replModel) insertText(s string) {
-	if s == "" {
-		return
+func (m *replModel) updateEditor(msg tea.Msg) tea.Cmd {
+	m.ensureEditor()
+	before := m.editor.Value()
+	var cmd tea.Cmd
+	m.editor, cmd = m.editor.Update(msg)
+	if m.editor.Value() != before {
+		m.resetHistoryNav()
 	}
-	runes := []rune(s)
-	buf := make([]rune, 0, len(m.buf)+len(runes))
-	buf = append(buf, m.buf[:m.cursor]...)
-	buf = append(buf, runes...)
-	buf = append(buf, m.buf[m.cursor:]...)
-	m.buf = buf
-	m.cursor += len(runes)
-	m.resetHistoryNav()
-}
-
-func (m *replModel) deleteBackward() {
-	if m.cursor == 0 {
-		return
-	}
-	m.buf = append(m.buf[:m.cursor-1], m.buf[m.cursor:]...)
-	m.cursor--
-	m.resetHistoryNav()
-}
-
-func (m *replModel) deleteForward() {
-	if m.cursor >= len(m.buf) {
-		return
-	}
-	m.buf = append(m.buf[:m.cursor], m.buf[m.cursor+1:]...)
-	m.resetHistoryNav()
+	return cmd
 }
 
 func (m *replModel) historyPrev() {
+	m.ensureEditor()
 	if len(m.history) == 0 {
 		return
 	}
 	if !m.historyActive {
-		m.historyDraft = string(m.buf)
+		m.historyDraft = m.editor.Value()
 		m.historyIndex = len(m.history)
 		m.historyActive = true
 	}
@@ -287,10 +294,11 @@ func (m *replModel) historyPrev() {
 		return
 	}
 	m.historyIndex--
-	m.setBufferString(m.history[m.historyIndex], utf8.RuneCountInString(m.history[m.historyIndex]))
+	m.setEditorState(m.history[m.historyIndex], utf8.RuneCountInString(m.history[m.historyIndex]))
 }
 
 func (m *replModel) historyNext() {
+	m.ensureEditor()
 	if !m.historyActive {
 		return
 	}
@@ -299,11 +307,11 @@ func (m *replModel) historyNext() {
 		draft := m.historyDraft
 		m.historyDraft = ""
 		m.historyActive = false
-		m.setBufferString(draft, utf8.RuneCountInString(draft))
+		m.setEditorState(draft, utf8.RuneCountInString(draft))
 		return
 	}
 	m.historyIndex++
-	m.setBufferString(m.history[m.historyIndex], utf8.RuneCountInString(m.history[m.historyIndex]))
+	m.setEditorState(m.history[m.historyIndex], utf8.RuneCountInString(m.history[m.historyIndex]))
 }
 
 func (m *replModel) resetHistoryNav() {
@@ -315,9 +323,81 @@ func (m *replModel) resetHistoryNav() {
 	m.historyActive = false
 }
 
-func (m *replModel) setBufferString(line string, cursorRunes int) {
-	m.buf = []rune(line)
-	m.cursor = max(0, min(cursorRunes, len(m.buf)))
+func (m *replModel) setEditorState(line string, cursorRunes int) {
+	m.ensureEditor()
+	m.editor.SetValue(line)
+	m.editor.MoveToBegin()
+	targetLine, targetCol := replLineColumnForRunePos(line, cursorRunes)
+	for m.editor.Line() < targetLine {
+		m.editor.CursorDown()
+	}
+	m.editor.SetCursorColumn(targetCol)
+}
+
+func (m replModel) editorRunePos() int {
+	return replRunePosForLineColumn(m.editor.Value(), m.editor.Line(), m.editor.Column())
+}
+
+func (m *replModel) ensureEditor() {
+	if m.editor.LineCount() > 0 {
+		return
+	}
+	m.editor = newREPLEditor()
+}
+
+func replInputBeginBinding() key.Binding {
+	return key.NewBinding(key.WithKeys("super+left"))
+}
+
+func replInputEndBinding() key.Binding {
+	return key.NewBinding(key.WithKeys("super+right"))
+}
+
+func replPickerCursorBytePos(req *replPickerRequest, selected string) int {
+	if req == nil {
+		return 0
+	}
+	replacement := selected
+	if req.mode == replPickerModeMention {
+		replacement = replFormatMention(selected)
+	}
+	return req.tokenStart + len(replacement)
+}
+
+func replRunePosForLineColumn(value string, line, col int) int {
+	lines := strings.Split(value, "\n")
+	if len(lines) == 0 {
+		return 0
+	}
+	line = max(0, min(line, len(lines)-1))
+	pos := 0
+	for i := 0; i < line; i++ {
+		pos += len([]rune(lines[i])) + 1
+	}
+	return pos + max(0, min(col, len([]rune(lines[line]))))
+}
+
+func replLineColumnForRunePos(value string, runePos int) (line, col int) {
+	lines := strings.Split(value, "\n")
+	if len(lines) == 0 {
+		return 0, 0
+	}
+	remaining := max(0, runePos)
+	for i, lineText := range lines {
+		lineLen := len([]rune(lineText))
+		if remaining <= lineLen {
+			return i, remaining
+		}
+		remaining -= lineLen
+		if i < len(lines)-1 {
+			if remaining == 0 {
+				return i + 1, 0
+			}
+			remaining--
+		}
+	}
+	last := len(lines) - 1
+	return last, len([]rune(lines[last]))
 }
 
 func replPromptExecCmd(baseArgs []string, prompt string) (tea.Cmd, error) {
