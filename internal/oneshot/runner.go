@@ -23,6 +23,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/session"
+	"github.com/francescoalemanno/raijin-mono/internal/skills"
 	"github.com/francescoalemanno/raijin-mono/internal/substitution"
 )
 
@@ -143,8 +144,7 @@ func handleBuiltin(opts Options, resolved resolvedPrompt, forceNew bool) error {
 	cmd := resolved.builtin
 	switch {
 	case cmd.name == "help":
-		fmt.Print(commands.HelpText())
-		return nil
+		return handleHelp()
 
 	case cmd.name == "exit":
 		return nil
@@ -300,11 +300,24 @@ func handleNew(opts Options) error {
 	return nil
 }
 
+func handleHelp() error {
+	var b strings.Builder
+	b.WriteString(commands.HelpText())
+	b.WriteString(renderTemplates())
+	b.WriteString(renderSkills())
+	fmt.Print(b.String())
+	return nil
+}
+
 func handleTemplates() error {
+	fmt.Print(renderTemplates())
+	return nil
+}
+
+func renderTemplates() string {
 	templates := prompts.GetTemplates()
 	if len(templates) == 0 {
-		fmt.Println("No prompt templates loaded")
-		return nil
+		return "No prompt templates loaded\n"
 	}
 	var b strings.Builder
 	b.WriteString("Prompt templates:\n")
@@ -315,8 +328,24 @@ func handleTemplates() error {
 		}
 		fmt.Fprintf(&b, "  /%-18s %s [%s]\n", tmpl.Name, desc, tmpl.Source)
 	}
-	fmt.Print(b.String())
-	return nil
+	return b.String()
+}
+
+func renderSkills() string {
+	skillsList := skills.GetSkills()
+	if len(skillsList) == 0 {
+		return "No skills loaded\n"
+	}
+	var b strings.Builder
+	b.WriteString("\nSkills:\n")
+	for _, skill := range skillsList {
+		desc := strings.TrimSpace(skill.Description)
+		if desc == "" {
+			desc = "(no description)"
+		}
+		fmt.Fprintf(&b, "  +%-18s %s [%s]\n", skill.Name, desc, skill.Source)
+	}
+	return b.String()
 }
 
 func handleCompact(opts Options, instructions string, forceNew bool) error {

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -73,6 +74,36 @@ func TestRunStatusPrintsModelAndContextFill(t *testing.T) {
 	}
 	if !strings.Contains(out, "Context: 24.0%") {
 		t.Fatalf("expected context percentage in output, got %q", out)
+	}
+}
+
+func TestRunHelpIncludesPromptTemplates(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := artifacts.Reload(); err != nil {
+		t.Fatalf("artifacts.Reload: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := Run(Options{}, "/help"); err != nil {
+			t.Fatalf("Run(/help): %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "Commands:\n") {
+		t.Fatalf("expected commands section in /help output, got %q", out)
+	}
+	if !strings.Contains(out, "Prompt templates:\n") {
+		t.Fatalf("expected templates section in /help output, got %q", out)
+	}
+	if !strings.Contains(out, "/init") {
+		t.Fatalf("expected embedded /init template in /help output, got %q", out)
+	}
+	if !strings.Contains(out, "Skills:\n") {
+		t.Fatalf("expected skills section in /help output, got %q", out)
+	}
+	if !strings.Contains(out, "+commit") {
+		t.Fatalf("expected embedded +commit skill in /help output, got %q", out)
 	}
 }
 
