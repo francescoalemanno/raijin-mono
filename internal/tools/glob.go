@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -29,6 +28,30 @@ type globParams struct {
 type globToolDetails struct {
 	Truncation         *TruncationResult `json:"truncation,omitempty"`
 	ResultLimitReached *int              `json:"resultLimitReached,omitempty"`
+}
+
+func RenderGlobSingleLinePreview(toolCallParams string) string {
+	return renderSingleLineForTool("glob", toolCallParams, renderGlobToolPreview)
+}
+
+func renderGlobToolPreview(name string, params map[string]any) string {
+	pattern := stringParam(params, "pattern")
+	path := stringParam(params, "path")
+	limit := intParam(params, "limit")
+	switch {
+	case pattern != "" && path != "":
+		if limit > 0 {
+			return fmt.Sprintf("%s %s in %s (limit=%d)", name, quoteIfNeeded(pattern), path, limit)
+		}
+		return fmt.Sprintf("%s %s in %s", name, quoteIfNeeded(pattern), path)
+	case pattern != "":
+		if limit > 0 {
+			return fmt.Sprintf("%s %s (limit=%d)", name, quoteIfNeeded(pattern), limit)
+		}
+		return fmt.Sprintf("%s %s", name, quoteIfNeeded(pattern))
+	default:
+		return renderGenericPreview(name, params)
+	}
 }
 
 // NewGlobTool creates a glob tool for finding files by pattern.
@@ -112,28 +135,10 @@ func NewGlobTool() libagent.Tool {
 		return resp, nil
 	}
 
-	renderFunc := func(input json.RawMessage, output string, _ int) string {
-		var params globParams
-		if err := libagent.ParseJSONInput(input, &params); err != nil {
-			return "glob (failed)"
-		}
-
-		header := fmt.Sprintf("glob %s", params.Pattern)
-		if params.Path != "" && params.Path != "." {
-			header += fmt.Sprintf(" in %s", RenderPath(params.Path))
-		}
-		if params.Limit > 0 {
-			header += fmt.Sprintf(" (limit=%d)", max(minGlobLimit, params.Limit))
-		}
-		if output == "" {
-			return header
-		}
-		return header + "\n" + output
-	}
-
-	return WithRender(
+	return WrapTool(
 		libagent.NewParallelTypedTool("glob", globDescription, handler),
-		renderFunc,
+		RenderGlobSingleLinePreview,
+		nil,
 	)
 }
 
