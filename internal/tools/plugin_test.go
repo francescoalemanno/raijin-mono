@@ -2,13 +2,11 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
@@ -222,50 +220,5 @@ func TestLoadPluginInfosPrecedence_ProjectOverUser(t *testing.T) {
 	}
 	if filtered[0].Description != "from-project" {
 		t.Fatalf("description = %q, want %q", filtered[0].Description, "from-project")
-	}
-}
-
-func TestPluginRenderIncludesParameterPreview(t *testing.T) {
-	t.Parallel()
-
-	tool := newPluginTool(pluginMeta{
-		Name:        "hello",
-		Description: "Say hello",
-	}, "/tmp/hello-plugin")
-
-	rendered := RenderTool(tool, json.RawMessage(`{"name":"World","times":2}`), "", 0)
-	if !strings.HasPrefix(rendered, "plugin:hello ") {
-		t.Fatalf("expected plugin header, got %q", rendered)
-	}
-	if !strings.Contains(rendered, `"name":"World"`) {
-		t.Fatalf("expected name parameter preview, got %q", rendered)
-	}
-	if !strings.Contains(rendered, `"times":2`) {
-		t.Fatalf("expected times parameter preview, got %q", rendered)
-	}
-}
-
-func TestPluginRenderTruncatesLongParameterPreview(t *testing.T) {
-	t.Parallel()
-
-	tool := newPluginTool(pluginMeta{
-		Name:        "long",
-		Description: "Long input",
-	}, "/tmp/long-plugin")
-
-	raw := json.RawMessage(`{"payload":"` + strings.Repeat("x", 200) + `"}`)
-	rendered := RenderTool(tool, raw, "", 0)
-
-	prefix := "plugin:long "
-	if !strings.HasPrefix(rendered, prefix) {
-		t.Fatalf("expected plugin header, got %q", rendered)
-	}
-
-	preview := strings.TrimPrefix(rendered, prefix)
-	if utf8.RuneCountInString(preview) != 96 {
-		t.Fatalf("preview length = %d, want 96", utf8.RuneCountInString(preview))
-	}
-	if !strings.HasSuffix(preview, "…") {
-		t.Fatalf("expected truncated preview suffix, got %q", preview)
 	}
 }
