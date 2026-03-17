@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openai"
 	"github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -674,6 +675,74 @@ func TestAgent_ReasoningOnlyStop_Errors(t *testing.T) {
 	require.ErrorContains(t, err, "returned no final response")
 }
 
+func TestAgent_PreservesReasoningProviderMetadataFromStream(t *testing.T) {
+	encrypted := "encrypted-signature"
+	model := newMockModel(func(_ int) fantasy.StreamResponse {
+		return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
+			md := fantasy.ProviderMetadata{
+				openai.Name: &openai.ResponsesReasoningMetadata{
+					ItemID:           "reasoning-item-1",
+					EncryptedContent: &encrypted,
+					Summary:          []string{"summary"},
+				},
+			}
+			if !yield(fantasy.StreamPart{
+				Type:             fantasy.StreamPartTypeReasoningStart,
+				ID:               "r1",
+				ProviderMetadata: md,
+			}) {
+				return
+			}
+			if !yield(fantasy.StreamPart{
+				Type:             fantasy.StreamPartTypeReasoningDelta,
+				ID:               "r1",
+				Delta:            "summary",
+				ProviderMetadata: md,
+			}) {
+				return
+			}
+			if !yield(fantasy.StreamPart{
+				Type:             fantasy.StreamPartTypeReasoningEnd,
+				ID:               "r1",
+				ProviderMetadata: md,
+			}) {
+				return
+			}
+			if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "t1"}) {
+				return
+			}
+			if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "t1", Delta: "answer"}) {
+				return
+			}
+			if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "t1"}) {
+				return
+			}
+			yield(fantasy.StreamPart{
+				Type:         fantasy.StreamPartTypeFinish,
+				FinishReason: fantasy.FinishReasonStop,
+			})
+		})
+	})
+
+	a := libagent.NewAgent(libagent.AgentOptions{RuntimeModel: libagent.RuntimeModel{Model: model}})
+	err := a.Prompt(context.Background(), "answer")
+	require.NoError(t, err)
+
+	state := a.State()
+	require.Len(t, state.Messages, 2)
+	asst, ok := state.Messages[1].(*libagent.AssistantMessage)
+	require.True(t, ok)
+
+	reasoning := asst.Content.Reasoning()
+	require.Len(t, reasoning, 1)
+	md := openai.GetReasoningMetadata(fantasy.ProviderOptions(reasoning[0].ProviderMetadata))
+	require.NotNil(t, md)
+	assert.Equal(t, "reasoning-item-1", md.ItemID)
+	require.NotNil(t, md.EncryptedContent)
+	assert.Equal(t, encrypted, *md.EncryptedContent)
+	assert.Equal(t, []string{"summary"}, md.Summary)
+}
+
 func TestAgent_ToolNotFound(t *testing.T) {
 	model := newMockModel(
 		toolCallResponse("tc1", "nonexistent", `{}`),
@@ -1007,6 +1076,43 @@ func TestDefaultConvertToLLM_PreservesStructuredTextAndToolCalls(t *testing.T) {
 	assert.Equal(t, "tc2", toolPart.ToolCallID)
 	assert.Equal(t, "bash", toolPart.ToolName)
 	assert.Equal(t, `{"command":"pwd"}`, toolPart.Input)
+}
+
+func TestDefaultConvertToLLM_PreservesReasoningProviderMetadata(t *testing.T) {
+	encrypted := "encrypted-signature"
+	msgs := []libagent.Message{
+		&libagent.AssistantMessage{
+			Role: "assistant",
+			Content: fantasy.ResponseContent{
+				fantasy.ReasoningContent{
+					Text: "summary",
+					ProviderMetadata: fantasy.ProviderMetadata{
+						openai.Name: &openai.ResponsesReasoningMetadata{
+							ItemID:           "reasoning-item-1",
+							EncryptedContent: &encrypted,
+							Summary:          []string{"summary"},
+						},
+					},
+				},
+				fantasy.TextContent{Text: "answer"},
+			},
+			Timestamp: time.Now(),
+		},
+	}
+
+	out, err := libagent.DefaultConvertToLLM(context.Background(), msgs)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Len(t, out[0].Content, 2)
+
+	reasoningPart, ok := out[0].Content[0].(fantasy.ReasoningPart)
+	require.True(t, ok)
+	md := openai.GetReasoningMetadata(reasoningPart.ProviderOptions)
+	require.NotNil(t, md)
+	assert.Equal(t, "reasoning-item-1", md.ItemID)
+	require.NotNil(t, md.EncryptedContent)
+	assert.Equal(t, encrypted, *md.EncryptedContent)
+	assert.Equal(t, []string{"summary"}, md.Summary)
 }
 
 func TestAgent_TransformContext(t *testing.T) {

@@ -320,11 +320,21 @@ func streamAssistantResponse(
 
 	messageStarted := false
 
-	// Track active text/tool-input builders.
-	textByID := map[string]string{}
-	reasoningByID := map[string]string{}
+	type textState struct {
+		text     string
+		metadata fantasy.ProviderMetadata
+	}
+	type reasoningState struct {
+		text     string
+		metadata fantasy.ProviderMetadata
+	}
+
+	// Track active text/reasoning/tool-input builders.
+	textByID := map[string]textState{}
+	reasoningByID := map[string]reasoningState{}
 	toolInputByID := map[string]string{}
 	toolNameByID := map[string]string{}
+	toolMetaByID := map[string]fantasy.ProviderMetadata{}
 	toolInputOrder := make([]string, 0, 4)
 
 	for part := range streamResp {
@@ -337,7 +347,7 @@ func streamAssistantResponse(
 		}
 		switch part.Type {
 		case fantasy.StreamPartTypeTextStart:
-			textByID[part.ID] = ""
+			textByID[part.ID] = textState{metadata: part.ProviderMetadata}
 			sendEvent(eventCh, AgentEvent{
 				Type:    AgentEventTypeMessageUpdate,
 				Message: assistantMsg,
@@ -345,7 +355,12 @@ func streamAssistantResponse(
 			})
 
 		case fantasy.StreamPartTypeTextDelta:
-			textByID[part.ID] += part.Delta
+			st := textByID[part.ID]
+			st.text += part.Delta
+			if len(part.ProviderMetadata) > 0 {
+				st.metadata = part.ProviderMetadata
+			}
+			textByID[part.ID] = st
 			sendEvent(eventCh, AgentEvent{
 				Type:    AgentEventTypeMessageUpdate,
 				Message: assistantMsg,
@@ -353,8 +368,14 @@ func streamAssistantResponse(
 			})
 
 		case fantasy.StreamPartTypeTextEnd:
-			if text, ok := textByID[part.ID]; ok {
-				assistantMsg.Content = append(assistantMsg.Content, fantasy.TextContent{Text: text})
+			if st, ok := textByID[part.ID]; ok {
+				if len(part.ProviderMetadata) > 0 {
+					st.metadata = part.ProviderMetadata
+				}
+				assistantMsg.Content = append(assistantMsg.Content, fantasy.TextContent{
+					Text:             st.text,
+					ProviderMetadata: st.metadata,
+				})
 				delete(textByID, part.ID)
 			}
 			sendEvent(eventCh, AgentEvent{
@@ -364,7 +385,10 @@ func streamAssistantResponse(
 			})
 
 		case fantasy.StreamPartTypeReasoningStart:
-			reasoningByID[part.ID] = part.Delta
+			reasoningByID[part.ID] = reasoningState{
+				text:     part.Delta,
+				metadata: part.ProviderMetadata,
+			}
 			sendEvent(eventCh, AgentEvent{
 				Type:    AgentEventTypeMessageUpdate,
 				Message: assistantMsg,
@@ -372,7 +396,12 @@ func streamAssistantResponse(
 			})
 
 		case fantasy.StreamPartTypeReasoningDelta:
-			reasoningByID[part.ID] += part.Delta
+			st := reasoningByID[part.ID]
+			st.text += part.Delta
+			if len(part.ProviderMetadata) > 0 {
+				st.metadata = part.ProviderMetadata
+			}
+			reasoningByID[part.ID] = st
 			sendEvent(eventCh, AgentEvent{
 				Type:    AgentEventTypeMessageUpdate,
 				Message: assistantMsg,
@@ -380,8 +409,14 @@ func streamAssistantResponse(
 			})
 
 		case fantasy.StreamPartTypeReasoningEnd:
-			if text, ok := reasoningByID[part.ID]; ok {
-				assistantMsg.Content = append(assistantMsg.Content, fantasy.ReasoningContent{Text: text})
+			if st, ok := reasoningByID[part.ID]; ok {
+				if len(part.ProviderMetadata) > 0 {
+					st.metadata = part.ProviderMetadata
+				}
+				assistantMsg.Content = append(assistantMsg.Content, fantasy.ReasoningContent{
+					Text:             st.text,
+					ProviderMetadata: st.metadata,
+				})
 				delete(reasoningByID, part.ID)
 			}
 			sendEvent(eventCh, AgentEvent{
@@ -396,6 +431,9 @@ func streamAssistantResponse(
 			}
 			toolInputByID[part.ID] = ""
 			toolNameByID[part.ID] = part.ToolCallName
+			if len(part.ProviderMetadata) > 0 {
+				toolMetaByID[part.ID] = part.ProviderMetadata
+			}
 			sendEvent(eventCh, AgentEvent{
 				Type:    AgentEventTypeMessageUpdate,
 				Message: assistantMsg,
@@ -404,6 +442,9 @@ func streamAssistantResponse(
 
 		case fantasy.StreamPartTypeToolInputDelta:
 			toolInputByID[part.ID] += part.Delta
+			if len(part.ProviderMetadata) > 0 {
+				toolMetaByID[part.ID] = part.ProviderMetadata
+			}
 			sendEvent(eventCh, AgentEvent{
 				Type:    AgentEventTypeMessageUpdate,
 				Message: assistantMsg,
@@ -419,9 +460,11 @@ func streamAssistantResponse(
 
 		case fantasy.StreamPartTypeToolCall:
 			tc := fantasy.ToolCallContent{
-				ToolCallID: part.ID,
-				ToolName:   part.ToolCallName,
-				Input:      part.ToolCallInput,
+				ToolCallID:       part.ID,
+				ToolName:         part.ToolCallName,
+				Input:            part.ToolCallInput,
+				ProviderExecuted: part.ProviderExecuted,
+				ProviderMetadata: part.ProviderMetadata,
 			}
 			// Align with fantasy's built-in loop semantics:
 			// explicit tool_call input is authoritative; fallback to accumulated
@@ -432,12 +475,25 @@ func streamAssistantResponse(
 				}
 				delete(toolInputByID, part.ID)
 				delete(toolNameByID, part.ID)
+				if len(tc.ProviderMetadata) == 0 {
+					tc.ProviderMetadata = toolMetaByID[part.ID]
+				}
+				delete(toolMetaByID, part.ID)
 			}
 			assistantMsg.Content = append(assistantMsg.Content, tc)
 
 		case fantasy.StreamPartTypeFinish:
 			assistantMsg.FinishReason = part.FinishReason
 			assistantMsg.Usage = part.Usage
+
+		case fantasy.StreamPartTypeSource:
+			assistantMsg.Content = append(assistantMsg.Content, fantasy.SourceContent{
+				SourceType:       part.SourceType,
+				ID:               part.ID,
+				URL:              part.URL,
+				Title:            part.Title,
+				ProviderMetadata: part.ProviderMetadata,
+			})
 
 		case fantasy.StreamPartTypeError:
 			if isRetryableError(part.Error) {
@@ -449,12 +505,18 @@ func streamAssistantResponse(
 	}
 
 	// Drain any remaining open text blocks (defensive).
-	for id, text := range textByID {
-		assistantMsg.Content = append(assistantMsg.Content, fantasy.TextContent{Text: text})
+	for id, st := range textByID {
+		assistantMsg.Content = append(assistantMsg.Content, fantasy.TextContent{
+			Text:             st.text,
+			ProviderMetadata: st.metadata,
+		})
 		_ = id
 	}
-	for id, text := range reasoningByID {
-		assistantMsg.Content = append(assistantMsg.Content, fantasy.ReasoningContent{Text: text})
+	for id, st := range reasoningByID {
+		assistantMsg.Content = append(assistantMsg.Content, fantasy.ReasoningContent{
+			Text:             st.text,
+			ProviderMetadata: st.metadata,
+		})
 		_ = id
 	}
 	// Some providers stream tool_input_* blocks but do not emit a final tool_call
@@ -465,9 +527,10 @@ func streamAssistantResponse(
 			continue
 		}
 		assistantMsg.Content = append(assistantMsg.Content, fantasy.ToolCallContent{
-			ToolCallID: id,
-			ToolName:   toolNameByID[id],
-			Input:      input,
+			ToolCallID:       id,
+			ToolName:         toolNameByID[id],
+			Input:            input,
+			ProviderMetadata: toolMetaByID[id],
 		})
 	}
 	usedToolCallIDs := collectUsedToolCallIDs(currentCtx.Messages)

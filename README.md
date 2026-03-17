@@ -35,24 +35,29 @@ No MCP. No hidden sub-agents. No permission popups.
 - Start with one-shot CLI prompts
 - Attach files with `@path` (text and images)
 - Inject shell output with `~~ command` without copy-paste
-- Load skills inline with `$skill-name`
+- Load skills inline with `+skill-name`
 - Use reusable prompt templates with `/template-name args` (for example `/amplify add a tool that checks Jira status`)
 - Fork a conversation from any previous user prompt with `/tree`
 - Resume old chats with `/sessions`
 - Compact long history with `/compact` (it will not auto-run on context overflow, you manage your context)
 
-One-shot mode (`-p`) prints only the final assistant response and supports regular prompt features (attachments, skills, shell substitution, templates). Interactive slash commands are not available in one-shot mode.
+Raijin runs in one-shot CLI mode and supports prompt features such as attachments, skills, shell substitution, and templates.
 
 ## Slash commands
 
 - `/help` - show command help
 - `/new` - start a fresh conversation
 - `/models` - switch model
-- `/models add` - add and configure models/providers
+- `/add-model` - add and configure models/providers
+- `/setup [zsh|bash|fish]` - auto-configure shell integration and first model (shell autodetected when omitted)
 - `/sessions` - browse and resume prior sessions
 - `/tree` - browse conversation history and fork at any safe boundary
+- `/history` - replay all assistant output from the active session
 - `/compact [instructions]` - summarize old context, keep recent context
 - `/templates` - list prompt templates and source
+- `/status` - show current model, reasoning, and context fill percentage
+- `/reasoning [low|medium|high|max]` - select reasoning level (interactive when omitted)
+- `/edit` - open `$EDITOR` (or fallback editors), then send saved file content as prompt
 - `/exit` - quit
 
 ## Keyboard shortcuts
@@ -75,7 +80,7 @@ You can:
 
 - invoke templates as slash commands
 - pass template args (`$@`, `$1`, `${@:2}`)
-- call skills from prompts via `$skill-name`
+- call skills from prompts via `+skill-name`
 
 Built-in templates include:
 
@@ -109,16 +114,15 @@ go build -o raijin .
 ## Usage
 
 ```bash
-raijin
 raijin "fix the bug in main.go"
 raijin "add unit tests for auth"
 raijin "refactor this messy function"
-raijin -p "summarize TODOs and propose a plan"
+raijin "summarize TODOs and propose a plan"
 ```
 
 ### Live profiling
 
-Raijin can capture full-session Go profiling artifacts while you use the TUI.
+Raijin can capture full-session Go profiling artifacts while you run prompts.
 
 ```bash
 raijin -profile-dir ./profiles

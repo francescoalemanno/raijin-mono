@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -87,6 +86,32 @@ type grepMatch struct {
 	lineText string
 }
 
+func RenderGrepSingleLinePreview(toolCallParams string) string {
+	return renderSingleLineForTool("grep", toolCallParams, renderGrepToolPreview)
+}
+
+func renderGrepToolPreview(name string, params map[string]any) string {
+	pattern := stringParam(params, "pattern")
+	path := stringParam(params, "path")
+	include := stringParam(params, "include")
+	if pattern == "" {
+		return renderGenericPreview(name, params)
+	}
+	var b strings.Builder
+	b.WriteString(name)
+	b.WriteByte(' ')
+	b.WriteString(quoteIfNeeded(pattern))
+	if path != "" {
+		b.WriteString(" in ")
+		b.WriteString(path)
+	}
+	if include != "" {
+		b.WriteString(" include=")
+		b.WriteString(quoteIfNeeded(include))
+	}
+	return b.String()
+}
+
 // NewGrepTool creates a grep tool for searching file contents.
 func NewGrepTool() libagent.Tool {
 	v := vfs.NewFromWD()
@@ -148,30 +173,10 @@ func NewGrepTool() libagent.Tool {
 		return libagent.NewTextResponse(output.String()), nil
 	}
 
-	renderFunc := func(input json.RawMessage, output string, _ int) string {
-		var params grepParams
-		if err := libagent.ParseJSONInput(input, &params); err != nil {
-			return "grep (failed)"
-		}
-		var parts []string
-		parts = append(parts, fmt.Sprintf("grep %q", params.Pattern))
-		if params.Path != "" && params.Path != "." {
-			path := RenderPath(params.Path)
-			parts = append(parts, fmt.Sprintf("in %s", path))
-		}
-		if params.Include != "" {
-			parts = append(parts, fmt.Sprintf("(%s)", params.Include))
-		}
-		header := strings.Join(parts, " ")
-		if output == "" {
-			return header
-		}
-		return header + "\n" + output
-	}
-
-	return WithRender(
+	return WrapTool(
 		libagent.NewParallelTypedTool("grep", grepDescription, handler),
-		renderFunc,
+		RenderGrepSingleLinePreview,
+		nil,
 	)
 }
 

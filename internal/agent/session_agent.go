@@ -304,8 +304,13 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 			}
 			if len(am.Content) > 0 {
 				rs.currentAssistant.Content = append(rs.currentAssistant.Content[:0], am.Content...)
+				rs.currentAssistant.Text = libagent.AssistantText(rs.currentAssistant)
+				rs.currentAssistant.Reasoning = libagent.AssistantReasoning(rs.currentAssistant)
+				rs.currentAssistant.ToolCalls = libagent.AssistantToolCalls(rs.currentAssistant)
 			}
 			rs.currentAssistant.Completed = true
+			rs.currentAssistant.FinishReason = am.FinishReason
+			rs.currentAssistant.Usage = am.Usage
 			rs.currentAssistant.CompleteReason = string(am.FinishReason)
 			if am.Error != nil {
 				rs.currentAssistant.CompleteMessage = am.Error.Error()
@@ -367,7 +372,13 @@ func isEmptyMessage(m libagent.Message) bool {
 	case *libagent.UserMessage:
 		return strings.TrimSpace(msg.Content) == "" && len(msg.Files) == 0
 	case *libagent.AssistantMessage:
-		return !msg.Completed || (strings.TrimSpace(libagent.AssistantText(msg)) == "" && strings.TrimSpace(libagent.AssistantReasoning(msg)) == "" && len(libagent.AssistantToolCalls(msg)) == 0)
+		if !msg.Completed {
+			return true
+		}
+		if len(msg.Content) > 0 {
+			return false
+		}
+		return strings.TrimSpace(msg.Text) == "" && strings.TrimSpace(msg.Reasoning) == "" && len(msg.ToolCalls) == 0
 	case *libagent.ToolResultMessage:
 		return strings.TrimSpace(msg.ToolCallID) == "" || strings.TrimSpace(msg.ToolName) == ""
 	default:
@@ -538,7 +549,7 @@ You are an expert coding agent, operating inside Raijin a coding-agent harness.
 	if len(allSkills) > 0 {
 		sp.WriteString("\n\n<skills>\n")
 		sp.WriteString("- Load a skill via the \"read\" tool when the user's request matches one listed above.\n")
-		sp.WriteString("- The user is requesting skill loading when either $skillname syntax is used or there is wording that closely matches a skill name or purpose.\n")
+		sp.WriteString("- The user is requesting skill loading when either +skillname syntax is used or there is wording that closely matches a skill name or purpose.\n")
 		for _, s := range allSkills {
 			sp.WriteString("  <skill name=\"" + s.Name + "\" path=\"" + s.FilePath + "\">" + s.PromptDescription() + "</skill>\n")
 		}

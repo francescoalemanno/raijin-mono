@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -116,6 +117,9 @@ func TestEditTool_ReplacesTextAndReturnsDiffDetails(t *testing.T) {
 	if !strings.Contains(resp.Content, "Successfully replaced text in") {
 		t.Fatalf("unexpected success content: %q", resp.Content)
 	}
+	if strings.Contains(resp.Content, "Diff:") {
+		t.Fatalf("did not expect diff in response content, got %q", resp.Content)
+	}
 	got := mustReadFile(t, file)
 	if got != "Hello, testing!\n" {
 		t.Fatalf("file content = %q, want %q", got, "Hello, testing!\\n")
@@ -125,7 +129,7 @@ func TestEditTool_ReplacesTextAndReturnsDiffDetails(t *testing.T) {
 	if details.Diff == "" {
 		t.Fatalf("expected diff to be non-empty")
 	}
-	if !strings.Contains(details.Diff, "+ Hello, testing!") && !strings.Contains(details.Diff, "testing") {
+	if !regexp.MustCompile(`(?m)^\+\s+\d+\s+\|\s+Hello, testing!$`).MatchString(details.Diff) && !strings.Contains(details.Diff, "testing") {
 		t.Fatalf("diff does not include replacement text: %q", details.Diff)
 	}
 	if details.FirstChangedLine == nil || *details.FirstChangedLine <= 0 {

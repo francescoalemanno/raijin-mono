@@ -140,11 +140,7 @@ func SanitizeHistory(messages []Message) []Message {
 			}
 			out = append(out, CloneMessage(msg))
 		case *AssistantMessage:
-			text := AssistantText(msg)
-			reasoning := AssistantReasoning(msg)
-			hasText := strings.TrimSpace(text) != "" || strings.TrimSpace(reasoning) != ""
 			rawCalls := AssistantToolCalls(msg)
-			calls := make([]ToolCallItem, 0, len(rawCalls))
 			validCallIdx := make(map[int]struct{}, len(rawCalls))
 			for callIdx, tc := range rawCalls {
 				id := strings.TrimSpace(tc.ID)
@@ -155,13 +151,9 @@ func SanitizeHistory(messages []Message) []Message {
 				if _, ok := validCalls[callRef{msgIdx: msgIdx, callIdx: callIdx}]; !ok {
 					continue
 				}
-				calls = append(calls, tc)
 				validCallIdx[callIdx] = struct{}{}
 			}
 			if !msg.Completed {
-				continue
-			}
-			if !hasText && len(calls) == 0 {
 				continue
 			}
 			clone := CloneMessage(msg).(*AssistantMessage)
@@ -184,10 +176,13 @@ func SanitizeHistory(messages []Message) []Message {
 					filtered = append(filtered, tc)
 				}
 			}
+			if len(filtered) == 0 {
+				continue
+			}
 			clone.Content = filtered
 			clone.Text = AssistantText(clone)
 			clone.Reasoning = AssistantReasoning(clone)
-			clone.ToolCalls = nil
+			clone.ToolCalls = AssistantToolCalls(clone)
 			out = append(out, clone)
 		case *ToolResultMessage:
 			if _, ok := validResults[msgIdx]; !ok {

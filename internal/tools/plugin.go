@@ -141,40 +141,16 @@ func discoverPluginArtifacts(dir string) ([]pluginArtifact, []error) {
 }
 
 func newPluginTool(meta pluginMeta, scriptPath string) libagent.Tool {
-	renderFunc := func(input json.RawMessage, output string, _ int) string {
-		header := fmt.Sprintf("plugin:%s", meta.Name)
-		if params := renderPluginParamsPreview(input); params != "" {
-			header += " " + params
-		}
-		if output == "" {
-			return header
-		}
-		return header + "\n" + output
-	}
-
-	return WithRender(&pluginTool{
-		meta:       meta,
-		scriptPath: scriptPath,
-	}, renderFunc)
-}
-
-func renderPluginParamsPreview(input json.RawMessage) string {
-	trimmed := strings.TrimSpace(string(input))
-	if trimmed == "" {
-		return ""
-	}
-
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, input); err != nil {
-		return strings.Join(strings.Fields(trimmed), " ")
-	}
-
-	const maxPreviewRunes = 96
-	preview := []rune(buf.String())
-	if len(preview) <= maxPreviewRunes {
-		return string(preview)
-	}
-	return string(preview[:maxPreviewRunes-1]) + "…"
+	return WrapTool(
+		&pluginTool{
+			meta:       meta,
+			scriptPath: scriptPath,
+		},
+		func(toolCallParams string) string {
+			return RenderGenericSingleLinePreview(meta.Name, toolCallParams)
+		},
+		nil,
+	)
 }
 
 // LoadPluginTools returns plugin tools from the centralized artifact cache.

@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -32,6 +31,22 @@ type readParams struct {
 
 type readToolDetails struct {
 	Truncation *TruncationResult `json:"truncation,omitempty"`
+}
+
+func RenderReadSingleLinePreview(toolCallParams string) string {
+	return renderSingleLineForTool("read", toolCallParams, renderReadToolPreview)
+}
+
+func renderReadToolPreview(name string, params map[string]any) string {
+	path := stringParam(params, "path")
+	if path == "" {
+		return renderGenericPreview(name, params)
+	}
+	suffix := extraKV(params, "offset", "limit")
+	if suffix != "" {
+		return fmt.Sprintf("%s %s (%s)", name, path, suffix)
+	}
+	return fmt.Sprintf("%s %s", name, path)
 }
 
 func readToolNudge(content string) libagent.ToolResponse {
@@ -101,36 +116,10 @@ func NewReadTool() libagent.Tool {
 		return resp, nil
 	}
 
-	renderFunc := func(input json.RawMessage, output string, _ int) string {
-		var params readParams
-		if err := libagent.ParseJSONInput(input, &params); err != nil {
-			return "read (failed)"
-		}
-
-		path := RenderPath(params.Path)
-		header := fmt.Sprintf("read %s", path)
-		if params.Offset != nil || params.Limit != nil {
-			offset := 1
-			if params.Offset != nil {
-				offset = max(1, *params.Offset)
-			}
-			if params.Limit != nil {
-				limit := max(0, *params.Limit)
-				header = fmt.Sprintf("read %s [%d:%d]", path, offset, offset+limit)
-			} else {
-				header = fmt.Sprintf("read %s [%d:]", path, offset)
-			}
-		}
-
-		if output == "" {
-			return header
-		}
-		return header + "\n" + renderCodePreview(params.Path, output)
-	}
-
-	return WithRender(
+	return WrapTool(
 		libagent.NewParallelTypedTool("read", readDescription, handler),
-		renderFunc,
+		RenderReadSingleLinePreview,
+		nil,
 	)
 }
 

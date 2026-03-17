@@ -111,3 +111,21 @@ fi
 
 echo ""
 echo "Run 'raijin --help' to get started."
+
+# Best-effort first-run setup (shell integration + initial model setup flow).
+SETUP_SHELL=$(basename "${SHELL:-}")
+case "$SETUP_SHELL" in
+    zsh|bash|fish)
+        echo "Running automatic setup: ${BINARY_NAME} /setup ${SETUP_SHELL}"
+        if "${INSTALL_DIR}/${BINARY_NAME}" "/setup" "${SETUP_SHELL}"; then
+            echo "Automatic setup completed."
+        else
+            echo "Automatic setup did not fully complete."
+            echo "Run '${BINARY_NAME} /setup ${SETUP_SHELL}' in an interactive terminal to finish setup."
+        fi
+        ;;
+    *)
+        echo "Skipping automatic setup (unsupported or unknown SHELL: ${SHELL:-<empty>})."
+        echo "Run '${BINARY_NAME} /setup [zsh|bash|fish]' in your shell to finish setup."
+        ;;
+esac
