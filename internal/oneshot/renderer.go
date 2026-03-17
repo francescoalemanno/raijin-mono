@@ -17,6 +17,16 @@ var thinkingMutedStyle = oneshotMutedStyle
 
 const userPromptGlyph = "❯"
 
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+const defaultSpinnerInterval = 120 * time.Millisecond
+
+type rendererOptions struct {
+	persistentSpinner bool
+	now               func() time.Time
+	spinnerInterval   time.Duration
+}
+
 // pendingLine tracks a tool or thinking event currently in progress.
 type pendingLine struct {
 	id        string
@@ -38,6 +48,7 @@ type renderer struct {
 	stdout  io.Writer
 	tools   []libagent.Tool
 	isTTY   bool
+	now     func() time.Time
 	started bool
 
 	// state
@@ -51,16 +62,40 @@ type renderer struct {
 	replyMD       *lineMarkdownRenderer
 	replyLine     strings.Builder
 	replyText     strings.Builder
+
+	spinnerEnabled    bool
+	spinnerVisible    bool
+	spinnerWidth      int
+	spinnerFrameIndex int
+	runStart          time.Time
+	turnActive        bool
+	replyStreaming    bool
+	spinnerInterval   time.Duration
+	spinnerStopCh     chan struct{}
+	spinnerDoneCh     chan struct{}
 }
 
 func newRenderer(stderr, stdout io.Writer, agentTools []libagent.Tool, isTTY bool) *renderer {
+	return newRendererWithOptions(stderr, stdout, agentTools, isTTY, rendererOptions{})
+}
+
+func newRendererWithOptions(stderr, stdout io.Writer, agentTools []libagent.Tool, isTTY bool, opts rendererOptions) *renderer {
+	if opts.now == nil {
+		opts.now = time.Now
+	}
+	if opts.spinnerInterval <= 0 {
+		opts.spinnerInterval = defaultSpinnerInterval
+	}
 	return &renderer{
-		stderr:  stderr,
-		stdout:  stdout,
-		tools:   agentTools,
-		isTTY:   isTTY,
-		pending: make(map[string]*pendingLine),
-		replyMD: newLineMarkdownRenderer(),
+		stderr:          stderr,
+		stdout:          stdout,
+		tools:           agentTools,
+		isTTY:           isTTY,
+		now:             opts.now,
+		pending:         make(map[string]*pendingLine),
+		replyMD:         newLineMarkdownRenderer(),
+		spinnerEnabled:  isTTY && opts.persistentSpinner,
+		spinnerInterval: opts.spinnerInterval,
 	}
 }
 
@@ -73,7 +108,9 @@ func (r *renderer) handleEvent(event libagent.AgentEvent) {
 		r.started = true
 
 	case libagent.AgentEventTypeTurnStart:
-		// No-op by design: keep stderr concise.
+		r.turnActive = true
+		r.replyStreaming = false
+		r.redrawSpinnerLocked()
 
 	case libagent.AgentEventTypeMessageStart:
 		// No-op by design: rendering is driven by deltas and message_end.
@@ -94,12 +131,16 @@ func (r *renderer) handleEvent(event libagent.AgentEvent) {
 		r.onMessageEnd(event)
 
 	case libagent.AgentEventTypeTurnEnd:
+		r.turnActive = false
+		r.replyStreaming = false
 		r.flushCompletedTools()
+		r.redrawSpinnerLocked()
 
 	case libagent.AgentEventTypeRetry:
 		if event.RetryMessage != "" {
 			r.emitStatus(renderStatusWarning("↻"), event.RetryMessage)
 		}
+		r.redrawSpinnerLocked()
 
 	case libagent.AgentEventTypeAgentEnd:
 		r.finalize()
@@ -115,9 +156,13 @@ func (r *renderer) onMessageUpdate(event libagent.AgentEvent) {
 	case "text_start":
 		// No-op: we only render content-bearing deltas.
 	case "text_delta":
+		r.replyStreaming = true
 		r.appendReplyDelta(delta.Delta)
+		r.redrawSpinnerLocked()
 	case "text_end":
+		r.replyStreaming = false
 		r.flushReplyTail()
+		r.redrawSpinnerLocked()
 	case "reasoning_start":
 		r.startThinking()
 	case "reasoning_delta":
@@ -146,13 +191,14 @@ func (r *renderer) onToolStart(id, name, input string) {
 	p := &pendingLine{
 		id:        id,
 		toolName:  name,
-		startTime: time.Now(),
+		startTime: r.now(),
 	}
 	if strings.TrimSpace(input) != "" {
 		p.args = input
 	}
 	p.label = r.renderToolLabel(name, r.bestParams(p))
 	r.pending[id] = p
+	r.replyStreaming = false
 	r.emitPending(renderStatusInfo("●"), p.label)
 }
 
@@ -196,6 +242,7 @@ func (r *renderer) onToolEnd(id, name, input, output string, isError bool) {
 	p.ended = true
 	p.endResult = output
 	p.endError = isError
+	r.redrawSpinnerLocked()
 }
 
 func (r *renderer) onMessageEnd(event libagent.AgentEvent) {
@@ -207,7 +254,7 @@ func (r *renderer) onMessageEnd(event libagent.AgentEvent) {
 	case *libagent.ToolResultMessage:
 		if p, ok := r.pending[m.ToolCallID]; ok {
 			label := r.renderToolLabelForResult(p.toolName, r.bestParams(p), m.Content, m.Metadata)
-			dur := time.Since(p.startTime)
+			dur := r.now().Sub(p.startTime)
 			suffix := fmt.Sprintf(" (%s)", formatDuration(dur))
 			if m.IsError {
 				r.emitStatus(renderStatusError("✗"), label+suffix)
@@ -217,9 +264,11 @@ func (r *renderer) onMessageEnd(event libagent.AgentEvent) {
 			delete(r.pending, m.ToolCallID)
 		}
 	case *libagent.AssistantMessage:
+		r.replyStreaming = false
 		r.flushReplyTail()
 		r.flushThinking()
 	}
+	r.redrawSpinnerLocked()
 }
 
 func (r *renderer) renderUserMessage(m *libagent.UserMessage) {
@@ -230,12 +279,13 @@ func (r *renderer) renderUserMessage(m *libagent.UserMessage) {
 
 	text := strings.TrimSpace(m.Content)
 	if text != "" {
-		r.closePendingInlineForStdout()
+		r.prepareForStdoutLocked()
 		for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
 			fmt.Fprint(r.stdout, prefix)
 			fmt.Fprint(r.stdout, strings.TrimRight(line, "\r"))
 			fmt.Fprint(r.stdout, "\n")
 		}
+		r.restoreAfterStdoutLocked()
 	}
 
 	for _, f := range m.Files {
@@ -244,11 +294,13 @@ func (r *renderer) renderUserMessage(m *libagent.UserMessage) {
 			name = "(unnamed)"
 		}
 		mime := strings.TrimSpace(f.MediaType)
+		r.prepareForStdoutLocked()
 		if mime != "" {
 			fmt.Fprintf(r.stdout, "%s[attached] %s (%s)\n", prefix, name, mime)
 		} else {
 			fmt.Fprintf(r.stdout, "%s[attached] %s\n", prefix, name)
 		}
+		r.restoreAfterStdoutLocked()
 	}
 }
 
@@ -267,7 +319,7 @@ func (r *renderer) startThinking() {
 		return
 	}
 	r.thinking = true
-	r.thinkingStart = time.Now()
+	r.thinkingStart = r.now()
 	r.thinkingSeen = false
 	r.thinkingLine.Reset()
 	r.emitPending(renderStatusInfo("⟳"), "Thinking: ")
@@ -280,7 +332,7 @@ func (r *renderer) flushThinking() {
 	}
 	r.thinking = false
 	r.thinkingSeen = false
-	dur := time.Since(r.thinkingStart)
+	dur := r.now().Sub(r.thinkingStart)
 	r.emitStatus(renderStatusSuccess("✓"), fmt.Sprintf("Thinking (%s)", formatDuration(dur)))
 }
 
@@ -301,7 +353,7 @@ func (r *renderer) flushCompletedTools() {
 			continue
 		}
 		label := r.renderToolLabelForResult(p.toolName, r.bestParams(p), p.endResult, "")
-		dur := time.Since(p.startTime)
+		dur := r.now().Sub(p.startTime)
 		suffix := fmt.Sprintf(" (%s)", formatDuration(dur))
 		if p.endError {
 			r.emitStatus(renderStatusError("✗"), label+suffix)
@@ -364,11 +416,12 @@ func (r *renderer) flushBufferedLines(buf *strings.Builder, render func(string) 
 	toWrite := content[:lastNL+1]
 	rest := content[lastNL+1:]
 	if toWrite != "" {
-		r.closePendingInlineForStdout()
+		r.prepareForStdoutLocked()
 		for _, line := range strings.Split(strings.TrimSuffix(toWrite, "\n"), "\n") {
 			fmt.Fprint(r.stdout, render(strings.TrimRight(line, "\r")))
 			fmt.Fprint(r.stdout, "\n")
 		}
+		r.restoreAfterStdoutLocked()
 	}
 	buf.Reset()
 	if rest != "" {
@@ -386,11 +439,12 @@ func (r *renderer) flushBufferedTail(buf *strings.Builder, render func(string) s
 		return
 	}
 	tail = strings.TrimRight(tail, "\n")
-	r.closePendingInlineForStdout()
+	r.prepareForStdoutLocked()
 	for _, line := range strings.Split(tail, "\n") {
 		fmt.Fprint(r.stdout, render(strings.TrimRight(line, "\r")))
 		fmt.Fprint(r.stdout, "\n")
 	}
+	r.restoreAfterStdoutLocked()
 }
 
 func (r *renderer) flushThinkingBufferedLines() {
@@ -416,13 +470,15 @@ func (r *renderer) flushThinkingBufferedLines() {
 
 func (r *renderer) writeThinkingLine(line string) {
 	line = strings.TrimSpace(line)
-	r.closePendingInlineForStdout()
+	r.prepareForStdoutLocked()
 	if line == "" {
 		fmt.Fprint(r.stdout, "\n")
+		r.restoreAfterStdoutLocked()
 		return
 	}
 	fmt.Fprint(r.stdout, thinkingMutedStyle.Render(line))
 	fmt.Fprint(r.stdout, "\n")
+	r.restoreAfterStdoutLocked()
 }
 
 // FinalText returns the accumulated assistant text response.
@@ -434,6 +490,10 @@ func (r *renderer) FinalText() string {
 
 // emitPending writes a pending (overwritable if TTY) status line.
 func (r *renderer) emitPending(icon, text string) {
+	if r.spinnerEnabled {
+		r.redrawSpinnerLocked()
+		return
+	}
 	ts := time.Now().Format("15:04:05")
 	line := fmt.Sprintf("%s %s %s", icon, renderStatusTimestamp("["+ts+"]"), text)
 	lineWidth := lipgloss.Width(line)
@@ -461,6 +521,7 @@ func (r *renderer) emitStatus(icon, text string) {
 	ts := time.Now().Format("15:04:05")
 	line := fmt.Sprintf("%s %s %s", icon, renderStatusTimestamp("["+ts+"]"), text)
 	lineWidth := lipgloss.Width(line)
+	suspendedSpinner := r.suspendSpinnerLocked()
 	if r.isTTY {
 		if r.pendingInline {
 			pad := ""
@@ -476,6 +537,7 @@ func (r *renderer) emitStatus(icon, text string) {
 	}
 	r.pendingInline = false
 	r.pendingWidth = 0
+	r.resumeSpinnerLocked(suspendedSpinner)
 }
 
 func (r *renderer) closePendingInlineForStdout() {
@@ -518,6 +580,149 @@ func (r *renderer) updatePendingLabel(p *pendingLine) {
 	if r.isTTY {
 		r.emitPending(renderStatusInfo("●"), p.label)
 	}
+}
+
+func (r *renderer) startPersistentSpinner() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.spinnerEnabled || !r.runStart.IsZero() {
+		return
+	}
+
+	r.runStart = r.now()
+	r.redrawSpinnerLocked()
+
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	r.spinnerStopCh = stopCh
+	r.spinnerDoneCh = doneCh
+	interval := r.spinnerInterval
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		defer close(doneCh)
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				r.mu.Lock()
+				if !r.spinnerEnabled || r.spinnerStopCh != stopCh {
+					r.mu.Unlock()
+					return
+				}
+				r.spinnerFrameIndex = (r.spinnerFrameIndex + 1) % len(spinnerFrames)
+				r.redrawSpinnerLocked()
+				r.mu.Unlock()
+			}
+		}
+	}()
+}
+
+func (r *renderer) stopPersistentSpinner() {
+	r.mu.Lock()
+	if !r.spinnerEnabled {
+		r.mu.Unlock()
+		return
+	}
+	r.spinnerEnabled = false
+	stopCh := r.spinnerStopCh
+	doneCh := r.spinnerDoneCh
+	r.spinnerStopCh = nil
+	r.spinnerDoneCh = nil
+	r.clearSpinnerLocked()
+	r.mu.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
+	}
+	if doneCh != nil {
+		<-doneCh
+	}
+}
+
+func (r *renderer) spinnerLabelLocked() string {
+	if len(r.pending) > 0 {
+		return "Tool calling"
+	}
+	if r.thinking {
+		return "Thinking"
+	}
+	if r.replyStreaming {
+		return "Responding"
+	}
+	if r.turnActive || r.spinnerEnabled {
+		return "Thinking"
+	}
+	return "Thinking"
+}
+
+func (r *renderer) spinnerElapsedLocked() string {
+	if r.runStart.IsZero() {
+		return "0s"
+	}
+	secs := int(r.now().Sub(r.runStart) / time.Second)
+	if secs < 0 {
+		secs = 0
+	}
+	return fmt.Sprintf("%ds", secs)
+}
+
+func (r *renderer) spinnerLineLocked() string {
+	frame := spinnerFrames[r.spinnerFrameIndex%len(spinnerFrames)]
+	return fmt.Sprintf("%s %s %s", renderStatusInfo(frame), oneshotNormalStyle.Render(r.spinnerLabelLocked()), renderDimText(r.spinnerElapsedLocked()))
+}
+
+func (r *renderer) redrawSpinnerLocked() {
+	if !r.spinnerEnabled || r.runStart.IsZero() {
+		return
+	}
+	line := r.spinnerLineLocked()
+	lineWidth := lipgloss.Width(line)
+	pad := ""
+	if r.spinnerVisible && r.spinnerWidth > lineWidth {
+		pad = strings.Repeat(" ", r.spinnerWidth-lineWidth)
+	}
+	if r.spinnerVisible {
+		fmt.Fprintf(r.stderr, "\r%s%s", line, pad)
+	} else {
+		fmt.Fprint(r.stderr, line)
+	}
+	r.spinnerVisible = true
+	r.spinnerWidth = lineWidth
+}
+
+func (r *renderer) clearSpinnerLocked() {
+	if !r.spinnerVisible {
+		return
+	}
+	fmt.Fprintf(r.stderr, "\r%s\r", strings.Repeat(" ", r.spinnerWidth))
+	r.spinnerVisible = false
+	r.spinnerWidth = 0
+}
+
+func (r *renderer) suspendSpinnerLocked() bool {
+	if !r.spinnerEnabled || !r.spinnerVisible {
+		return false
+	}
+	r.clearSpinnerLocked()
+	return true
+}
+
+func (r *renderer) resumeSpinnerLocked(suspended bool) {
+	if !suspended {
+		return
+	}
+	r.redrawSpinnerLocked()
+}
+
+func (r *renderer) prepareForStdoutLocked() {
+	_ = r.suspendSpinnerLocked()
+	r.closePendingInlineForStdout()
+}
+
+func (r *renderer) restoreAfterStdoutLocked() {
+	r.redrawSpinnerLocked()
 }
 
 func formatDuration(d time.Duration) string {

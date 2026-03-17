@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -150,6 +151,162 @@ func TestRendererTTYDoesNotMixPendingToolLineWithReplyText(t *testing.T) {
 	}
 	if !strings.Contains(out, "read") || !strings.Contains(out, "I'll explore the codebase.") {
 		t.Fatalf("expected both tool status and reply text in output, got %q", out)
+	}
+}
+
+func TestRendererLiveSpinnerStartsImmediatelyAndClearsOnStop(t *testing.T) {
+	var stderr bytes.Buffer
+	current := time.Unix(100, 0)
+	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, true, rendererOptions{
+		persistentSpinner: true,
+		now:               func() time.Time { return current },
+		spinnerInterval:   time.Hour,
+	})
+
+	r.startPersistentSpinner()
+
+	if !strings.Contains(stderr.String(), "Thinking") || !strings.Contains(stderr.String(), "0s") {
+		t.Fatalf("expected initial live spinner output, got %q", stderr.String())
+	}
+	if !r.spinnerVisible {
+		t.Fatalf("expected spinner to be visible after start")
+	}
+
+	r.stopPersistentSpinner()
+
+	if r.spinnerVisible {
+		t.Fatalf("expected spinner to be cleared on stop")
+	}
+	if r.spinnerEnabled {
+		t.Fatalf("expected spinner to be disabled on stop")
+	}
+}
+
+func TestRendererLiveSpinnerLabelPriority(t *testing.T) {
+	var stderr bytes.Buffer
+	current := time.Unix(200, 0)
+	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, true, rendererOptions{
+		persistentSpinner: true,
+		now:               func() time.Time { return current },
+		spinnerInterval:   time.Hour,
+	})
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	r.handleEvent(libagent.AgentEvent{Type: libagent.AgentEventTypeTurnStart})
+	if got := spinnerLabelForTest(r); got != "Thinking" {
+		t.Fatalf("spinner label after turn start = %q, want %q", got, "Thinking")
+	}
+
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "text_delta", Delta: "hello"},
+	})
+	if got := spinnerLabelForTest(r); got != "Responding" {
+		t.Fatalf("spinner label during text delta = %q, want %q", got, "Responding")
+	}
+
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "reasoning_start", ID: "r1"},
+	})
+	if got := spinnerLabelForTest(r); got != "Thinking" {
+		t.Fatalf("spinner label during reasoning = %q, want %q", got, "Thinking")
+	}
+
+	r.handleEvent(libagent.AgentEvent{
+		Type:       libagent.AgentEventTypeToolExecutionStart,
+		ToolCallID: "call-read",
+		ToolName:   "read",
+		ToolArgs:   `{"path":"README.md"}`,
+	})
+	if got := spinnerLabelForTest(r); got != "Tool calling" {
+		t.Fatalf("spinner label during tool call = %q, want %q", got, "Tool calling")
+	}
+}
+
+func TestRendererLiveSpinnerSuspendsAroundStdoutWrites(t *testing.T) {
+	var tty bytes.Buffer
+	current := time.Unix(300, 0)
+	r := newRendererWithOptions(&tty, &tty, nil, true, rendererOptions{
+		persistentSpinner: true,
+		now:               func() time.Time { return current },
+		spinnerInterval:   time.Hour,
+	})
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "text_delta", Delta: "hello\n"},
+	})
+
+	out := tty.String()
+	if !strings.Contains(out, "hello\n") {
+		t.Fatalf("expected reply text in combined tty output, got %q", out)
+	}
+	if strings.Contains(out, "Respondinghello") || strings.Contains(out, "Thinkinghello") {
+		t.Fatalf("expected spinner footer to be cleared before stdout writes, got %q", out)
+	}
+	if !r.spinnerVisible {
+		t.Fatalf("expected spinner to be restored after stdout writes")
+	}
+}
+
+func TestRendererLiveSpinnerKeepsFooterAfterFinalizedToolStatus(t *testing.T) {
+	var stderr bytes.Buffer
+	current := time.Unix(400, 0)
+	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, true, rendererOptions{
+		persistentSpinner: true,
+		now:               func() time.Time { return current },
+		spinnerInterval:   time.Hour,
+	})
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	r.handleEvent(libagent.AgentEvent{
+		Type:       libagent.AgentEventTypeToolExecutionStart,
+		ToolCallID: "call-read",
+		ToolName:   "read",
+		ToolArgs:   `{"path":"README.md"}`,
+	})
+	current = current.Add(1500 * time.Millisecond)
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: &libagent.ToolResultMessage{
+			ToolCallID: "call-read",
+			ToolName:   "read",
+			Content:    "ok",
+		},
+	})
+
+	out := stderr.String()
+	if !strings.Contains(out, "✓") || !strings.Contains(out, "README.md") {
+		t.Fatalf("expected finalized tool status in stderr, got %q", out)
+	}
+	if !r.spinnerVisible {
+		t.Fatalf("expected footer to remain active after finalized tool status")
+	}
+	if got := spinnerLabelForTest(r); got != "Thinking" {
+		t.Fatalf("spinner label after tool completion = %q, want %q", got, "Thinking")
+	}
+}
+
+func TestRendererPersistentSpinnerDoesNothingForNonTTY(t *testing.T) {
+	var stderr bytes.Buffer
+	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, false, rendererOptions{
+		persistentSpinner: true,
+		spinnerInterval:   time.Hour,
+	})
+
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	if got := stderr.String(); got != "" {
+		t.Fatalf("expected no live spinner output for non-tty renderer, got %q", got)
+	}
+	if r.spinnerVisible {
+		t.Fatalf("expected spinner to remain hidden for non-tty renderer")
 	}
 }
 
@@ -440,4 +597,10 @@ func lastNonEmptyLine(s string) string {
 		}
 	}
 	return ""
+}
+
+func spinnerLabelForTest(r *renderer) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.spinnerLabelLocked()
 }

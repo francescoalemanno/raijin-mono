@@ -735,6 +735,13 @@ func runPrompt(opts Options, promptText string, forceNew bool) error {
 		return errors.New("no model configured; use /add-model to set up")
 	}
 
+	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
+	r := newRendererWithOptions(os.Stderr, os.Stdout, sess.Tools(), isTTY, rendererOptions{
+		persistentSpinner: true,
+	})
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
 	// Parse file attachments from the prompt.
 	text, files, err := input.ParseAndLoadResources(promptText)
 	if err != nil {
@@ -753,9 +760,6 @@ func runPrompt(opts Options, promptText string, forceNew bool) error {
 	if maxTokens <= 0 {
 		maxTokens = libagent.DefaultMaxTokens
 	}
-
-	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
-	r := newRenderer(os.Stderr, os.Stdout, sess.Tools(), isTTY)
 
 	sess.SetEventCallback(func(event libagent.AgentEvent) {
 		r.handleEvent(event)

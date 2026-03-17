@@ -1,6 +1,7 @@
 package oneshot
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -309,6 +310,28 @@ func TestRunHistoryUsesStandardRendererMarkdownPath(t *testing.T) {
 	}
 	if strings.Contains(out, "**bold**") {
 		t.Fatalf("expected markdown markers to be rendered, got %q", out)
+	}
+}
+
+func TestReplaySessionEventsDoesNotEnablePersistentSpinner(t *testing.T) {
+	var stderr bytes.Buffer
+	var stdout bytes.Buffer
+	r := newRenderer(&stderr, &stdout, nil, true)
+
+	msgs := []libagent.Message{
+		&libagent.UserMessage{Role: "user", Content: "hello"},
+		libagent.NewAssistantMessage("world", "", nil, time.Now()),
+	}
+
+	replayed := replaySessionEvents(r, msgs)
+	if replayed != 2 {
+		t.Fatalf("replayed messages = %d, want %d", replayed, 2)
+	}
+	if r.spinnerEnabled {
+		t.Fatalf("expected replay renderer to keep persistent spinner disabled")
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("expected no persistent spinner stderr output during history replay, got %q", got)
 	}
 }
 
