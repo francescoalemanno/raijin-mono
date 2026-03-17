@@ -3,6 +3,7 @@ package libagent
 import (
 	"context"
 	"maps"
+	"regexp"
 	"strings"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -20,9 +21,9 @@ const codexAPIEndpoint = "https://chatgpt.com/backend-api/codex"
 
 // CodexProvider returns a CustomProvider for OpenAI Codex (ChatGPT OAuth).
 //
-// Models are sourced from catwalk's embedded OpenAI provider: any model whose
-// ID matches "gpt-*codex*" (case-insensitive) is included.  All Codex models
-// are marked CanReason=true.
+// Models are sourced from catwalk's embedded OpenAI provider. The ChatGPT OAuth
+// backend exposes only a subset of GPT models, so we keep a tight model-ID
+// filter here instead of importing the whole OpenAI catalog.
 //
 // Authentication uses the OpenAI Codex OAuth flow from the oauth package.
 // Register it with the Catalog via AddCustomProvider and call
@@ -139,16 +140,22 @@ func codexInjectOptions(call fantasy.Call) fantasy.Call {
 	return call
 }
 
-// codexModels collects all gpt-*codex* models from the embedded catwalk catalog
-// and normalises them for the Codex endpoint.
+var codexCatalogModelPattern = regexp.MustCompile(`^gpt-\d+(?:\.\d+)?(?:-codex)?$`)
+
+// codexModels collects OAuth-backed OpenAI models for the ChatGPT OAuth
+// endpoint by filtering the embedded OpenAI catalog down to bare GPT version
+// models and their `-codex` variants.
 func codexModels() []ModelInfo {
 	seen := map[string]bool{}
 	var out []ModelInfo
 
 	for _, p := range embedded.GetAll() {
+		if p.ID != catwalk.InferenceProviderOpenAI {
+			continue
+		}
 		for _, m := range p.Models {
 			id := strings.ToLower(m.ID)
-			if !strings.HasPrefix(id, "gpt-") || !strings.Contains(id, "codex") {
+			if !codexCatalogModelPattern.MatchString(id) {
 				continue
 			}
 			if seen[m.ID] {
@@ -156,15 +163,17 @@ func codexModels() []ModelInfo {
 			}
 			seen[m.ID] = true
 			out = append(out, ModelInfo{
-				ProviderID:       CodexProviderID,
-				ModelID:          m.ID,
-				Name:             m.Name,
-				ContextWindow:    m.ContextWindow,
-				DefaultMaxTokens: m.DefaultMaxTokens,
-				CanReason:        true, // all Codex models support reasoning
-				SupportsImages:   m.SupportsImages,
-				CostPer1MIn:      m.CostPer1MIn,
-				CostPer1MOut:     m.CostPer1MOut,
+				ProviderID:         CodexProviderID,
+				ModelID:            m.ID,
+				Name:               m.Name,
+				ContextWindow:      m.ContextWindow,
+				DefaultMaxTokens:   m.DefaultMaxTokens,
+				CanReason:          true, // all Codex models support reasoning
+				SupportsImages:     m.SupportsImages,
+				CostPer1MIn:        m.CostPer1MIn,
+				CostPer1MOut:       m.CostPer1MOut,
+				CostPer1MInCached:  m.CostPer1MInCached,
+				CostPer1MOutCached: m.CostPer1MOutCached,
 			})
 		}
 	}

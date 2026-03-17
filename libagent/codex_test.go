@@ -16,12 +16,11 @@ func TestCodexProvider_HasModels(t *testing.T) {
 	require.NotEmpty(t, p.Models, "CodexProvider should have at least one model")
 }
 
-func TestCodexProvider_AllModelsAreCodex(t *testing.T) {
+func TestCodexProvider_AllModelsAreOpenAIGPTModels(t *testing.T) {
 	p := libagent.CodexProvider()
 	for _, m := range p.Models {
 		id := strings.ToLower(m.ModelID)
-		assert.True(t, strings.HasPrefix(id, "gpt-"), "model %q should start with gpt-", m.ModelID)
-		assert.Contains(t, id, "codex", "model %q should contain 'codex'", m.ModelID)
+		assert.Regexp(t, `^gpt-\d+(?:\.\d+)?(?:-codex)?$`, id, "model %q should match bare GPT or GPT-codex pattern", m.ModelID)
 	}
 }
 
@@ -44,6 +43,36 @@ func TestCodexProvider_IncludesKnownModel(t *testing.T) {
 	assert.True(t, found, "expected gpt-5.3-codex to be present in CodexProvider")
 }
 
+func TestCodexProvider_IncludesGPT54FromEmbeddedCatalog(t *testing.T) {
+	p := libagent.CodexProvider()
+	var found *libagent.ModelInfo
+	for i := range p.Models {
+		if p.Models[i].ModelID == "gpt-5.4" {
+			found = &p.Models[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "expected gpt-5.4 to be present in CodexProvider")
+	assert.Equal(t, libagent.CodexProviderID, found.ProviderID)
+	assert.Equal(t, int64(1050000), found.ContextWindow)
+	assert.Equal(t, int64(128000), found.DefaultMaxTokens)
+	assert.True(t, found.CanReason)
+	assert.True(t, found.SupportsImages)
+	assert.Equal(t, 2.5, found.CostPer1MIn)
+	assert.Equal(t, 15.0, found.CostPer1MOut)
+	assert.Equal(t, 0.25, found.CostPer1MInCached)
+}
+
+func TestCodexProvider_ExcludesNonMatchingGPTVariants(t *testing.T) {
+	p := libagent.CodexProvider()
+	seen := map[string]bool{}
+	for _, m := range p.Models {
+		seen[m.ModelID] = true
+	}
+	assert.False(t, seen["gpt-5.4-pro"], "gpt-5.4-pro should not be exposed by the OAuth provider")
+	assert.False(t, seen["gpt-5.1-codex-max"], "gpt-5.1-codex-max should not be exposed by the OAuth provider")
+}
+
 func TestCatalog_DefaultCatalog_IncludesCodex(t *testing.T) {
 	cat := libagent.DefaultCatalog()
 
@@ -52,6 +81,19 @@ func TestCatalog_DefaultCatalog_IncludesCodex(t *testing.T) {
 	assert.Equal(t, libagent.CodexProviderID, info.ProviderID)
 	assert.Equal(t, "gpt-5.3-codex", info.ModelID)
 	assert.True(t, info.CanReason)
+}
+
+func TestCatalog_DefaultCatalog_IncludesGPT54InCodexProvider(t *testing.T) {
+	cat := libagent.DefaultCatalog()
+
+	info, _, err := cat.FindModel(libagent.CodexProviderID, "gpt-5.4")
+	require.NoError(t, err)
+	assert.Equal(t, libagent.CodexProviderID, info.ProviderID)
+	assert.Equal(t, "gpt-5.4", info.ModelID)
+	assert.Equal(t, int64(1050000), info.ContextWindow)
+	assert.Equal(t, int64(128000), info.DefaultMaxTokens)
+	assert.True(t, info.CanReason)
+	assert.True(t, info.SupportsImages)
 }
 
 func TestCatalog_DefaultCatalog_CodexNotFoundUnknownModel(t *testing.T) {
