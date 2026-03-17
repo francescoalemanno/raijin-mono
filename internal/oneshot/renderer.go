@@ -67,7 +67,8 @@ type renderer struct {
 	spinnerVisible    bool
 	spinnerWidth      int
 	spinnerFrameIndex int
-	runStart          time.Time
+	spinnerLabel      string
+	spinnerStateStart time.Time
 	turnActive        bool
 	replyStreaming    bool
 	spinnerInterval   time.Duration
@@ -585,11 +586,12 @@ func (r *renderer) updatePendingLabel(p *pendingLine) {
 func (r *renderer) startPersistentSpinner() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.spinnerEnabled || !r.runStart.IsZero() {
+	if !r.spinnerEnabled || !r.spinnerStateStart.IsZero() {
 		return
 	}
 
-	r.runStart = r.now()
+	r.spinnerStateStart = r.now()
+	r.spinnerLabel = r.spinnerLabelLocked()
 	r.redrawSpinnerLocked()
 
 	stopCh := make(chan struct{})
@@ -658,10 +660,10 @@ func (r *renderer) spinnerLabelLocked() string {
 }
 
 func (r *renderer) spinnerElapsedLocked() string {
-	if r.runStart.IsZero() {
+	if r.spinnerStateStart.IsZero() {
 		return "0s"
 	}
-	secs := int(r.now().Sub(r.runStart) / time.Second)
+	secs := int(r.now().Sub(r.spinnerStateStart) / time.Second)
 	if secs < 0 {
 		secs = 0
 	}
@@ -669,12 +671,13 @@ func (r *renderer) spinnerElapsedLocked() string {
 }
 
 func (r *renderer) spinnerLineLocked() string {
+	r.updateSpinnerPhaseLocked()
 	frame := spinnerFrames[r.spinnerFrameIndex%len(spinnerFrames)]
-	return fmt.Sprintf("%s %s %s", renderStatusInfo(frame), oneshotNormalStyle.Render(r.spinnerLabelLocked()), renderDimText(r.spinnerElapsedLocked()))
+	return fmt.Sprintf("%s %s %s", renderStatusInfo(frame), oneshotNormalStyle.Render(r.spinnerLabel), renderDimText(r.spinnerElapsedLocked()))
 }
 
 func (r *renderer) redrawSpinnerLocked() {
-	if !r.spinnerEnabled || r.runStart.IsZero() {
+	if !r.spinnerEnabled || r.spinnerStateStart.IsZero() {
 		return
 	}
 	line := r.spinnerLineLocked()
@@ -723,6 +726,15 @@ func (r *renderer) prepareForStdoutLocked() {
 
 func (r *renderer) restoreAfterStdoutLocked() {
 	r.redrawSpinnerLocked()
+}
+
+func (r *renderer) updateSpinnerPhaseLocked() {
+	label := r.spinnerLabelLocked()
+	if label == r.spinnerLabel {
+		return
+	}
+	r.spinnerLabel = label
+	r.spinnerStateStart = r.now()
 }
 
 func formatDuration(d time.Duration) string {

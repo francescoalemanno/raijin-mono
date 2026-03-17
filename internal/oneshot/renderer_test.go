@@ -225,6 +225,48 @@ func TestRendererLiveSpinnerLabelPriority(t *testing.T) {
 	}
 }
 
+func TestRendererLiveSpinnerTimerResetsWhenPhaseChanges(t *testing.T) {
+	var stderr bytes.Buffer
+	current := time.Unix(250, 0)
+	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, true, rendererOptions{
+		persistentSpinner: true,
+		now:               func() time.Time { return current },
+		spinnerInterval:   time.Hour,
+	})
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	current = current.Add(5 * time.Second)
+	if got := spinnerElapsedForTest(r); got != "5s" {
+		t.Fatalf("spinner elapsed before phase change = %q, want %q", got, "5s")
+	}
+
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "text_delta", Delta: "hello"},
+	})
+	if got := spinnerLabelForTest(r); got != "Responding" {
+		t.Fatalf("spinner label after text delta = %q, want %q", got, "Responding")
+	}
+	if got := spinnerElapsedForTest(r); got != "0s" {
+		t.Fatalf("spinner elapsed after switch to responding = %q, want %q", got, "0s")
+	}
+
+	current = current.Add(3 * time.Second)
+	r.handleEvent(libagent.AgentEvent{
+		Type:       libagent.AgentEventTypeToolExecutionStart,
+		ToolCallID: "call-read",
+		ToolName:   "read",
+		ToolArgs:   `{"path":"README.md"}`,
+	})
+	if got := spinnerLabelForTest(r); got != "Tool calling" {
+		t.Fatalf("spinner label after tool start = %q, want %q", got, "Tool calling")
+	}
+	if got := spinnerElapsedForTest(r); got != "0s" {
+		t.Fatalf("spinner elapsed after switch to tool calling = %q, want %q", got, "0s")
+	}
+}
+
 func TestRendererLiveSpinnerSuspendsAroundStdoutWrites(t *testing.T) {
 	var tty bytes.Buffer
 	current := time.Unix(300, 0)
@@ -603,4 +645,11 @@ func spinnerLabelForTest(r *renderer) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.spinnerLabelLocked()
+}
+
+func spinnerElapsedForTest(r *renderer) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.updateSpinnerPhaseLocked()
+	return r.spinnerElapsedLocked()
 }
