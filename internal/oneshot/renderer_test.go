@@ -165,7 +165,7 @@ func TestRendererLiveSpinnerStartsImmediatelyAndClearsOnStop(t *testing.T) {
 
 	r.startPersistentSpinner()
 
-	if !strings.Contains(stderr.String(), "Thinking") || !strings.Contains(stderr.String(), "0s") {
+	if !strings.Contains(stderr.String(), "Thinking") || !strings.Contains(stderr.String(), "0.00s") {
 		t.Fatalf("expected initial live spinner output, got %q", stderr.String())
 	}
 	if !r.spinnerVisible {
@@ -237,8 +237,8 @@ func TestRendererLiveSpinnerTimerResetsWhenPhaseChanges(t *testing.T) {
 	defer r.stopPersistentSpinner()
 
 	current = current.Add(5 * time.Second)
-	if got := spinnerElapsedForTest(r); got != "5s" {
-		t.Fatalf("spinner elapsed before phase change = %q, want %q", got, "5s")
+	if got := spinnerElapsedForTest(r); got != "5.00s" {
+		t.Fatalf("spinner elapsed before phase change = %q, want %q", got, "5.00s")
 	}
 
 	r.handleEvent(libagent.AgentEvent{
@@ -248,8 +248,8 @@ func TestRendererLiveSpinnerTimerResetsWhenPhaseChanges(t *testing.T) {
 	if got := spinnerLabelForTest(r); got != "Responding" {
 		t.Fatalf("spinner label after text delta = %q, want %q", got, "Responding")
 	}
-	if got := spinnerElapsedForTest(r); got != "0s" {
-		t.Fatalf("spinner elapsed after switch to responding = %q, want %q", got, "0s")
+	if got := spinnerElapsedForTest(r); got != "0.00s" {
+		t.Fatalf("spinner elapsed after switch to responding = %q, want %q", got, "0.00s")
 	}
 
 	current = current.Add(3 * time.Second)
@@ -262,8 +262,8 @@ func TestRendererLiveSpinnerTimerResetsWhenPhaseChanges(t *testing.T) {
 	if got := spinnerLabelForTest(r); got != "Tool calling" {
 		t.Fatalf("spinner label after tool start = %q, want %q", got, "Tool calling")
 	}
-	if got := spinnerElapsedForTest(r); got != "0s" {
-		t.Fatalf("spinner elapsed after switch to tool calling = %q, want %q", got, "0s")
+	if got := spinnerElapsedForTest(r); got != "0.00s" {
+		t.Fatalf("spinner elapsed after switch to tool calling = %q, want %q", got, "0.00s")
 	}
 }
 

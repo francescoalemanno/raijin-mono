@@ -661,13 +661,13 @@ func (r *renderer) spinnerLabelLocked() string {
 
 func (r *renderer) spinnerElapsedLocked() string {
 	if r.spinnerStateStart.IsZero() {
-		return "0s"
+		return "0.00s"
 	}
-	secs := int(r.now().Sub(r.spinnerStateStart) / time.Second)
-	if secs < 0 {
-		secs = 0
+	elapsed := r.now().Sub(r.spinnerStateStart)
+	if elapsed < 0 {
+		elapsed = 0
 	}
-	return fmt.Sprintf("%ds", secs)
+	return fmt.Sprintf("%.2fs", elapsed.Seconds())
 }
 
 func (r *renderer) spinnerLineLocked() string {
