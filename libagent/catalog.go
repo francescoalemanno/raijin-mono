@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -494,6 +496,9 @@ func NewModelFromProvider(ctx context.Context, p fantasy.Provider, modelID strin
 // constructor based on its Type field.
 func buildFantasyProvider(p catwalk.Provider, apiKey string) (fantasy.Provider, error) {
 	endpoint := p.APIEndpoint
+	if after, ok := strings.CutPrefix(endpoint, "$"); ok {
+		endpoint = os.Getenv(after)
+	}
 	headers := p.DefaultHeaders
 
 	switch p.Type {
