@@ -1,47 +1,34 @@
 # Raijin shell integration for bash
 # Add to your .bashrc:  eval "$(raijin --init bash)"
 #
-# Lines starting with ":" are forwarded to raijin with the leading ":"
-# stripped.  Slash commands keep their slash:
-#   :/models        →  raijin "/models"
-#   :explain this   →  raijin "explain this"
+# This script autogenerates ":" shortcuts as aliases:
+#   :               → raijin
+#   :status         → raijin /status
+#   :+skill         → raijin +skill
 
-# --- Readline interception ---
-# Rewrites the line buffer before Enter submits it, so tokens like ":/tree"
-# are never interpreted as file paths by bash.
-_raijin_intercept() {
-  if [[ "$READLINE_LINE" == :* ]]; then
-    local stripped="${READLINE_LINE#:}"
-    READLINE_LINE="raijin $(printf '%q' "$stripped")"
-    READLINE_POINT=${#READLINE_LINE}
-  fi
-}
-# Bind to an internal key sequence, then chain Enter through it.
-bind -x '"\C-x\C-r": _raijin_intercept'
-bind '"\C-m": "\C-x\C-r\C-m"'
-bind '"\C-j": "\C-x\C-r\C-j"'
+# --- Generated : aliases ---
+alias :='raijin'
+{{- range .CommandShortcuts }}
+alias :{{ . }}='raijin /{{ . }}'
+{{- end }}
+{{- range .SkillShortcuts }}
+alias :+{{ . }}='raijin +{{ . }}'
+{{- end }}
 
-# --- Tab completion via raijin engine ---
+# --- Completion for ":" alias ---
 _raijin_colon_complete() {
-  local first="${COMP_WORDS[0]}"
+  local line="${COMP_LINE}"
+  [[ -n "$line" ]] || line=": ${COMP_WORDS[*]:1}"
   local cur="${COMP_WORDS[COMP_CWORD]}"
-  [[ "$cur" == :* || "$first" == :* ]] || return 1
-
-  local line="$COMP_LINE"
-  [[ -n "$line" ]] || line="$cur"
-
-  local completions
-  completions="$(raijin --complete "$line" 2>/dev/null)"
-
-  local -a matches=()
-  while IFS= read -r line; do
-    if [[ -n "$line" ]]; then
-      matches+=( "$line" )
+  local out
+  out="$(raijin --complete "$line" 2>/dev/null)"
+  COMPREPLY=()
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    if [[ "$cur" != :* && "$item" == :* ]]; then
+      item="${item#:}"
     fi
-  done <<< "$completions"
-
-  COMPREPLY=( "${matches[@]}" )
-  return 0
+    COMPREPLY+=( "$item" )
+  done <<< "$out"
 }
-
-complete -D -F _raijin_colon_complete
+complete -F _raijin_colon_complete :

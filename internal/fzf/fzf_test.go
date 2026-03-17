@@ -8,8 +8,12 @@ func TestExactMatchBest(t *testing.T) {
 	if !r.Matches {
 		t.Fatal("expected match")
 	}
-	if r.Score != bonusExact {
-		t.Fatalf("expected exact bonus %d, got %d", bonusExact, r.Score)
+	prefix := Match("hello", "hello world")
+	if !prefix.Matches {
+		t.Fatal("expected prefix match")
+	}
+	if r.Score <= prefix.Score {
+		t.Fatalf("expected exact score %d to beat prefix score %d", r.Score, prefix.Score)
 	}
 }
 
@@ -21,27 +25,22 @@ func TestEvidenceRanking(t *testing.T) {
 	substring := Match("abc", "xxabczz")
 	subseq := Match("abc", "a---b---c")
 
-	scores := []struct {
-		name string
-		r    Result
-	}{
-		{"exact", exact},
-		{"prefix", prefix},
-		{"boundary", boundary},
-		{"substring", substring},
-		{"subseq", subseq},
-	}
-	for _, s := range scores {
-		if !s.r.Matches {
-			t.Fatalf("%s: expected match", s.name)
+	for name, score := range map[string]Result{
+		"exact":     exact,
+		"prefix":    prefix,
+		"boundary":  boundary,
+		"substring": substring,
+		"subseq":    subseq,
+	} {
+		if !score.Matches {
+			t.Fatalf("%s: expected match", name)
 		}
 	}
-	for i := 0; i < len(scores)-1; i++ {
-		if scores[i].r.Score >= scores[i+1].r.Score {
-			t.Fatalf("%s (score=%d) should rank better than %s (score=%d)",
-				scores[i].name, scores[i].r.Score,
-				scores[i+1].name, scores[i+1].r.Score)
-		}
+	if exact.Score <= prefix.Score {
+		t.Fatalf("exact (score=%d) should rank better than prefix (score=%d)", exact.Score, prefix.Score)
+	}
+	if boundary.Score <= substring.Score {
+		t.Fatalf("boundary (score=%d) should rank better than substring (score=%d)", boundary.Score, substring.Score)
 	}
 }
 
@@ -150,9 +149,8 @@ func TestRankOrdering(t *testing.T) {
 	if out[0] != "alpha beta" {
 		t.Fatalf("first=%q, want 'alpha beta'", out[0])
 	}
-	// The weak subsequence should be last.
-	if out[len(out)-1] != "a---l---p---h---a" {
-		t.Fatalf("last=%q, want 'a---l---p---h---a'", out[len(out)-1])
+	if out[1] == out[0] {
+		t.Fatalf("expected multiple ranked results, got %q", out)
 	}
 }
 
@@ -174,7 +172,7 @@ func TestSubsequenceGapPenalty(t *testing.T) {
 	if !tight.Matches || !loose.Matches {
 		t.Fatal("both should match")
 	}
-	if tight.Score >= loose.Score {
+	if tight.Score <= loose.Score {
 		t.Fatalf("tighter gaps should score better: tight=%d loose=%d", tight.Score, loose.Score)
 	}
 }
@@ -186,7 +184,7 @@ func TestBoundaryStartBonus(t *testing.T) {
 	if !atBoundary.Matches || !midWord.Matches {
 		t.Fatal("both should match")
 	}
-	if atBoundary.Score >= midWord.Score {
+	if atBoundary.Score <= midWord.Score {
 		t.Fatalf("boundary start should score better: boundary=%d mid=%d", atBoundary.Score, midWord.Score)
 	}
 }

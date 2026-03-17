@@ -46,7 +46,15 @@ func TestReplCompleteLineIgnoresNonTabKeys(t *testing.T) {
 
 func TestReplCompleteLineExpandsSingleMatch(t *testing.T) {
 	line := "/add"
-	newLine, newPos, ok := replCompleteLine(line, len(line), '\t')
+	newLine, newPos, ok := replCompleteLineWithPicker(line, len(line), '\t', func(mode, query string, candidates []string) (string, error) {
+		if mode != replPickerModeComplete {
+			t.Fatalf("mode = %q, want %q", mode, replPickerModeComplete)
+		}
+		if query != "add" {
+			t.Fatalf("query = %q, want %q", query, "add")
+		}
+		return "/add-model", nil
+	}, nil)
 	if !ok {
 		t.Fatalf("expected tab key to be handled")
 	}
@@ -91,7 +99,15 @@ func TestReplAutoCompleterDoesNotSuggestColonPrefix(t *testing.T) {
 func TestReplCompleteLineShowsMatchesForMultipleCandidates(t *testing.T) {
 	line := "/s"
 	var shown []string
-	newLine, newPos, ok := replCompleteLineWithMatches(line, len(line), '\t', func(candidates []string) {
+	newLine, newPos, ok := replCompleteLineWithPicker(line, len(line), '\t', func(mode, query string, candidates []string) (string, error) {
+		if mode != replPickerModeComplete {
+			t.Fatalf("mode = %q, want %q", mode, replPickerModeComplete)
+		}
+		if query != "s" {
+			t.Fatalf("query = %q, want %q", query, "s")
+		}
+		return "", nil
+	}, func(candidates []string) {
 		shown = append([]string{}, candidates...)
 	})
 	if !ok {
@@ -106,6 +122,130 @@ func TestReplCompleteLineShowsMatchesForMultipleCandidates(t *testing.T) {
 	joined := strings.Join(shown, "\n")
 	if !strings.Contains(joined, "/sessions") || !strings.Contains(joined, "/setup") {
 		t.Fatalf("expected shown candidates to include /sessions and /setup, got %q", shown)
+	}
+}
+
+func TestReplCompleteLineUsesPickerSelection(t *testing.T) {
+	line := "/sts"
+	newLine, newPos, ok := replCompleteLineWithPicker(line, len(line), '\t', func(mode, query string, candidates []string) (string, error) {
+		if mode != replPickerModeComplete {
+			t.Fatalf("mode = %q, want %q", mode, replPickerModeComplete)
+		}
+		if query != "sts" {
+			t.Fatalf("query = %q, want %q", query, "sts")
+		}
+		joined := strings.Join(candidates, "\n")
+		if !strings.Contains(joined, "/status") {
+			t.Fatalf("expected candidate list to include /status, got %q", candidates)
+		}
+		return "/status", nil
+	}, nil)
+	if !ok {
+		t.Fatalf("expected tab key to be handled")
+	}
+	if newLine != "/status" {
+		t.Fatalf("newLine = %q, want %q", newLine, "/status")
+	}
+	if newPos != len(newLine) {
+		t.Fatalf("newPos = %d, want %d", newPos, len(newLine))
+	}
+}
+
+func TestReplBuildPickerRequestForMention(t *testing.T) {
+	line := "look at @TOD"
+	newLine, newPos, req, ok := replBuildPickerRequest(line, len(line), '\t')
+	if !ok {
+		t.Fatalf("expected tab key to be handled")
+	}
+	if newLine != line || newPos != len(line) {
+		t.Fatalf("expected unchanged line until picker runs, got %q @%d", newLine, newPos)
+	}
+	if req == nil {
+		t.Fatal("expected mention picker request")
+	}
+	if req.mode != replPickerModeMention {
+		t.Fatalf("mode = %q, want %q", req.mode, replPickerModeMention)
+	}
+	if req.query != "TOD" {
+		t.Fatalf("query = %q, want %q", req.query, "TOD")
+	}
+}
+
+func TestReplBuildPickerRequestForMultipleCompletions(t *testing.T) {
+	line := "/s"
+	newLine, newPos, req, ok := replBuildPickerRequest(line, len(line), '\t')
+	if !ok {
+		t.Fatalf("expected tab key to be handled")
+	}
+	if newLine != line || newPos != len(line) {
+		t.Fatalf("expected unchanged line until picker runs, got %q @%d", newLine, newPos)
+	}
+	if req == nil {
+		t.Fatal("expected completion picker request")
+	}
+	if req.mode != replPickerModeComplete {
+		t.Fatalf("mode = %q, want %q", req.mode, replPickerModeComplete)
+	}
+	if req.query != "s" {
+		t.Fatalf("query = %q, want %q", req.query, "s")
+	}
+	if len(req.candidates) < 2 {
+		t.Fatalf("expected multiple candidates, got %q", req.candidates)
+	}
+}
+
+func TestReplCompleteLineUsesMentionPicker(t *testing.T) {
+	line := "@rep"
+	newLine, newPos, ok := replCompleteLineWithPicker(line, len(line), '\t', func(mode, query string, candidates []string) (string, error) {
+		if mode != replPickerModeMention {
+			t.Fatalf("mode = %q, want %q", mode, replPickerModeMention)
+		}
+		if query != "rep" {
+			t.Fatalf("query = %q, want %q", query, "rep")
+		}
+		if len(candidates) != 0 {
+			t.Fatalf("mention picker should not receive completion candidates, got %q", candidates)
+		}
+		return "reports/output.txt", nil
+	}, nil)
+	if !ok {
+		t.Fatalf("expected tab key to be handled")
+	}
+	if newLine != "@reports/output.txt" {
+		t.Fatalf("newLine = %q, want %q", newLine, "@reports/output.txt")
+	}
+	if newPos != len(newLine) {
+		t.Fatalf("newPos = %d, want %d", newPos, len(newLine))
+	}
+}
+
+func TestReplCompleteLineFormatsMentionWithSpaces(t *testing.T) {
+	line := "@rep"
+	newLine, _, ok := replCompleteLineWithPicker(line, len(line), '\t', func(mode, query string, candidates []string) (string, error) {
+		return `reports/my file.txt`, nil
+	}, nil)
+	if !ok {
+		t.Fatalf("expected tab key to be handled")
+	}
+	if newLine != `@"reports/my file.txt"` {
+		t.Fatalf("newLine = %q, want %q", newLine, `@"reports/my file.txt"`)
+	}
+}
+
+func TestReplRunPickerRequestFormatsMentionSelection(t *testing.T) {
+	req := &replPickerRequest{
+		mode:       replPickerModeMention,
+		line:       "look at @rep",
+		tokenStart: len("look at "),
+		tokenEnd:   len("look at @rep"),
+		query:      "rep",
+	}
+	got, err := replApplyPickerSelection(req, `reports/my file.txt`)
+	if err != nil {
+		t.Fatalf("replApplyPickerSelection() error = %v", err)
+	}
+	if got != `look at @"reports/my file.txt"` {
+		t.Fatalf("got %q", got)
 	}
 }
 
@@ -165,6 +305,14 @@ func TestParseStatusOutput(t *testing.T) {
 				t.Fatalf("parseStatusOutput() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestReplFormatMentionEscapesQuotesAndBackslashes(t *testing.T) {
+	got := replFormatMention(`dir\sub "quoted".txt`)
+	want := `@"dir\\sub \"quoted\".txt"`
+	if got != want {
+		t.Fatalf("replFormatMention() = %q, want %q", got, want)
 	}
 }
 

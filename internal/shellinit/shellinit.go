@@ -3,9 +3,12 @@
 package shellinit
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
 	"strings"
+	"text/template"
+	"unicode"
 
 	"github.com/francescoalemanno/raijin-mono/internal/commands"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
@@ -37,14 +40,28 @@ func Init(shell string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading init script for %s: %w", shell, err)
 	}
-	return string(data), nil
+	tmpl, err := template.New(filename).Parse(string(data))
+	if err != nil {
+		return "", fmt.Errorf("parsing init script template for %s: %w", shell, err)
+	}
+	model := initTemplateData{
+		CommandShortcuts: validShortcutNames(commandAndTemplateNames()),
+		SkillShortcuts:   validShortcutNames(skillNames()),
+	}
+	var rendered bytes.Buffer
+	if err := tmpl.Execute(&rendered, model); err != nil {
+		return "", fmt.Errorf("rendering init script for %s: %w", shell, err)
+	}
+	return strings.TrimRight(rendered.String(), "\n") + "\n", nil
 }
 
-// Completions returns all slash command and template names (without the "/"
-// prefix), one per line. This is meant to be called by shell completion
-// functions via `raijin --completions`.
+// Completions returns all completable entries shown in /help, one per line.
+// Slash commands and templates are returned without the leading "/".
+// Skills are returned with the leading "+".
+// This is meant to be called by shell completion functions via
+// `raijin --completions`.
 func Completions() string {
-	return strings.Join(commandAndTemplateNames(), "\n")
+	return strings.Join(allCompletions(), "\n")
 }
 
 // Complete resolves shell completions and returns one candidate per line.
@@ -52,9 +69,30 @@ func Completions() string {
 // If the active token starts with ":" (shell shortcut mode), returned
 // completions preserve the ":" prefix.
 func Complete(current string) string {
+	token, prefix, _ := completionContext(current)
+	query := completionQuery(token)
+
+	candidates := Candidates(current)
+	if query == "" {
+		return strings.Join(candidates, "\n")
+	}
+
+	var out []string
+	for _, candidate := range candidates {
+		if strings.HasPrefix(completionCandidateSuffix(token, prefix, candidate), query) {
+			out = append(out, candidate)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// Candidates returns the full eligible completion set for the active token.
+// Unlike Complete, it does not filter by the token text, which makes it
+// suitable for fuzzy ranking and fzf-driven selection.
+func Candidates(current string) []string {
 	token, prefix, atPromptStart := completionContext(current)
 	if token == "" && !atPromptStart {
-		return ""
+		return nil
 	}
 
 	var out []string
@@ -67,34 +105,58 @@ func Complete(current string) string {
 			out = append(out, prefix+"/"+name)
 		}
 	case strings.HasPrefix(token, "+"):
-		query := strings.TrimPrefix(token, "+")
 		for _, name := range skillNames() {
-			if strings.HasPrefix(name, query) {
-				out = append(out, prefix+"+"+name)
-			}
+			out = append(out, prefix+"+"+name)
 		}
 	case strings.HasPrefix(token, "/"):
 		if !atPromptStart {
-			return ""
+			return nil
 		}
-		query := strings.TrimPrefix(token, "/")
 		for _, name := range commandAndTemplateNames() {
-			if strings.HasPrefix(name, query) {
-				out = append(out, prefix+"/"+name)
-			}
+			out = append(out, prefix+"/"+name)
 		}
 	default:
 		if !atPromptStart {
-			return ""
+			return nil
 		}
 		for _, name := range commandAndTemplateNames() {
-			if strings.HasPrefix(name, token) {
-				out = append(out, prefix+"/"+name)
-			}
+			out = append(out, prefix+"/"+name)
 		}
 	}
+	return out
+}
 
-	return strings.Join(out, "\n")
+func allCompletions() []string {
+	entries := make([]string, 0, len(commandAndTemplateNames())+len(skillNames()))
+	entries = append(entries, commandAndTemplateNames()...)
+	for _, name := range skillNames() {
+		entries = append(entries, "+"+name)
+	}
+	return entries
+}
+
+func completionQuery(token string) string {
+	switch {
+	case strings.HasPrefix(token, "+"):
+		return strings.TrimPrefix(token, "+")
+	case strings.HasPrefix(token, "/"):
+		return strings.TrimPrefix(token, "/")
+	default:
+		return token
+	}
+}
+
+func completionCandidateSuffix(token, prefix, candidate string) string {
+	candidate = strings.TrimPrefix(candidate, prefix)
+
+	switch {
+	case strings.HasPrefix(token, "+"):
+		return strings.TrimPrefix(candidate, "+")
+	case strings.HasPrefix(token, "/"):
+		return strings.TrimPrefix(candidate, "/")
+	default:
+		return strings.TrimPrefix(candidate, "/")
+	}
 }
 
 func completionContext(current string) (token, prefix string, atPromptStart bool) {
@@ -172,4 +234,37 @@ func skillNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+func isValidShortcutName(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			continue
+		}
+		switch r {
+		case '-', '_', '.', '+':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validShortcutNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if isValidShortcutName(name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+type initTemplateData struct {
+	CommandShortcuts []string
+	SkillShortcuts   []string
 }
