@@ -161,12 +161,20 @@ func TestRendererLiveSpinnerStartsImmediatelyAndClearsOnStop(t *testing.T) {
 		persistentSpinner: true,
 		now:               func() time.Time { return current },
 		spinnerInterval:   time.Hour,
+		modelLabel:        "openai/gpt-test",
+		contextWindow:     10000,
 	})
 
 	r.startPersistentSpinner()
 
 	if !strings.Contains(stderr.String(), "Thinking") || !strings.Contains(stderr.String(), "0.00s") {
 		t.Fatalf("expected initial live spinner output, got %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "openai/gpt-test") {
+		t.Fatalf("expected initial spinner to include model label, got %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "ctx 24.0%") {
+		t.Fatalf("expected initial spinner to include context percentage, got %q", stderr.String())
 	}
 	if !r.spinnerVisible {
 		t.Fatalf("expected spinner to be visible after start")
@@ -189,6 +197,8 @@ func TestRendererLiveSpinnerLabelPriority(t *testing.T) {
 		persistentSpinner: true,
 		now:               func() time.Time { return current },
 		spinnerInterval:   time.Hour,
+		modelLabel:        "openai/gpt-test",
+		contextWindow:     10000,
 	})
 	r.startPersistentSpinner()
 	defer r.stopPersistentSpinner()
@@ -232,6 +242,8 @@ func TestRendererLiveSpinnerTimerResetsWhenPhaseChanges(t *testing.T) {
 		persistentSpinner: true,
 		now:               func() time.Time { return current },
 		spinnerInterval:   time.Hour,
+		modelLabel:        "openai/gpt-test",
+		contextWindow:     10000,
 	})
 	r.startPersistentSpinner()
 	defer r.stopPersistentSpinner()
@@ -274,6 +286,8 @@ func TestRendererLiveSpinnerSuspendsAroundStdoutWrites(t *testing.T) {
 		persistentSpinner: true,
 		now:               func() time.Time { return current },
 		spinnerInterval:   time.Hour,
+		modelLabel:        "openai/gpt-test",
+		contextWindow:     10000,
 	})
 	r.startPersistentSpinner()
 	defer r.stopPersistentSpinner()
@@ -302,6 +316,8 @@ func TestRendererLiveSpinnerKeepsFooterAfterFinalizedToolStatus(t *testing.T) {
 		persistentSpinner: true,
 		now:               func() time.Time { return current },
 		spinnerInterval:   time.Hour,
+		modelLabel:        "openai/gpt-test",
+		contextWindow:     10000,
 	})
 	r.startPersistentSpinner()
 	defer r.stopPersistentSpinner()
@@ -339,6 +355,8 @@ func TestRendererPersistentSpinnerDoesNothingForNonTTY(t *testing.T) {
 	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, false, rendererOptions{
 		persistentSpinner: true,
 		spinnerInterval:   time.Hour,
+		modelLabel:        "openai/gpt-test",
+		contextWindow:     10000,
 	})
 
 	r.startPersistentSpinner()

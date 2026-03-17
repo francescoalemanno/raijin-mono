@@ -735,10 +735,21 @@ func runPrompt(opts Options, promptText string, forceNew bool) error {
 		return errors.New("no model configured; use /add-model to set up")
 	}
 
+	msgs, err := sess.ListMessages(context.Background())
+	if err != nil {
+		return err
+	}
+
 	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
 	r := newRendererWithOptions(os.Stderr, os.Stdout, sess.Tools(), isTTY, rendererOptions{
 		persistentSpinner: true,
+		modelLabel:        statusModelLabel(opts),
+		contextWindow:     opts.RuntimeModel.EffectiveContextWindow(),
+		initialMessages:   msgs,
 	})
+	if r.contextWindow <= 0 {
+		r.contextWindow = opts.ModelCfg.ContextWindow
+	}
 	r.startPersistentSpinner()
 	defer r.stopPersistentSpinner()
 

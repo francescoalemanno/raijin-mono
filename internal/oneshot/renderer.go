@@ -25,6 +25,9 @@ type rendererOptions struct {
 	persistentSpinner bool
 	now               func() time.Time
 	spinnerInterval   time.Duration
+	modelLabel        string
+	contextWindow     int64
+	initialMessages   []libagent.Message
 }
 
 // pendingLine tracks a tool or thinking event currently in progress.
@@ -74,6 +77,9 @@ type renderer struct {
 	spinnerInterval   time.Duration
 	spinnerStopCh     chan struct{}
 	spinnerDoneCh     chan struct{}
+	modelLabel        string
+	contextWindow     int64
+	contextMessages   []libagent.Message
 }
 
 func newRenderer(stderr, stdout io.Writer, agentTools []libagent.Tool, isTTY bool) *renderer {
@@ -97,6 +103,9 @@ func newRendererWithOptions(stderr, stdout io.Writer, agentTools []libagent.Tool
 		replyMD:         newLineMarkdownRenderer(),
 		spinnerEnabled:  isTTY && opts.persistentSpinner,
 		spinnerInterval: opts.spinnerInterval,
+		modelLabel:      strings.TrimSpace(opts.modelLabel),
+		contextWindow:   opts.contextWindow,
+		contextMessages: append([]libagent.Message(nil), opts.initialMessages...),
 	}
 }
 
@@ -249,10 +258,12 @@ func (r *renderer) onToolEnd(id, name, input, output string, isError bool) {
 func (r *renderer) onMessageEnd(event libagent.AgentEvent) {
 	switch m := event.Message.(type) {
 	case *libagent.UserMessage:
+		r.appendContextMessageLocked(m)
 		r.flushReplyTail()
 		r.flushThinking()
 		r.renderUserMessage(m)
 	case *libagent.ToolResultMessage:
+		r.appendContextMessageLocked(m)
 		if p, ok := r.pending[m.ToolCallID]; ok {
 			label := r.renderToolLabelForResult(p.toolName, r.bestParams(p), m.Content, m.Metadata)
 			dur := r.now().Sub(p.startTime)
@@ -265,6 +276,7 @@ func (r *renderer) onMessageEnd(event libagent.AgentEvent) {
 			delete(r.pending, m.ToolCallID)
 		}
 	case *libagent.AssistantMessage:
+		r.appendContextMessageLocked(m)
 		r.replyStreaming = false
 		r.flushReplyTail()
 		r.flushThinking()
@@ -673,7 +685,18 @@ func (r *renderer) spinnerElapsedLocked() string {
 func (r *renderer) spinnerLineLocked() string {
 	r.updateSpinnerPhaseLocked()
 	frame := spinnerFrames[r.spinnerFrameIndex%len(spinnerFrames)]
-	return fmt.Sprintf("%s %s %s", renderStatusInfo(frame), oneshotNormalStyle.Render(r.spinnerLabel), renderDimText(r.spinnerElapsedLocked()))
+	parts := []string{
+		renderStatusInfo(frame),
+		oneshotNormalStyle.Render(r.spinnerLabel),
+		renderDimText(r.spinnerElapsedLocked()),
+	}
+	if r.modelLabel != "" {
+		parts = append(parts, RenderThemedModel(r.modelLabel))
+	}
+	if ctxLabel := r.spinnerContextLabelLocked(); ctxLabel != "" {
+		parts = append(parts, renderDimText(ctxLabel))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (r *renderer) redrawSpinnerLocked() {
@@ -735,6 +758,24 @@ func (r *renderer) updateSpinnerPhaseLocked() {
 	}
 	r.spinnerLabel = label
 	r.spinnerStateStart = r.now()
+}
+
+func (r *renderer) spinnerContextLabelLocked() string {
+	if r.contextWindow <= 0 {
+		return "ctx ?"
+	}
+	estimatedTokens := int64(2400) + estimateConversationTokens(r.contextMessages)
+	usageTokens := latestAssistantUsageTokens(r.contextMessages)
+	usedTokens := max(estimatedTokens, usageTokens)
+	pct := float64(usedTokens) / float64(r.contextWindow) * 100
+	return fmt.Sprintf("ctx %.1f%%", pct)
+}
+
+func (r *renderer) appendContextMessageLocked(msg libagent.Message) {
+	if msg == nil {
+		return
+	}
+	r.contextMessages = append(r.contextMessages, msg)
 }
 
 func formatDuration(d time.Duration) string {
