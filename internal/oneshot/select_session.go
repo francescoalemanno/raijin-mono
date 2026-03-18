@@ -2,18 +2,11 @@ package oneshot
 
 import (
 	"context"
+	"errors"
 	"fmt"
-
-	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/session"
-)
-
-var (
-	sessSelectedStyle = oneshotAccentStyle
-	sessActiveStyle   = oneshotSuccessStyle
-	sessNormalStyle   = oneshotNormalStyle
 )
 
 func runSessionSelector(summaries []persist.SessionSummary, opts Options, store *persist.Store) error {
@@ -24,86 +17,77 @@ func runSessionSelector(summaries []persist.SessionSummary, opts Options, store 
 		}
 
 		activeID := store.CurrentSessionID()
-		fl := newFilterList(
-			"SESSIONS",
-			summaries,
-			0,
-			0,
-			func(item persist.SessionSummary) string {
-				return item.ShortID + " " + item.Title
-			},
-			func(item persist.SessionSummary, selected bool) string {
-				title := item.Title
-				if title == "" {
-					title = "(untitled)"
-				}
-				label := fmt.Sprintf("[%s] %s", item.ShortID, title)
-				if item.ID == activeID {
-					label += " (current)"
-				}
-				pointer := "  "
-				if selected {
-					pointer = "→ "
-					return sessSelectedStyle.Render(pointer + label)
-				}
-				if item.ID == activeID {
-					return sessActiveStyle.Render(pointer + label)
-				}
-				return sessNormalStyle.Render(pointer + label)
-			},
-		)
-		fl.deletableFn = func(item persist.SessionSummary) bool {
-			_ = item
-			return true
-		}
-
-		p := tea.NewProgram(fl, tea.WithAltScreen())
-		final, err := p.Run()
-		if err != nil {
-			return err
-		}
-		result := final.(filterList[persist.SessionSummary])
-		if result.quitting {
-			return nil
-		}
-
-		if result.deleted != nil {
-			if err := store.RemoveSession(result.deleted.ID); err != nil {
-				return err
-			}
-			title := result.deleted.Title
+		fzfItems := make([]fzfPickerItem, 0, len(summaries))
+		for _, summary := range summaries {
+			title := summary.Title
 			if title == "" {
 				title = "(untitled)"
 			}
-			fmt.Fprintf(stderrWriter, "%s Removed session [%s] %s\n",
-				renderStatusSuccess("✓"),
-				result.deleted.ShortID,
-				title)
-			summaries = store.ListSessionSummaries()
-			continue
+			label := fmt.Sprintf("[%s] %s", summary.ShortID, title)
+			if summary.ID == activeID {
+				label += " (current)"
+			}
+			fzfItems = append(fzfItems, fzfPickerItem{key: summary.ID, label: label})
 		}
-
-		if result.chosen == nil {
-			return nil
+		chosenID, action, err := pickWithEmbeddedFZF(fzfItems, "", true, false)
+		if errors.Is(err, errFZFPickerUnavailable) {
+			return fmt.Errorf("interactive picker requires a TTY")
 		}
-
-		sessionID := result.chosen.ID
-		if err := store.SetCurrent(sessionID); err != nil {
+		if err != nil {
 			return err
 		}
+		switch action {
+		case fzfPickerActionCancel:
+			return nil
+		case fzfPickerActionDelete:
+			if err := store.RemoveSession(chosenID); err != nil {
+				return err
+			}
+			var deletedTitle string
+			var deletedShortID string
+			for _, summary := range summaries {
+				if summary.ID == chosenID {
+					deletedTitle = summary.Title
+					deletedShortID = summary.ShortID
+					break
+				}
+			}
+			if deletedTitle == "" {
+				deletedTitle = "(untitled)"
+			}
+			fmt.Fprintf(stderrWriter, "%s Removed session [%s] %s\n",
+				renderStatusSuccess("✓"),
+				deletedShortID,
+				deletedTitle)
+			summaries = store.ListSessionSummaries()
+			continue
+		case fzfPickerActionSelect:
+			if err := store.SetCurrent(chosenID); err != nil {
+				return err
+			}
 
-		sess, sessErr := session.New(opts.RuntimeModel)
-		if sessErr != nil && sess == nil {
-			return sessErr
-		}
-		if sess != nil {
-			_ = sess.SwitchTo(context.Background(), sessionID)
-		}
+			sess, sessErr := session.New(opts.RuntimeModel)
+			if sessErr != nil && sess == nil {
+				return sessErr
+			}
+			if sess != nil {
+				_ = sess.SwitchTo(context.Background(), chosenID)
+			}
 
-		fmt.Fprintf(stderrWriter, "%s Switched to session [%s] %s\n",
-			renderStatusSuccess("✓"),
-			result.chosen.ShortID,
-			result.chosen.Title)
-		return nil
+			var selected persist.SessionSummary
+			for _, summary := range summaries {
+				if summary.ID == chosenID {
+					selected = summary
+					break
+				}
+			}
+			fmt.Fprintf(stderrWriter, "%s Switched to session [%s] %s\n",
+				renderStatusSuccess("✓"),
+				selected.ShortID,
+				selected.Title)
+			return nil
+		default:
+			return nil
+		}
 	}
 }

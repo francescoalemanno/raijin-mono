@@ -1,10 +1,9 @@
 package oneshot
 
 import (
+	"errors"
 	"fmt"
 	"strings"
-
-	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/session"
@@ -15,14 +14,6 @@ type treeItem struct {
 	entry persist.TreeEntry
 	text  string // plain text content (for filtering)
 }
-
-var (
-	treeAccentStyle    = oneshotAccentStyle
-	treeSuccessStyle   = oneshotSuccessStyle
-	treeMutedStyle     = oneshotMutedStyle
-	treeAccentAltStyle = oneshotWarningStyle
-	treeFgStyle        = oneshotNormalStyle
-)
 
 func treeSearchText(e persist.TreeEntry) string {
 	if e.Msg == nil {
@@ -39,7 +30,16 @@ func treeSearchText(e persist.TreeEntry) string {
 	return e.Msg.GetRole()
 }
 
-func treePrefix(e persist.TreeEntry) string {
+func truncateText(s string, maxLen int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen-1]) + "…"
+}
+
+func treeFZFPrefix(e persist.TreeEntry) string {
 	totalChars := e.Depth * 3
 	runes := make([]rune, totalChars)
 	for i := range runes {
@@ -82,102 +82,62 @@ func treePrefix(e persist.TreeEntry) string {
 			}
 		}
 	}
-	return treeMutedStyle.Render(string(runes))
+	return string(runes)
 }
 
-func treeContentLabel(e persist.TreeEntry, selected bool) string {
-	boldFn := func(s string) string {
-		if selected {
-			return treeAccentAltStyle.Bold(true).Render(s)
-		}
-		return treeFgStyle.Render(s)
-	}
-
+func treeFZFContent(e persist.TreeEntry) string {
 	if e.Msg == nil {
-		return treeMutedStyle.Render(fmt.Sprintf("[node %s]", e.ID))
+		return fmt.Sprintf("[node %s]", e.ID)
 	}
 	switch m := e.Msg.(type) {
 	case *libagent.UserMessage:
-		role := treeAccentStyle.Render("user: ")
-		return role + boldFn(truncateText(m.Content, 80))
+		return "user: " + truncateText(m.Content, 80)
 	case *libagent.AssistantMessage:
-		role := treeSuccessStyle.Render("assistant: ")
 		text := libagent.AssistantText(m)
-		if text != "" {
-			return role + boldFn(truncateText(text, 80))
+		if text == "" {
+			return "assistant: (no content)"
 		}
-		return role + treeMutedStyle.Render("(no content)")
+		return "assistant: " + truncateText(text, 80)
 	case *libagent.ToolResultMessage:
-		label := fmt.Sprintf("[%s]: %s", m.ToolName, truncateText(m.Content, 60))
-		return treeMutedStyle.Render(label)
+		return fmt.Sprintf("[%s]: %s", m.ToolName, truncateText(m.Content, 60))
 	}
-	return treeMutedStyle.Render(fmt.Sprintf("[%s]", e.Msg.GetRole()))
-}
-
-func truncateText(s string, maxLen int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen-1]) + "…"
+	return fmt.Sprintf("[%s]", e.Msg.GetRole())
 }
 
 func runTreeSelector(entries []persist.TreeEntry, sess *session.Session) error {
 	items := make([]treeItem, len(entries))
-	leafIdx := 0
 	for i, e := range entries {
 		items[i] = treeItem{
 			entry: e,
 			text:  treeSearchText(e),
 		}
-		if e.IsLeaf {
-			leafIdx = i
-		}
 	}
 
-	fl := newFilterList(
-		"SESSION TREE",
-		items,
-		leafIdx,
-		0,
-		func(item treeItem) string { return item.text },
-		func(item treeItem, selected bool) string {
-			e := item.entry
-
-			// Cursor glyph.
-			cursor := "  "
-			if selected {
-				cursor = treeAccentStyle.Render("› ")
-			}
-
-			// Tree structure prefix (connectors/gutters).
-			prefix := treePrefix(e)
-
-			// Active-path bullet.
-			bullet := treeMutedStyle.Render("+ ")
-			if e.IsOnActivePath {
-				bullet = treeAccentStyle.Render("• ")
-			}
-
-			// Content.
-			content := treeContentLabel(e, selected)
-
-			return cursor + prefix + bullet + content
-		},
-	)
-
-	p := tea.NewProgram(fl, tea.WithAltScreen())
-	final, err := p.Run()
+	fzfItems := make([]fzfPickerItem, 0, len(items))
+	for _, item := range items {
+		e := item.entry
+		bullet := "+ "
+		if e.IsOnActivePath {
+			bullet = "• "
+		}
+		label := treeFZFPrefix(e) + bullet + treeFZFContent(e)
+		fzfItems = append(fzfItems, fzfPickerItem{
+			key:   e.ID,
+			label: label,
+		})
+	}
+	chosenID, action, err := pickWithEmbeddedFZF(fzfItems, "", false, true)
+	if errors.Is(err, errFZFPickerUnavailable) {
+		return fmt.Errorf("interactive picker requires a TTY")
+	}
 	if err != nil {
 		return err
 	}
-	result := final.(filterList[treeItem])
-	if result.quitting || result.chosen == nil {
+	if action != fzfPickerActionSelect {
 		return nil
 	}
 
-	editorText, err := sess.Navigate(result.chosen.entry.ID)
+	editorText, err := sess.Navigate(chosenID)
 	if err != nil {
 		return err
 	}

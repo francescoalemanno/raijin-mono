@@ -2,6 +2,7 @@ package oneshot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -58,12 +59,6 @@ func loadCatalogEntries() []catalogEntry {
 	}
 	return entries
 }
-
-var (
-	catSelectedStyle = oneshotAccentStyle
-	catNormalStyle   = oneshotNormalStyle
-	catProviderStyle = oneshotProviderStyle
-)
 
 // ---------------------------------------------------------------------------
 // API-key text input model (step 2)
@@ -134,7 +129,10 @@ func handleModelsAdd(opts Options) error {
 	providerKeys := collectProviderKeys(opts.Store)
 
 	// Step 1: pick a model from the catalog.
-	entry, ok := pickCatalogModel(entries, providerKeys)
+	entry, ok, err := pickCatalogModel(entries, providerKeys)
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return nil // user cancelled
 	}
@@ -161,40 +159,36 @@ func handleModelsAdd(opts Options) error {
 	return applyModelAdd(opts, entry, apiKey)
 }
 
-func pickCatalogModel(entries []catalogEntry, providerKeys map[string]string) (catalogEntry, bool) {
-	fl := newFilterList(
-		"SELECT MODEL",
-		entries,
-		0,
-		0,
-		func(item catalogEntry) string {
-			return item.providerName + " " + item.modelName + " " + item.modelID
-		},
-		func(item catalogEntry, selected bool) string {
-			label := item.modelName
-			pointer := "  "
-			if selected {
-				pointer = "→ "
-			}
-
-			provTag := catProviderStyle.Render("[" + item.providerName + "]")
-			if selected {
-				return catSelectedStyle.Render(pointer+label) + " " + provTag
-			}
-			return catNormalStyle.Render(pointer+label) + " " + provTag
-		},
-	)
-
-	p := tea.NewProgram(fl, tea.WithAltScreen())
-	final, err := p.Run()
+func pickCatalogModel(entries []catalogEntry, providerKeys map[string]string) (catalogEntry, bool, error) {
+	_ = providerKeys
+	fzfItems := make([]fzfPickerItem, 0, len(entries))
+	entryByKey := make(map[string]catalogEntry, len(entries))
+	for _, entry := range entries {
+		key := strings.TrimSpace(entry.providerID) + "/" + strings.TrimSpace(entry.modelID)
+		if key == "/" {
+			key = entry.modelName
+		}
+		entryByKey[key] = entry
+		fzfItems = append(fzfItems, fzfPickerItem{
+			key:   key,
+			label: fmt.Sprintf("%s [%s]", entry.modelName, entry.providerName),
+		})
+	}
+	chosenKey, action, err := pickWithEmbeddedFZF(fzfItems, "", false, false)
+	if errors.Is(err, errFZFPickerUnavailable) {
+		return catalogEntry{}, false, fmt.Errorf("interactive picker requires a TTY")
+	}
 	if err != nil {
-		return catalogEntry{}, false
+		return catalogEntry{}, false, err
 	}
-	result := final.(filterList[catalogEntry])
-	if result.quitting || result.chosen == nil {
-		return catalogEntry{}, false
+	if action != fzfPickerActionSelect {
+		return catalogEntry{}, false, nil
 	}
-	return *result.chosen, true
+	chosen, exists := entryByKey[chosenKey]
+	if !exists {
+		return catalogEntry{}, false, nil
+	}
+	return chosen, true, nil
 }
 
 func promptAPIKey(providerName, prefill string) (string, bool) {
