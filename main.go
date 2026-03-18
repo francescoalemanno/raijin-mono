@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
 	"github.com/francescoalemanno/raijin-mono/internal/oneshot"
+	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/profiling"
 	"github.com/francescoalemanno/raijin-mono/internal/shellinit"
 	"github.com/francescoalemanno/raijin-mono/internal/version"
@@ -23,6 +25,8 @@ func main() {
 	completeFlag := flag.String("complete", "", "print completion candidates for a token")
 	fzfModeFlag := flag.String("fzf", "", "run native fzf endpoint (default, complete, paths)")
 	fzfQueryFlag := flag.String("fzf-query", "", "set the initial query for --fzf")
+	removeModelFlag := flag.String("remove-model", "", "remove configured model by name")
+	removeSessionFlag := flag.String("remove-session", "", "remove persisted session by id (full or short)")
 	profileDirFlag := flag.String("profile-dir", "", "write live profiling artifacts under this directory")
 	pprofAddrFlag := flag.String("pprof-addr", "", "serve runtime pprof on this address (for example 127.0.0.1:6060)")
 	flag.Parse()
@@ -56,6 +60,27 @@ func main() {
 			fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
 		}
 		os.Exit(code)
+	}
+	didDelete := false
+	if modelName := strings.TrimSpace(*removeModelFlag); modelName != "" {
+		if err := removeModelByName(modelName); err != nil {
+			fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
+			os.Exit(1)
+		}
+		fmt.Printf("Removed model: %s\n", modelName)
+		didDelete = true
+	}
+	if sessionRef := strings.TrimSpace(*removeSessionFlag); sessionRef != "" {
+		shortID, err := removeSessionByRef(sessionRef)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
+			os.Exit(1)
+		}
+		fmt.Printf("Removed session: %s\n", shortID)
+		didDelete = true
+	}
+	if didDelete {
+		os.Exit(0)
 	}
 
 	profiler, err := profiling.Start(profiling.Options{
@@ -147,4 +172,56 @@ func buildRuntimeModel(modelCfg libagent.ModelConfig, current libagent.RuntimeMo
 		ProviderType:           providerType,
 		CatalogProviderOptions: catalogOpts,
 	}
+}
+
+func removeModelByName(name string) error {
+	store, err := modelconfig.LoadModelStore()
+	if err != nil {
+		return err
+	}
+	if store == nil {
+		return errors.New("no model store available")
+	}
+	return store.Delete(name)
+}
+
+func removeSessionByRef(ref string) (string, error) {
+	store, err := persist.OpenStore()
+	if err != nil {
+		return "", err
+	}
+	summaries := store.ListSessionSummaries()
+	if len(summaries) == 0 {
+		return "", errors.New("no previous sessions found")
+	}
+
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", errors.New("session id cannot be empty")
+	}
+
+	var exact *persist.SessionSummary
+	for i := range summaries {
+		if summaries[i].ID == ref {
+			exact = &summaries[i]
+			break
+		}
+	}
+	if exact != nil {
+		return exact.ShortID, store.RemoveSession(exact.ID)
+	}
+
+	matches := make([]persist.SessionSummary, 0, 1)
+	for _, summary := range summaries {
+		if summary.ShortID == ref {
+			matches = append(matches, summary)
+		}
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("session not found: %s", ref)
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("short session id is ambiguous: %s", ref)
+	}
+	return matches[0].ShortID, store.RemoveSession(matches[0].ID)
 }
