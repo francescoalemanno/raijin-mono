@@ -38,6 +38,9 @@ type lineMarkdownRenderer struct {
 	tableRows  [][]string // each element is the parsed cells for one row
 	tableWidth int        // total width budget for the table
 
+	// width cache: avoids repeated regex work during DP height-map computation
+	widthCache map[string]int
+
 	headingStyles []lipgloss.Style
 	quoteStyle    lipgloss.Style
 	listStyle     lipgloss.Style
@@ -271,6 +274,8 @@ func (r *lineMarkdownRenderer) flushTable() string {
 
 // optimalColumnWidths uses DP to find column widths that minimize total table height.
 func (r *lineMarkdownRenderer) optimalColumnWidths(contentRows [][]string, numCols int) []int {
+	r.widthCache = make(map[string]int)
+	defer func() { r.widthCache = nil }()
 	// Overhead per column: "│ " before + " " after = 3 chars, plus final "│" = 1.
 	// Total overhead = numCols*3 + 1.
 	overhead := numCols*3 + 1
@@ -676,7 +681,16 @@ func (r *lineMarkdownRenderer) splitTokenByWidth(token string, width int) []stri
 }
 
 func (r *lineMarkdownRenderer) inlineDisplayWidth(s string) int {
-	return lipgloss.Width(r.renderInlinePlain(s))
+	if r.widthCache != nil {
+		if w, ok := r.widthCache[s]; ok {
+			return w
+		}
+	}
+	w := lipgloss.Width(r.renderInlinePlain(s))
+	if r.widthCache != nil {
+		r.widthCache[s] = w
+	}
+	return w
 }
 
 func (r *lineMarkdownRenderer) renderInlinePlain(line string) string {
