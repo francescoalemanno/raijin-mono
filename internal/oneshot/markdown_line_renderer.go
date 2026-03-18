@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/alecthomas/chroma/v2/quick"
 	"github.com/charmbracelet/lipgloss"
@@ -13,10 +15,6 @@ var (
 	mdHeadingRE       = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
 	mdQuoteRE         = regexp.MustCompile(`^\s*>\s?(.*)$`)
 	mdListRE          = regexp.MustCompile(`^(\s*)([-*+]|\d+[.)])\s+(.*)$`)
-	mdLinkRE          = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-	mdCodeRE          = regexp.MustCompile("`([^`]+)`")
-	mdBoldRE          = regexp.MustCompile(`\*\*([^*]+)\*\*|__([^_]+)__`)
-	mdItalicRE        = regexp.MustCompile(`\*([^*]+)\*|_([^_]+)_`)
 	mdFenceRE         = regexp.MustCompile("^\\s*```([a-zA-Z0-9_+-]*)\\s*$")
 	mdTableSepCellRE  = regexp.MustCompile(`^:?-{3,}:?$`)
 	mdTableMarkerChar = '|'
@@ -694,93 +692,201 @@ func (r *lineMarkdownRenderer) inlineDisplayWidth(s string) int {
 }
 
 func (r *lineMarkdownRenderer) renderInlinePlain(line string) string {
-	out := mdLinkRE.ReplaceAllStringFunc(line, func(m string) string {
-		sub := mdLinkRE.FindStringSubmatch(m)
-		if len(sub) != 3 {
-			return m
-		}
-		return sub[1] + " (" + sub[2] + ")"
-	})
-
-	out = mdCodeRE.ReplaceAllStringFunc(out, func(m string) string {
-		sub := mdCodeRE.FindStringSubmatch(m)
-		if len(sub) != 2 {
-			return m
-		}
-		return sub[1]
-	})
-
-	out = mdBoldRE.ReplaceAllStringFunc(out, func(m string) string {
-		sub := mdBoldRE.FindStringSubmatch(m)
-		switch {
-		case len(sub) > 1 && sub[1] != "":
-			return sub[1]
-		case len(sub) > 2 && sub[2] != "":
-			return sub[2]
-		default:
-			return m
-		}
-	})
-
-	out = mdItalicRE.ReplaceAllStringFunc(out, func(m string) string {
-		sub := mdItalicRE.FindStringSubmatch(m)
-		switch {
-		case len(sub) > 1 && sub[1] != "":
-			return sub[1]
-		case len(sub) > 2 && sub[2] != "":
-			return sub[2]
-		default:
-			return m
-		}
-	})
-
-	return out
+	return r.renderInlineTokens(line, true)
 }
 
 func (r *lineMarkdownRenderer) renderInline(line string) string {
-	out := mdLinkRE.ReplaceAllStringFunc(line, func(m string) string {
-		sub := mdLinkRE.FindStringSubmatch(m)
-		if len(sub) != 3 {
-			return m
-		}
-		return r.linkStyle.Render(sub[1]) + " (" + sub[2] + ")"
-	})
+	return r.renderInlineTokens(line, false)
+}
 
-	out = mdCodeRE.ReplaceAllStringFunc(out, func(m string) string {
-		sub := mdCodeRE.FindStringSubmatch(m)
-		if len(sub) != 2 {
-			return m
+func (r *lineMarkdownRenderer) renderInlineTokens(line string, plain bool) string {
+	var out strings.Builder
+	for i := 0; i < len(line); {
+		if end, rendered, ok := r.renderCodeSpanAt(line, i, plain); ok {
+			out.WriteString(rendered)
+			i = end
+			continue
 		}
-		return r.inlineCode.Render(sub[1])
-	})
-
-	out = mdBoldRE.ReplaceAllStringFunc(out, func(m string) string {
-		sub := mdBoldRE.FindStringSubmatch(m)
-		text := ""
-		switch {
-		case len(sub) > 1 && sub[1] != "":
-			text = sub[1]
-		case len(sub) > 2 && sub[2] != "":
-			text = sub[2]
-		default:
-			return m
+		if end, rendered, ok := r.renderLinkAt(line, i, plain); ok {
+			out.WriteString(rendered)
+			i = end
+			continue
 		}
-		return r.boldStyle.Render(text)
-	})
-
-	out = mdItalicRE.ReplaceAllStringFunc(out, func(m string) string {
-		sub := mdItalicRE.FindStringSubmatch(m)
-		text := ""
-		switch {
-		case len(sub) > 1 && sub[1] != "":
-			text = sub[1]
-		case len(sub) > 2 && sub[2] != "":
-			text = sub[2]
-		default:
-			return m
+		if end, rendered, ok := r.renderEmphasisAt(line, i, plain); ok {
+			out.WriteString(rendered)
+			i = end
+			continue
 		}
-		return r.italicStyle.Render(text)
-	})
 
-	return out
+		_, size := utf8.DecodeRuneInString(line[i:])
+		if size <= 0 {
+			size = 1
+		}
+		out.WriteString(line[i : i+size])
+		i += size
+	}
+	return out.String()
+}
+
+func (r *lineMarkdownRenderer) renderCodeSpanAt(line string, start int, plain bool) (int, string, bool) {
+	if start >= len(line) || line[start] != '`' {
+		return 0, "", false
+	}
+	endRel := strings.IndexByte(line[start+1:], '`')
+	if endRel < 0 {
+		return 0, "", false
+	}
+	end := start + 1 + endRel
+	content := line[start+1 : end]
+	if plain {
+		return end + 1, content, true
+	}
+	return end + 1, r.inlineCode.Render(content), true
+}
+
+func (r *lineMarkdownRenderer) renderLinkAt(line string, start int, plain bool) (int, string, bool) {
+	if start >= len(line) || line[start] != '[' {
+		return 0, "", false
+	}
+	labelEndRel := strings.IndexByte(line[start+1:], ']')
+	if labelEndRel < 0 {
+		return 0, "", false
+	}
+	labelEnd := start + 1 + labelEndRel
+	if labelEnd+1 >= len(line) || line[labelEnd+1] != '(' {
+		return 0, "", false
+	}
+	urlStart := labelEnd + 2
+	urlEndRel := strings.IndexByte(line[urlStart:], ')')
+	if urlEndRel < 0 {
+		return 0, "", false
+	}
+	urlEnd := urlStart + urlEndRel
+	label := r.renderInlinePlain(line[start+1 : labelEnd])
+	url := line[urlStart:urlEnd]
+	if plain {
+		return urlEnd + 1, label + " (" + url + ")", true
+	}
+	return urlEnd + 1, r.linkStyle.Render(label) + " (" + url + ")", true
+}
+
+func (r *lineMarkdownRenderer) renderEmphasisAt(line string, start int, plain bool) (int, string, bool) {
+	if start >= len(line) {
+		return 0, "", false
+	}
+	marker := line[start]
+	if marker != '*' && marker != '_' {
+		return 0, "", false
+	}
+
+	runLen := emphasisDelimiterRunLength(line, start, marker)
+	if runLen >= 2 {
+		if end, rendered, ok := r.renderEmphasisRunAt(line, start, marker, 2, plain); ok {
+			return end, rendered, true
+		}
+	}
+	if end, rendered, ok := r.renderEmphasisRunAt(line, start, marker, 1, plain); ok {
+		return end, rendered, true
+	}
+	return 0, "", false
+}
+
+func (r *lineMarkdownRenderer) renderEmphasisRunAt(line string, start int, marker byte, runLen int, plain bool) (int, string, bool) {
+	canOpen, _ := emphasisDelimiterCapabilities(line, start, runLen, marker)
+	if !canOpen {
+		return 0, "", false
+	}
+	end := r.findClosingEmphasis(line, start+runLen, marker, runLen)
+	if end < 0 {
+		return 0, "", false
+	}
+
+	content := r.renderInlineTokens(line[start+runLen:end], plain)
+	if plain {
+		return end + runLen, content, true
+	}
+	if runLen == 2 {
+		return end + runLen, r.boldStyle.Render(content), true
+	}
+	return end + runLen, r.italicStyle.Render(content), true
+}
+
+func (r *lineMarkdownRenderer) findClosingEmphasis(line string, start int, marker byte, runLen int) int {
+	for i := start; i < len(line); {
+		if end, _, ok := r.renderCodeSpanAt(line, i, true); ok {
+			i = end
+			continue
+		}
+		if end, _, ok := r.renderLinkAt(line, i, true); ok {
+			i = end
+			continue
+		}
+		if line[i] != marker {
+			_, size := utf8.DecodeRuneInString(line[i:])
+			if size <= 0 {
+				size = 1
+			}
+			i += size
+			continue
+		}
+		if emphasisDelimiterRunLength(line, i, marker) < runLen {
+			i++
+			continue
+		}
+		if _, canClose := emphasisDelimiterCapabilities(line, i, runLen, marker); canClose {
+			return i
+		}
+		i++
+	}
+	return -1
+}
+
+func emphasisDelimiterRunLength(line string, start int, marker byte) int {
+	runLen := 0
+	for start+runLen < len(line) && line[start+runLen] == marker {
+		runLen++
+	}
+	return runLen
+}
+
+// CommonMark-style flanking rules prevent `_` and `*` inside identifiers from
+// being treated as emphasis delimiters.
+func emphasisDelimiterCapabilities(line string, start, runLen int, marker byte) (bool, bool) {
+	prev, hasPrev := previousRune(line, start)
+	next, hasNext := nextRune(line, start+runLen)
+
+	prevIsSpace := !hasPrev || unicode.IsSpace(prev)
+	nextIsSpace := !hasNext || unicode.IsSpace(next)
+	prevIsPunct := hasPrev && unicode.IsPunct(prev)
+	nextIsPunct := hasNext && unicode.IsPunct(next)
+
+	leftFlanking := !nextIsSpace && (!nextIsPunct || prevIsSpace || prevIsPunct)
+	rightFlanking := !prevIsSpace && (!prevIsPunct || nextIsSpace || nextIsPunct)
+
+	if marker == '_' {
+		return leftFlanking && (!rightFlanking || prevIsPunct), rightFlanking && (!leftFlanking || nextIsPunct)
+	}
+	return leftFlanking && !(prevIsSpace && nextIsPunct), rightFlanking
+}
+
+func previousRune(s string, end int) (rune, bool) {
+	if end <= 0 || end > len(s) {
+		return 0, false
+	}
+	r, _ := utf8.DecodeLastRuneInString(s[:end])
+	if r == utf8.RuneError && end == 0 {
+		return 0, false
+	}
+	return r, true
+}
+
+func nextRune(s string, start int) (rune, bool) {
+	if start < 0 || start >= len(s) {
+		return 0, false
+	}
+	r, _ := utf8.DecodeRuneInString(s[start:])
+	if r == utf8.RuneError && start >= len(s) {
+		return 0, false
+	}
+	return r, true
 }

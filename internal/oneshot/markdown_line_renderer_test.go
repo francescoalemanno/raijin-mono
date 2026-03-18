@@ -20,6 +20,42 @@ func TestLineMarkdownRendererHeadingAndInline(t *testing.T) {
 	}
 }
 
+func TestLineMarkdownRendererKeepsUnderscoresInsideIdentifiers(t *testing.T) {
+	r := newLineMarkdownRenderer()
+	got := ansiRE.ReplaceAllString(r.RenderLine("Use $RAIJIN_BIN and foo_bar_baz and internal/shellinit/shellinit_test.go"), "")
+
+	if !strings.Contains(got, "$RAIJIN_BIN") {
+		t.Fatalf("expected env var to remain intact, got %q", got)
+	}
+	if !strings.Contains(got, "foo_bar_baz") {
+		t.Fatalf("expected identifier with underscores to remain intact, got %q", got)
+	}
+	if !strings.Contains(got, "shellinit_test.go") {
+		t.Fatalf("expected file name with underscores to remain intact, got %q", got)
+	}
+}
+
+func TestLineMarkdownRendererUnderscoreEmphasisStillWorksAtWordBoundaries(t *testing.T) {
+	r := newLineMarkdownRenderer()
+	got := ansiRE.ReplaceAllString(r.RenderLine("Use _italics_ and __bold__ here"), "")
+
+	if !strings.Contains(got, "Use italics and bold here") {
+		t.Fatalf("expected underscore emphasis to render, got %q", got)
+	}
+	if strings.Contains(got, "_italics_") || strings.Contains(got, "__bold__") {
+		t.Fatalf("expected underscore markers removed, got %q", got)
+	}
+}
+
+func TestLineMarkdownRendererKeepsLiteralGlobCharacters(t *testing.T) {
+	r := newLineMarkdownRenderer()
+	got := ansiRE.ReplaceAllString(r.RenderLine("Handle special chars like ?, *, and foo*bar literally."), "")
+
+	if !strings.Contains(got, "?, *, and foo*bar") {
+		t.Fatalf("expected literal glob characters to remain intact, got %q", got)
+	}
+}
+
 func TestLineMarkdownRendererFencesAndCodeState(t *testing.T) {
 	r := newLineMarkdownRenderer()
 
