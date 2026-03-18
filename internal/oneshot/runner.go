@@ -152,9 +152,6 @@ func handleBuiltin(opts Options, resolved resolvedPrompt, forceNew bool) error {
 	case cmd.name == "new":
 		return handleNew(opts)
 
-	case cmd.name == "templates":
-		return handleTemplates()
-
 	case cmd.name == "status":
 		return handleStatus(opts, forceNew)
 
@@ -306,11 +303,6 @@ func handleHelp() error {
 	b.WriteString(renderTemplates())
 	b.WriteString(renderSkills())
 	fmt.Print(b.String())
-	return nil
-}
-
-func handleTemplates() error {
-	fmt.Print(renderTemplates())
 	return nil
 }
 

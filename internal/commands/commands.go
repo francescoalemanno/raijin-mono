@@ -23,7 +23,6 @@ var BuiltinCommands = []Command{
 	{Command: "/tree", Desc: "Navigate the session tree and branch from any previous message"},
 	{Command: "/history", Desc: "Replay all assistant output from the active session"},
 	{Command: "/compact", Desc: "Summarize old context and keep recent messages (optional instructions)"},
-	{Command: "/templates", Desc: "List available prompt templates and their sources"},
 	{Command: "/status", Desc: "Show current model, reasoning, and context fill percentage"},
 	{Command: "/reasoning", Desc: "Select reasoning level for the default model"},
 	{Command: "/edit", Desc: "Open an editor and send the saved content as a prompt"},

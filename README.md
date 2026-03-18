@@ -54,7 +54,6 @@ Raijin runs in one-shot CLI mode and supports prompt features such as attachment
 - `/tree` - browse conversation history and fork at any safe boundary
 - `/history` - replay all assistant output from the active session
 - `/compact [instructions]` - summarize old context, keep recent context
-- `/templates` - list prompt templates and source
 - `/status` - show current model, reasoning, and context fill percentage
 - `/reasoning [low|medium|high|max]` - select reasoning level (interactive when omitted)
 - `/edit` - open `$EDITOR` (or fallback editors), then send saved file content as prompt
