@@ -20,9 +20,10 @@ var (
 	mdFenceRE         = regexp.MustCompile("^\\s*```([a-zA-Z0-9_+-]*)\\s*$")
 	mdTableSepCellRE  = regexp.MustCompile(`^:?-{3,}:?$`)
 	mdTableMarkerChar = '|'
+	mdBRTagRE         = regexp.MustCompile(`(?i)<br\s*/?>`)
 )
 
-const fixedTableColumnWidth = 18
+const defaultTableMaxWidth = 100
 
 const (
 	tableOutputSep     = "│"
@@ -32,6 +33,10 @@ const (
 type lineMarkdownRenderer struct {
 	inFence bool
 	lang    string
+
+	// table buffering: rows are accumulated until a non-table line arrives
+	tableRows  [][]string // each element is the parsed cells for one row
+	tableWidth int        // total width budget for the table
 
 	headingStyles []lipgloss.Style
 	quoteStyle    lipgloss.Style
@@ -45,7 +50,15 @@ type lineMarkdownRenderer struct {
 }
 
 func newLineMarkdownRenderer() *lineMarkdownRenderer {
+	return newLineMarkdownRendererWithWidth(defaultTableMaxWidth)
+}
+
+func newLineMarkdownRendererWithWidth(tableWidth int) *lineMarkdownRenderer {
+	if tableWidth <= 0 {
+		tableWidth = defaultTableMaxWidth
+	}
 	return &lineMarkdownRenderer{
+		tableWidth: tableWidth,
 		headingStyles: []lipgloss.Style{
 			oneshotAccentStyle.Bold(true),
 			oneshotAccentStyle.Bold(true),
@@ -69,6 +82,10 @@ func (r *lineMarkdownRenderer) RenderLine(line string) string {
 	line = strings.TrimRight(line, "\r")
 
 	if matches := mdFenceRE.FindStringSubmatch(line); matches != nil {
+		var prefix string
+		if len(r.tableRows) > 0 {
+			prefix = r.flushTable() + "\n"
+		}
 		if r.inFence {
 			r.inFence = false
 			r.lang = ""
@@ -76,13 +93,21 @@ func (r *lineMarkdownRenderer) RenderLine(line string) string {
 			r.inFence = true
 			r.lang = strings.TrimSpace(matches[1])
 		}
-		return r.fenceStyle.Render(strings.TrimSpace(line))
+		return prefix + r.fenceStyle.Render(strings.TrimSpace(line))
 	}
 
 	if r.inFence {
 		return r.renderCodeLine(line)
 	}
 	return r.renderMarkdownLine(line)
+}
+
+// FlushTable renders any buffered table rows. Call when the stream ends.
+func (r *lineMarkdownRenderer) FlushTable() string {
+	if len(r.tableRows) == 0 {
+		return ""
+	}
+	return r.flushTable()
 }
 
 func (r *lineMarkdownRenderer) renderCodeLine(line string) string {
@@ -109,32 +134,41 @@ func markdownCodeStyleName() string {
 
 func (r *lineMarkdownRenderer) renderMarkdownLine(line string) string {
 	if strings.TrimSpace(line) == "" {
+		if len(r.tableRows) > 0 {
+			return r.flushTable()
+		}
 		return ""
 	}
 	if cells, ok := parseMarkdownTableCells(line); ok {
-		return r.renderTableLine(cells)
+		r.tableRows = append(r.tableRows, cells)
+		return ""
+	}
+
+	var prefix string
+	if len(r.tableRows) > 0 {
+		prefix = r.flushTable() + "\n"
 	}
 
 	if m := mdHeadingRE.FindStringSubmatch(line); m != nil {
 		level := len(m[1])
 		text := r.renderInline(strings.TrimSpace(m[2]))
 		idx := min(max(level, 1), len(r.headingStyles)) - 1
-		return r.headingStyles[idx].Render(text)
+		return prefix + r.headingStyles[idx].Render(text)
 	}
 
 	if m := mdQuoteRE.FindStringSubmatch(line); m != nil {
 		body := r.renderInline(strings.TrimSpace(m[1]))
-		return r.quoteStyle.Render("│ ") + body
+		return prefix + r.quoteStyle.Render("│ ") + body
 	}
 
 	if m := mdListRE.FindStringSubmatch(line); m != nil {
 		indent := m[1]
 		marker := m[2]
 		body := r.renderInline(strings.TrimSpace(m[3]))
-		return indent + r.listStyle.Render(marker) + " " + body
+		return prefix + indent + r.listStyle.Render(marker) + " " + body
 	}
 
-	return r.renderInline(line)
+	return prefix + r.renderInline(line)
 }
 
 func parseMarkdownTableCells(line string) ([]string, bool) {
@@ -174,26 +208,291 @@ func parseMarkdownTableCells(line string) ([]string, bool) {
 	return cells, true
 }
 
-func (r *lineMarkdownRenderer) renderTableLine(cells []string) string {
-	if len(cells) == 0 {
+// flushTable renders all buffered table rows using DP-optimal column widths
+// and resets the buffer.
+func (r *lineMarkdownRenderer) flushTable() string {
+	rows := r.tableRows
+	r.tableRows = nil
+	if len(rows) == 0 {
 		return ""
 	}
-	if isTableSeparatorRow(cells) {
-		var out strings.Builder
-		out.WriteString(tableOutputSep)
-		for _, cell := range cells {
-			out.WriteString(" ")
-			out.WriteString(renderTableSeparatorCell(cell, fixedTableColumnWidth))
-			out.WriteString(" ")
-			out.WriteString(tableOutputSep)
+
+	numCols := 0
+	for _, row := range rows {
+		if len(row) > numCols {
+			numCols = len(row)
 		}
-		return out.String()
+	}
+	if numCols == 0 {
+		return ""
 	}
 
+	// Normalize: pad short rows with empty cells.
+	for i := range rows {
+		for len(rows[i]) < numCols {
+			rows[i] = append(rows[i], "")
+		}
+	}
+
+	// Separate content rows from separator rows.
+	type rowInfo struct {
+		cells []string
+		isSep bool
+	}
+	rowInfos := make([]rowInfo, len(rows))
+	for i, row := range rows {
+		rowInfos[i] = rowInfo{cells: row, isSep: isTableSeparatorRow(row)}
+	}
+
+	// Compute content-only rows for height calculations (skip separator rows).
+	var contentRows [][]string
+	for _, ri := range rowInfos {
+		if !ri.isSep {
+			contentRows = append(contentRows, ri.cells)
+		}
+	}
+
+	widths := r.optimalColumnWidths(contentRows, numCols)
+
+	// Render the full table.
+	var out strings.Builder
+	for i, ri := range rowInfos {
+		if i > 0 {
+			out.WriteString("\n")
+		}
+		if ri.isSep {
+			out.WriteString(r.renderTableSepRow(ri.cells, widths))
+		} else {
+			out.WriteString(r.renderTableDataRow(ri.cells, widths))
+		}
+	}
+	return out.String()
+}
+
+// optimalColumnWidths uses DP to find column widths that minimize total table height.
+func (r *lineMarkdownRenderer) optimalColumnWidths(contentRows [][]string, numCols int) []int {
+	// Overhead per column: "│ " before + " " after = 3 chars, plus final "│" = 1.
+	// Total overhead = numCols*3 + 1.
+	overhead := numCols*3 + 1
+	available := r.tableWidth - overhead
+	if available < numCols {
+		available = numCols // at least 1 char per column
+	}
+
+	// For each column, compute the minimum width (longest single word) and
+	// the natural width (longest unwrapped line).
+	minWidths := make([]int, numCols)
+	natWidths := make([]int, numCols)
+	for col := 0; col < numCols; col++ {
+		minW := 1
+		natW := 1
+		for _, row := range contentRows {
+			// Split on <br> to get individual segments; natural width
+			// is the max segment width, not the whole cell.
+			segments := mdBRTagRE.Split(row[col], -1)
+			for _, seg := range segments {
+				seg = strings.TrimSpace(seg)
+				segW := r.inlineDisplayWidth(seg)
+				if segW > natW {
+					natW = segW
+				}
+				for _, word := range strings.Fields(seg) {
+					ww := r.inlineDisplayWidth(word)
+					if ww > minW {
+						minW = ww
+					}
+				}
+			}
+		}
+		minWidths[col] = minW
+		natWidths[col] = natW
+	}
+
+	// Clamp min widths so they don't exceed available.
+	totalMin := 0
+	for _, mw := range minWidths {
+		totalMin += mw
+	}
+	if totalMin > available {
+		// Proportionally scale down.
+		for i := range minWidths {
+			minWidths[i] = max(1, minWidths[i]*available/totalMin)
+		}
+	}
+
+	// If all columns fit at natural width, use that.
+	totalNat := 0
+	for _, nw := range natWidths {
+		totalNat += nw
+	}
+	if totalNat <= available {
+		return natWidths
+	}
+
+	// Build height maps: heightMap[col][w] = max lines across all content rows
+	// for that column at width w. Width ranges from minWidths[col]..available.
+	type heightMap struct {
+		minW    int
+		heights []int // indexed by w - minW
+	}
+	hMaps := make([]heightMap, numCols)
+	for col := 0; col < numCols; col++ {
+		mw := minWidths[col]
+		maxW := available
+		if natWidths[col] < maxW {
+			maxW = natWidths[col]
+		}
+		h := heightMap{minW: mw, heights: make([]int, maxW-mw+1)}
+		for wi := range h.heights {
+			w := mw + wi
+			rowH := 0
+			for _, row := range contentRows {
+				lines := len(r.wrapCellToWidth(row[col], w))
+				if lines > rowH {
+					rowH = lines
+				}
+			}
+			h.heights[wi] = rowH
+		}
+		hMaps[col] = h
+	}
+
+	getHeight := func(col, w int) int {
+		hm := hMaps[col]
+		if w >= hm.minW+len(hm.heights) {
+			return hm.heights[len(hm.heights)-1]
+		}
+		if w < hm.minW {
+			return hm.heights[0]
+		}
+		return hm.heights[w-hm.minW]
+	}
+
+	// DP: dp[w] = minimum total height for columns 0..k-1 using total width w.
+	// We iterate column by column, swapping between two slices.
+	W := available + 1
+	prev := make([]int, W)
+	curr := make([]int, W)
+	const inf = 1 << 30
+
+	// Initialize for column 0.
+	for w := 0; w < W; w++ {
+		if w < minWidths[0] {
+			prev[w] = inf
+		} else {
+			prev[w] = getHeight(0, w)
+		}
+	}
+
+	// Fill for remaining columns.
+	for col := 1; col < numCols; col++ {
+		for w := 0; w < W; w++ {
+			curr[w] = inf
+		}
+		mw := minWidths[col]
+		maxW := natWidths[col]
+		for w := 0; w < W; w++ {
+			if prev[w] >= inf {
+				continue
+			}
+			// Try allocating j to current column.
+			for j := mw; j <= maxW && w+j < W; j++ {
+				h := getHeight(col, j)
+				total := prev[w] + h
+				if total < curr[w+j] {
+					curr[w+j] = total
+				}
+			}
+		}
+		prev, curr = curr, prev
+	}
+
+	// Find the best total width.
+	bestW := 0
+	bestH := inf
+	for w := 0; w < W; w++ {
+		if prev[w] < bestH {
+			bestH = prev[w]
+			bestW = w
+		}
+	}
+
+	// Backtrack to find per-column widths.
+	// Re-run DP storing the dp tables for backtracking.
+	dpTables := make([][]int, numCols)
+	dpTables[0] = make([]int, W)
+	for w := 0; w < W; w++ {
+		if w < minWidths[0] {
+			dpTables[0][w] = inf
+		} else {
+			dpTables[0][w] = getHeight(0, w)
+		}
+	}
+	for col := 1; col < numCols; col++ {
+		dpTables[col] = make([]int, W)
+		for w := 0; w < W; w++ {
+			dpTables[col][w] = inf
+		}
+		mw := minWidths[col]
+		maxW := natWidths[col]
+		for w := 0; w < W; w++ {
+			if dpTables[col-1][w] >= inf {
+				continue
+			}
+			for j := mw; j <= maxW && w+j < W; j++ {
+				h := getHeight(col, j)
+				total := dpTables[col-1][w] + h
+				if total < dpTables[col][w+j] {
+					dpTables[col][w+j] = total
+				}
+			}
+		}
+	}
+
+	widths := make([]int, numCols)
+	remaining := bestW
+	for col := numCols - 1; col >= 1; col-- {
+		mw := minWidths[col]
+		maxW := natWidths[col]
+		bestJ := mw
+		bestVal := inf
+		for j := mw; j <= maxW && j <= remaining; j++ {
+			prev := remaining - j
+			if prev < 0 || dpTables[col-1][prev] >= inf {
+				continue
+			}
+			val := dpTables[col-1][prev] + getHeight(col, j)
+			if val < bestVal {
+				bestVal = val
+				bestJ = j
+			}
+		}
+		widths[col] = bestJ
+		remaining -= bestJ
+	}
+	widths[0] = remaining
+
+	return widths
+}
+
+func (r *lineMarkdownRenderer) renderTableSepRow(cells []string, widths []int) string {
+	var out strings.Builder
+	out.WriteString(tableOutputSep)
+	for i, cell := range cells {
+		w := widths[i]
+		out.WriteString(" ")
+		out.WriteString(renderTableSeparatorCell(cell, w))
+		out.WriteString(" ")
+		out.WriteString(tableOutputSep)
+	}
+	return out.String()
+}
+
+func (r *lineMarkdownRenderer) renderTableDataRow(cells []string, widths []int) string {
 	wrapped := make([][]string, len(cells))
 	maxLines := 1
 	for i, cell := range cells {
-		wrapped[i] = r.wrapToWidth(cell, fixedTableColumnWidth)
+		wrapped[i] = r.wrapCellToWidth(cell, widths[i])
 		if len(wrapped[i]) > maxLines {
 			maxLines = len(wrapped[i])
 		}
@@ -201,6 +500,9 @@ func (r *lineMarkdownRenderer) renderTableLine(cells []string) string {
 
 	var out strings.Builder
 	for row := 0; row < maxLines; row++ {
+		if row > 0 {
+			out.WriteString("\n")
+		}
 		out.WriteString(tableOutputSep)
 		for col := range cells {
 			segment := ""
@@ -211,17 +513,14 @@ func (r *lineMarkdownRenderer) renderTableLine(cells []string) string {
 			if segment != "" {
 				rendered := r.renderInline(segment)
 				out.WriteString(rendered)
-				if pad := fixedTableColumnWidth - r.inlineDisplayWidth(segment); pad > 0 {
+				if pad := widths[col] - r.inlineDisplayWidth(segment); pad > 0 {
 					out.WriteString(strings.Repeat(" ", pad))
 				}
 			} else {
-				out.WriteString(strings.Repeat(" ", fixedTableColumnWidth))
+				out.WriteString(strings.Repeat(" ", widths[col]))
 			}
 			out.WriteString(" ")
 			out.WriteString(tableOutputSep)
-		}
-		if row < maxLines-1 {
-			out.WriteString("\n")
 		}
 	}
 	return out.String()
@@ -267,6 +566,22 @@ func renderTableSeparatorCell(cell string, width int) string {
 	default:
 		return strings.Repeat(tableOutputRuleSeg, width)
 	}
+}
+
+// wrapCellToWidth splits s on <br> tags first, then word-wraps each segment.
+func (r *lineMarkdownRenderer) wrapCellToWidth(s string, width int) []string {
+	segments := mdBRTagRE.Split(s, -1)
+	if len(segments) <= 1 {
+		return r.wrapToWidth(s, width)
+	}
+	var lines []string
+	for _, seg := range segments {
+		lines = append(lines, r.wrapToWidth(strings.TrimSpace(seg), width)...)
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
 }
 
 func (r *lineMarkdownRenderer) wrapToWidth(s string, width int) []string {

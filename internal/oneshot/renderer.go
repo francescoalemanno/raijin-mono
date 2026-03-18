@@ -3,6 +3,7 @@ package oneshot
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
+	"golang.org/x/term"
 )
 
 var thinkingMutedStyle = oneshotMutedStyle
@@ -93,6 +95,10 @@ func newRendererWithOptions(stderr, stdout io.Writer, agentTools []libagent.Tool
 	if opts.spinnerInterval <= 0 {
 		opts.spinnerInterval = defaultSpinnerInterval
 	}
+	termWidth, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || termWidth <= 0 || termWidth > defaultTableMaxWidth {
+		termWidth = defaultTableMaxWidth
+	}
 	return &renderer{
 		stderr:          stderr,
 		stdout:          stdout,
@@ -100,7 +106,7 @@ func newRendererWithOptions(stderr, stdout io.Writer, agentTools []libagent.Tool
 		isTTY:           isTTY,
 		now:             opts.now,
 		pending:         make(map[string]*pendingLine),
-		replyMD:         newLineMarkdownRenderer(),
+		replyMD:         newLineMarkdownRendererWithWidth(termWidth),
 		spinnerEnabled:  isTTY && opts.persistentSpinner,
 		spinnerInterval: opts.spinnerInterval,
 		modelLabel:      strings.TrimSpace(opts.modelLabel),
@@ -403,6 +409,12 @@ func (r *renderer) appendThinkingDelta(delta string) {
 
 func (r *renderer) flushReplyTail() {
 	r.flushBufferedTail(&r.replyLine, func(s string) string { return r.replyMD.RenderLine(s) })
+	if trailing := r.replyMD.FlushTable(); trailing != "" {
+		r.prepareForStdoutLocked()
+		fmt.Fprint(r.stdout, trailing)
+		fmt.Fprint(r.stdout, "\n")
+		r.restoreAfterStdoutLocked()
+	}
 }
 
 func (r *renderer) flushThinkingTail() {
@@ -431,7 +443,11 @@ func (r *renderer) flushBufferedLines(buf *strings.Builder, render func(string) 
 	if toWrite != "" {
 		r.prepareForStdoutLocked()
 		for _, line := range strings.Split(strings.TrimSuffix(toWrite, "\n"), "\n") {
-			fmt.Fprint(r.stdout, render(strings.TrimRight(line, "\r")))
+			rendered := render(strings.TrimRight(line, "\r"))
+			if rendered == "" {
+				continue
+			}
+			fmt.Fprint(r.stdout, rendered)
 			fmt.Fprint(r.stdout, "\n")
 		}
 		r.restoreAfterStdoutLocked()
@@ -454,7 +470,11 @@ func (r *renderer) flushBufferedTail(buf *strings.Builder, render func(string) s
 	tail = strings.TrimRight(tail, "\n")
 	r.prepareForStdoutLocked()
 	for _, line := range strings.Split(tail, "\n") {
-		fmt.Fprint(r.stdout, render(strings.TrimRight(line, "\r")))
+		rendered := render(strings.TrimRight(line, "\r"))
+		if rendered == "" {
+			continue
+		}
+		fmt.Fprint(r.stdout, rendered)
 		fmt.Fprint(r.stdout, "\n")
 	}
 	r.restoreAfterStdoutLocked()
