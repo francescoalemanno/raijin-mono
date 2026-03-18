@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
@@ -396,12 +395,6 @@ func (r *renderer) appendThinkingDelta(delta string) {
 	if delta == "" {
 		return
 	}
-	if !r.thinkingSeen {
-		delta = strings.TrimLeftFunc(delta, unicode.IsSpace)
-	}
-	if delta == "" {
-		return
-	}
 	r.thinkingSeen = true
 	r.thinkingLine.WriteString(delta)
 	r.flushThinkingBufferedLines()
@@ -421,7 +414,7 @@ func (r *renderer) flushThinkingTail() {
 	if r.thinkingLine.Len() == 0 {
 		return
 	}
-	tail := strings.TrimSpace(r.thinkingLine.String())
+	tail := r.thinkingLine.String()
 	r.thinkingLine.Reset()
 	if tail == "" {
 		return
@@ -502,7 +495,7 @@ func (r *renderer) flushThinkingBufferedLines() {
 }
 
 func (r *renderer) writeThinkingLine(line string) {
-	line = strings.TrimSpace(line)
+	line = strings.TrimRight(line, "\r")
 	r.prepareForStdoutLocked()
 	if line == "" {
 		fmt.Fprint(r.stdout, "\n")
