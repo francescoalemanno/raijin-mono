@@ -154,3 +154,40 @@ func TestReplSuperArrowsMoveToInputBounds(t *testing.T) {
 		t.Fatalf("after super+right rune pos = %d, want %d", got, len([]rune(value)))
 	}
 }
+
+func TestReplSoftWrapping(t *testing.T) {
+	promptWidth := 8
+	m := replModel{
+		width:        promptWidth + 5, // 5 characters available for text
+		historyIndex: -1,
+	}
+	m.setEditorState("1234567890", 0)
+
+	view := m.View().Content
+	lines := strings.Split(view, "\n")
+
+	// Expected lines:
+	// "raijin❯ <cursor>12345"
+	// "   ...❯ 67890"
+
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d:\n%q", len(lines), view)
+	}
+	if !strings.HasPrefix(lines[0], replPrompt) {
+		t.Fatalf("line 0 should have replPrompt, got %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], replContinuationPrompt) {
+		t.Fatalf("line 1 should have continuationPrompt, got %q", lines[1])
+	}
+	if !strings.Contains(lines[0], "\x1b[7m") { // cursor should be in first line
+		t.Fatalf("line 0 should contain cursor, but didn't:\n%q", lines[0])
+	}
+
+	// Now move cursor to second visual line
+	m.setEditorState("1234567890", 6)
+	view = m.View().Content
+	lines = strings.Split(view, "\n")
+	if !strings.Contains(lines[1], "\x1b[7m") {
+		t.Fatalf("line 1 should contain cursor at position 6, but didn't:\n%q", lines[1])
+	}
+}

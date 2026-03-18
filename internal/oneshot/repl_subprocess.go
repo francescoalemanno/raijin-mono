@@ -67,6 +67,8 @@ type replModel struct {
 	status       string
 	statusLoaded bool
 
+	width int
+
 	editor textarea.Model
 
 	history       []string
@@ -140,6 +142,9 @@ func (m replModel) Init() tea.Cmd {
 func (m replModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.ensureEditor()
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		return m, nil
 	case replStatusMsg:
 		m.status = msg.label
 		m.statusLoaded = true
@@ -203,17 +208,53 @@ func (m replModel) View() tea.View {
 	}
 	cursorLine := m.editor.Line()
 	cursorColumn := m.editor.Column()
-	for i, line := range lines {
-		prompt := replContinuationPrompt
-		if i == 0 {
-			prompt = replPrompt
+
+	promptWidth := utf8.RuneCountInString(replPrompt)
+	availableWidth := m.width - promptWidth
+	if availableWidth <= 0 {
+		availableWidth = 80
+	}
+
+	for i, logicalLine := range lines {
+		runes := []rune(logicalLine)
+		if len(runes) == 0 {
+			prompt := replContinuationPrompt
+			if i == 0 {
+				prompt = replPrompt
+			}
+			b.WriteString(prompt)
+			if i == cursorLine {
+				b.WriteString(renderBufferWithCursor(nil, 0))
+			}
+			if i < len(lines)-1 {
+				b.WriteByte('\n')
+			}
+			continue
 		}
-		b.WriteString(prompt)
-		if i == cursorLine {
-			b.WriteString(renderBufferWithCursor([]rune(line), cursorColumn))
-		} else {
-			b.WriteString(line)
+
+		for start := 0; start < len(runes); start += availableWidth {
+			end := start + availableWidth
+			if end > len(runes) {
+				end = len(runes)
+			}
+
+			prompt := replContinuationPrompt
+			if i == 0 && start == 0 {
+				prompt = replPrompt
+			}
+			b.WriteString(prompt)
+
+			if i == cursorLine && cursorColumn >= start && (cursorColumn < end || (cursorColumn == end && end == len(runes))) {
+				b.WriteString(renderBufferWithCursor(runes[start:end], cursorColumn-start))
+			} else {
+				b.WriteString(string(runes[start:end]))
+			}
+
+			if end < len(runes) {
+				b.WriteByte('\n')
+			}
 		}
+
 		if i < len(lines)-1 {
 			b.WriteByte('\n')
 		}
