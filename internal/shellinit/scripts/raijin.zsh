@@ -9,12 +9,15 @@
 typeset -h _RAIJIN_BIN="${RAIJIN_BIN:-raijin}"
 
 # --- Generated : aliases ---
-alias :='raijin'
+# Use noglob to prevent zsh glob expansion on special characters like ?, *, etc.
+# The wrapper function receives arguments unexpanded.
+_raijin_main() { "$_RAIJIN_BIN" "$@"; }
+alias :='noglob _raijin_main'
 {{- range .CommandShortcuts }}
-alias :{{ . }}='raijin /{{ . }}'
+alias :{{ . }}='noglob "$_RAIJIN_BIN" /{{ . }}'
 {{- end }}
 {{- range .SkillShortcuts }}
-alias :+{{ . }}='raijin +{{ . }}'
+alias :+{{ . }}='noglob "$_RAIJIN_BIN" +{{ . }}'
 {{- end }}
 
 _raijin_complete_candidates() {

@@ -183,17 +183,21 @@ func TestZshInitGeneratesColonShortcuts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init(zsh) failed: %v", err)
 	}
-	if !strings.Contains(script, "alias :='raijin'") {
-		t.Fatalf("zsh init missing : alias")
+	if !strings.Contains(script, "_raijin_main() { \"$_RAIJIN_BIN\" \"$@\"; }") {
+		t.Fatalf("zsh init missing _raijin_main wrapper function")
 	}
-	if !strings.Contains(script, "alias :status='raijin /status'") {
-		t.Fatalf("zsh init missing generated :status alias")
+	if !strings.Contains(script, "alias :='noglob _raijin_main'") {
+		t.Fatalf("zsh init missing : alias with noglob")
+	}
+	if !strings.Contains(script, "alias :status='noglob \"$_RAIJIN_BIN\" /status'") {
+		t.Fatalf("zsh init missing generated :status alias with noglob")
 	}
 	if !strings.Contains(script, "alias :+") {
 		t.Fatalf("zsh init missing generated :+skill aliases")
 	}
-	if strings.Contains(script, ":() {") {
-		t.Fatalf("zsh init should not emit function shortcuts")
+	// Verify all command/skill aliases use noglob
+	if strings.Contains(script, "alias :help='raijin /help'") {
+		t.Fatalf("zsh init aliases should use noglob and $_RAIJIN_BIN")
 	}
 	if !strings.Contains(script, `"$_RAIJIN_BIN" --complete "$line"`) {
 		t.Fatalf("zsh init completion should delegate to raijin --complete")
