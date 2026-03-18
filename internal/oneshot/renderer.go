@@ -95,8 +95,10 @@ func newRendererWithOptions(stderr, stdout io.Writer, agentTools []libagent.Tool
 		opts.spinnerInterval = defaultSpinnerInterval
 	}
 	termWidth, _, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil || termWidth <= 0 || termWidth > defaultTableMaxWidth {
+	if err != nil || termWidth <= 0 {
 		termWidth = defaultTableMaxWidth
+	} else if termWidth > 4 {
+		termWidth -= 2
 	}
 	return &renderer{
 		stderr:          stderr,

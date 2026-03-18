@@ -26,7 +26,29 @@ const defaultTableMaxWidth = 100
 const (
 	tableOutputSep     = "│"
 	tableOutputRuleSeg = "─"
+	tableTopLeft       = "┌"
+	tableTopMid        = "┬"
+	tableTopRight      = "┐"
+	tableRuleLeft      = "├"
+	tableRuleMid       = "┼"
+	tableRuleRight     = "┤"
+	tableBottomLeft    = "└"
+	tableBottomMid     = "┴"
+	tableBottomRight   = "┘"
 )
+
+type tableAlignment int
+
+const (
+	tableAlignLeft tableAlignment = iota
+	tableAlignCenter
+	tableAlignRight
+)
+
+type tableRowInfo struct {
+	cells []string
+	isSep bool
+}
 
 type lineMarkdownRenderer struct {
 	inFence bool
@@ -47,6 +69,7 @@ type lineMarkdownRenderer struct {
 	boldStyle     lipgloss.Style
 	italicStyle   lipgloss.Style
 	linkStyle     lipgloss.Style
+	tableHeader   lipgloss.Style
 	codeFallback  lipgloss.Style
 }
 
@@ -75,6 +98,7 @@ func newLineMarkdownRendererWithWidth(tableWidth int) *lineMarkdownRenderer {
 		boldStyle:    lipgloss.NewStyle().Bold(true),
 		italicStyle:  lipgloss.NewStyle().Italic(true),
 		linkStyle:    oneshotAccentStyle.Underline(true),
+		tableHeader:  lipgloss.NewStyle().Bold(true),
 		codeFallback: oneshotWarningStyle,
 	}
 }
@@ -236,13 +260,9 @@ func (r *lineMarkdownRenderer) flushTable() string {
 	}
 
 	// Separate content rows from separator rows.
-	type rowInfo struct {
-		cells []string
-		isSep bool
-	}
-	rowInfos := make([]rowInfo, len(rows))
+	rowInfos := make([]tableRowInfo, len(rows))
 	for i, row := range rows {
-		rowInfos[i] = rowInfo{cells: row, isSep: isTableSeparatorRow(row)}
+		rowInfos[i] = tableRowInfo{cells: row, isSep: isTableSeparatorRow(row)}
 	}
 
 	// Compute content-only rows for height calculations (skip separator rows).
@@ -254,19 +274,21 @@ func (r *lineMarkdownRenderer) flushTable() string {
 	}
 
 	widths := r.optimalColumnWidths(contentRows, numCols)
+	alignments, headerRow := tableLayoutHints(rowInfos, numCols)
 
 	// Render the full table.
 	var out strings.Builder
+	out.WriteString(renderTableBorder(widths, tableTopLeft, tableTopMid, tableTopRight))
 	for i, ri := range rowInfos {
-		if i > 0 {
-			out.WriteString("\n")
-		}
+		out.WriteString("\n")
 		if ri.isSep {
 			out.WriteString(r.renderTableSepRow(ri.cells, widths))
 		} else {
-			out.WriteString(r.renderTableDataRow(ri.cells, widths))
+			out.WriteString(r.renderTableDataRow(ri.cells, widths, alignments, i == headerRow))
 		}
 	}
+	out.WriteString("\n")
+	out.WriteString(renderTableBorder(widths, tableBottomLeft, tableBottomMid, tableBottomRight))
 	return out.String()
 }
 
@@ -479,19 +501,47 @@ func (r *lineMarkdownRenderer) optimalColumnWidths(contentRows [][]string, numCo
 }
 
 func (r *lineMarkdownRenderer) renderTableSepRow(cells []string, widths []int) string {
-	var out strings.Builder
-	out.WriteString(tableOutputSep)
-	for i, cell := range cells {
-		w := widths[i]
-		out.WriteString(" ")
-		out.WriteString(renderTableSeparatorCell(cell, w))
-		out.WriteString(" ")
-		out.WriteString(tableOutputSep)
-	}
-	return out.String()
+	_ = cells
+	return renderTableBorder(widths, tableRuleLeft, tableRuleMid, tableRuleRight)
 }
 
-func (r *lineMarkdownRenderer) renderTableDataRow(cells []string, widths []int) string {
+func tableLayoutHints(rows []tableRowInfo, numCols int) ([]tableAlignment, int) {
+	alignments := make([]tableAlignment, numCols)
+	headerRow := -1
+	for i, row := range rows {
+		if !row.isSep {
+			continue
+		}
+		for col := 0; col < numCols; col++ {
+			cell := ""
+			if col < len(row.cells) {
+				cell = row.cells[col]
+			}
+			alignments[col] = parseTableAlignment(cell)
+		}
+		if i > 0 && !rows[i-1].isSep {
+			headerRow = i - 1
+		}
+		break
+	}
+	return alignments, headerRow
+}
+
+func parseTableAlignment(cell string) tableAlignment {
+	trimmed := strings.TrimSpace(cell)
+	left := strings.HasPrefix(trimmed, ":")
+	right := strings.HasSuffix(trimmed, ":")
+	switch {
+	case left && right:
+		return tableAlignCenter
+	case right:
+		return tableAlignRight
+	default:
+		return tableAlignLeft
+	}
+}
+
+func (r *lineMarkdownRenderer) renderTableDataRow(cells []string, widths []int, alignments []tableAlignment, isHeader bool) string {
 	wrapped := make([][]string, len(cells))
 	maxLines := 1
 	for i, cell := range cells {
@@ -515,9 +565,16 @@ func (r *lineMarkdownRenderer) renderTableDataRow(cells []string, widths []int) 
 			out.WriteString(" ")
 			if segment != "" {
 				rendered := r.renderInline(segment)
+				if isHeader {
+					rendered = r.tableHeader.Render(rendered)
+				}
+				leftPad, rightPad := tableCellPadding(widths[col]-r.inlineDisplayWidth(segment), tableAlignmentForColumn(alignments, col))
+				if leftPad > 0 {
+					out.WriteString(strings.Repeat(" ", leftPad))
+				}
 				out.WriteString(rendered)
-				if pad := widths[col] - r.inlineDisplayWidth(segment); pad > 0 {
-					out.WriteString(strings.Repeat(" ", pad))
+				if rightPad > 0 {
+					out.WriteString(strings.Repeat(" ", rightPad))
 				}
 			} else {
 				out.WriteString(strings.Repeat(" ", widths[col]))
@@ -527,6 +584,28 @@ func (r *lineMarkdownRenderer) renderTableDataRow(cells []string, widths []int) 
 		}
 	}
 	return out.String()
+}
+
+func tableAlignmentForColumn(alignments []tableAlignment, col int) tableAlignment {
+	if col < 0 || col >= len(alignments) {
+		return tableAlignLeft
+	}
+	return alignments[col]
+}
+
+func tableCellPadding(extra int, align tableAlignment) (int, int) {
+	if extra <= 0 {
+		return 0, 0
+	}
+	switch align {
+	case tableAlignRight:
+		return extra, 0
+	case tableAlignCenter:
+		left := extra / 2
+		return left, extra - left
+	default:
+		return 0, extra
+	}
 }
 
 func isTableSeparatorRow(cells []string) bool {
@@ -541,34 +620,25 @@ func isTableSeparatorRow(cells []string) bool {
 	return true
 }
 
-func renderTableSeparatorCell(cell string, width int) string {
+func renderTableBorder(widths []int, left, mid, right string) string {
+	var out strings.Builder
+	out.WriteString(left)
+	for i, width := range widths {
+		out.WriteString(renderTableSeparatorCell(width + 2))
+		if i == len(widths)-1 {
+			out.WriteString(right)
+		} else {
+			out.WriteString(mid)
+		}
+	}
+	return out.String()
+}
+
+func renderTableSeparatorCell(width int) string {
 	if width <= 0 {
 		return ""
 	}
-	left := strings.HasPrefix(cell, ":")
-	right := strings.HasSuffix(cell, ":")
-	switch {
-	case left && right:
-		if width == 1 {
-			return ":"
-		}
-		if width == 2 {
-			return "::"
-		}
-		return ":" + strings.Repeat(tableOutputRuleSeg, width-2) + ":"
-	case left:
-		if width == 1 {
-			return ":"
-		}
-		return ":" + strings.Repeat(tableOutputRuleSeg, width-1)
-	case right:
-		if width == 1 {
-			return ":"
-		}
-		return strings.Repeat(tableOutputRuleSeg, width-1) + ":"
-	default:
-		return strings.Repeat(tableOutputRuleSeg, width)
-	}
+	return strings.Repeat(tableOutputRuleSeg, width)
 }
 
 // wrapCellToWidth splits s on <br> tags first, then word-wraps each segment.

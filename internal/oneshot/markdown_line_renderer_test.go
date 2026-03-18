@@ -89,17 +89,23 @@ func TestLineMarkdownRendererTablesAlignColumns(t *testing.T) {
 	rendered := ansiRE.ReplaceAllString(r.FlushTable(), "")
 
 	lines := strings.Split(rendered, "\n")
-	if len(lines) < 3 {
-		t.Fatalf("expected at least 3 lines, got %d: %q", len(lines), rendered)
+	if len(lines) < 5 {
+		t.Fatalf("expected boxed table with at least 5 lines, got %d: %q", len(lines), rendered)
+	}
+	if !strings.HasPrefix(lines[0], tableTopLeft) || !strings.HasSuffix(lines[0], tableTopRight) {
+		t.Fatalf("expected top border, got %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[len(lines)-1], tableBottomLeft) || !strings.HasSuffix(lines[len(lines)-1], tableBottomRight) {
+		t.Fatalf("expected bottom border, got %q", lines[len(lines)-1])
 	}
 
 	// All lines should have the same number of separators at the same positions.
-	basePipes := tableSepPositions(lines[0])
+	basePipes := tableBoundaryPositions(lines[0])
 	if len(basePipes) < 3 {
 		t.Fatalf("expected at least 3 column boundaries, got %v in %q", basePipes, lines[0])
 	}
 	for _, line := range lines[1:] {
-		pipes := tableSepPositions(line)
+		pipes := tableBoundaryPositions(line)
 		if len(pipes) != len(basePipes) {
 			t.Fatalf("expected same number of separators, got first=%v line=%v (%q)", basePipes, pipes, line)
 		}
@@ -108,6 +114,37 @@ func TestLineMarkdownRendererTablesAlignColumns(t *testing.T) {
 				t.Fatalf("expected aligned boundaries, got first=%v line=%v", basePipes, pipes)
 			}
 		}
+	}
+}
+
+func TestLineMarkdownRendererRespectsRightAlignedColumns(t *testing.T) {
+	r := newLineMarkdownRenderer()
+
+	r.RenderLine("| Name | Score |")
+	r.RenderLine("| :--- | ---: |")
+	r.RenderLine("| Bob | 7 |")
+	rendered := ansiRE.ReplaceAllString(r.FlushTable(), "")
+
+	lines := strings.Split(rendered, "\n")
+	if len(lines) < 5 {
+		t.Fatalf("expected boxed table with at least 5 lines, got %q", rendered)
+	}
+
+	dataLine := findLineContaining(lines, "Bob")
+	if dataLine == "" {
+		t.Fatalf("expected data row containing Bob, got %q", rendered)
+	}
+	cells := strings.Split(dataLine, tableOutputSep)
+	if len(cells) < 4 {
+		t.Fatalf("expected row with two cells, got %q", dataLine)
+	}
+
+	scoreCell := cells[2]
+	if strings.TrimSpace(scoreCell) != "7" {
+		t.Fatalf("expected score cell content to remain 7, got %q", scoreCell)
+	}
+	if !strings.HasPrefix(scoreCell, "  ") {
+		t.Fatalf("expected right-aligned cell to include left padding, got %q", scoreCell)
 	}
 }
 
@@ -133,6 +170,9 @@ func TestLineMarkdownRendererTablesWrapLongCells(t *testing.T) {
 	if strings.Contains(rendered, "…") {
 		t.Fatalf("expected wrapping instead of truncation, got %q", rendered)
 	}
+	if !strings.Contains(rendered, tableRuleMid) {
+		t.Fatalf("expected joined separator row, got %q", rendered)
+	}
 }
 
 func TestLineMarkdownRendererTablesWithoutOuterPipesAlign(t *testing.T) {
@@ -144,16 +184,16 @@ func TestLineMarkdownRendererTablesWithoutOuterPipesAlign(t *testing.T) {
 	rendered := ansiRE.ReplaceAllString(r.FlushTable(), "")
 
 	lines := strings.Split(rendered, "\n")
-	if len(lines) < 3 {
-		t.Fatalf("expected 3 lines, got %d: %q", len(lines), rendered)
+	if len(lines) < 5 {
+		t.Fatalf("expected boxed table with at least 5 lines, got %d: %q", len(lines), rendered)
 	}
 
-	basePipes := tableSepPositions(lines[0])
+	basePipes := tableBoundaryPositions(lines[0])
 	if len(basePipes) < 2 {
 		t.Fatalf("expected at least 2 boundaries, got %v in %q", basePipes, lines[0])
 	}
 	for _, line := range lines[1:] {
-		pipes := tableSepPositions(line)
+		pipes := tableBoundaryPositions(line)
 		if len(pipes) != len(basePipes) {
 			t.Fatalf("expected same separators, got first=%v line=%v", basePipes, pipes)
 		}
@@ -184,8 +224,8 @@ func TestLineMarkdownRendererTablePaddingUsesVisibleWidth(t *testing.T) {
 	}
 
 	// Column boundaries should be at the same positions for the first data row.
-	sp := tableSepPositions(styledLines[0])
-	pp := tableSepPositions(plainLines[0])
+	sp := tableBoundaryPositions(styledLines[0])
+	pp := tableBoundaryPositions(plainLines[0])
 	if len(sp) != len(pp) {
 		t.Fatalf("expected same separator count, styled=%v plain=%v", sp, pp)
 	}
@@ -207,12 +247,18 @@ func TestLineMarkdownRendererSingleColumnSeparatorRowRenders(t *testing.T) {
 	if !strings.Contains(rendered, tableOutputRuleSeg) {
 		t.Fatalf("expected separator content to render, got %q", rendered)
 	}
+	if !strings.Contains(rendered, tableTopLeft) || !strings.Contains(rendered, tableBottomLeft) {
+		t.Fatalf("expected boxed table borders, got %q", rendered)
+	}
 	// Find the separator line.
 	for _, line := range strings.Split(rendered, "\n") {
-		if strings.Contains(line, tableOutputRuleSeg) {
-			seps := tableSepPositions(line)
+		if strings.HasPrefix(line, tableRuleLeft) {
+			if strings.Contains(line, " "+tableOutputRuleSeg) || strings.Contains(line, tableOutputRuleSeg+" ") {
+				t.Fatalf("expected joined separator row without padding spaces, got %q", line)
+			}
+			seps := tableBoundaryPositions(line)
 			if len(seps) != 2 {
-				t.Fatalf("expected single-column table to render two vertical separators, got %q", line)
+				t.Fatalf("expected single-column table to render two outer boundaries, got %q", line)
 			}
 			break
 		}
@@ -254,14 +300,14 @@ func TestLineMarkdownRendererOptimalWidthsNarrowTable(t *testing.T) {
 	rendered := ansiRE.ReplaceAllString(r.FlushTable(), "")
 
 	lines := strings.Split(rendered, "\n")
-	if len(lines) < 3 {
-		t.Fatalf("expected at least 3 lines, got %q", rendered)
+	if len(lines) < 5 {
+		t.Fatalf("expected boxed table with at least 5 lines, got %q", rendered)
 	}
 
 	// Verify all lines have consistent separators.
-	basePipes := tableSepPositions(lines[0])
+	basePipes := tableBoundaryPositions(lines[0])
 	for _, line := range lines[1:] {
-		pipes := tableSepPositions(line)
+		pipes := tableBoundaryPositions(line)
 		if len(pipes) != len(basePipes) {
 			t.Fatalf("inconsistent separators across lines: first=%v this=%v", basePipes, pipes)
 		}
@@ -334,14 +380,34 @@ func TestLineMarkdownRendererTableBRVariants(t *testing.T) {
 	}
 }
 
-func tableSepPositions(s string) []int {
+func tableBoundaryPositions(s string) []int {
 	runes := []rune(s)
-	sep := []rune(tableOutputSep)[0]
-	positions := make([]int, 0, strings.Count(s, tableOutputSep))
+	boundaries := map[rune]struct{}{
+		[]rune(tableOutputSep)[0]:   {},
+		[]rune(tableTopLeft)[0]:     {},
+		[]rune(tableTopMid)[0]:      {},
+		[]rune(tableTopRight)[0]:    {},
+		[]rune(tableRuleLeft)[0]:    {},
+		[]rune(tableRuleMid)[0]:     {},
+		[]rune(tableRuleRight)[0]:   {},
+		[]rune(tableBottomLeft)[0]:  {},
+		[]rune(tableBottomMid)[0]:   {},
+		[]rune(tableBottomRight)[0]: {},
+	}
+	positions := make([]int, 0, len(runes))
 	for i, ch := range runes {
-		if ch == sep {
+		if _, ok := boundaries[ch]; ok {
 			positions = append(positions, i)
 		}
 	}
 	return positions
+}
+
+func findLineContaining(lines []string, needle string) string {
+	for _, line := range lines {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
 }
