@@ -13,12 +13,40 @@ import (
 	jfzf "github.com/junegunn/fzf/src"
 )
 
+type RunFZFOptions struct {
+	ExpectKeys              []string
+	Bindings                []string
+	DisableSingleItemBypass bool
+	DisableSelectOne        bool
+	DisableSort             bool
+	Header                  string
+}
+
+type RunFZFResult struct {
+	Code     int
+	Selected []string
+	Key      string
+}
+
 // RunFZF launches the embedded fzf picker.
 //
 // Modes:
 //   - default / complete / repl-complete: read candidates from stdin
 //   - paths: walk the current workspace and feed @-mention paths
 func RunFZF(mode, query string, stdin io.Reader, stdout io.Writer) (int, error) {
+	result, err := RunFZFWithOptions(mode, query, stdin, RunFZFOptions{})
+	if err != nil {
+		return result.Code, err
+	}
+	for _, item := range result.Selected {
+		if _, writeErr := fmt.Fprintln(stdout, item); writeErr != nil {
+			return jfzf.ExitError, writeErr
+		}
+	}
+	return result.Code, nil
+}
+
+func RunFZFWithOptions(mode, query string, stdin io.Reader, cfg RunFZFOptions) (RunFZFResult, error) {
 	mode = strings.TrimSpace(strings.ToLower(mode))
 	if mode == "" {
 		mode = "default"
@@ -26,23 +54,19 @@ func RunFZF(mode, query string, stdin io.Reader, stdout io.Writer) (int, error) 
 
 	items, err := fzfItems(mode, stdin)
 	if err != nil {
-		return jfzf.ExitError, err
+		return RunFZFResult{Code: jfzf.ExitError}, err
 	}
 	if len(items) == 0 {
-		return 0, nil
+		return RunFZFResult{Code: 0}, nil
 	}
-	if len(items) == 1 {
-		_, err := fmt.Fprintln(stdout, items[0])
-		if err != nil {
-			return jfzf.ExitError, err
-		}
-		return 0, nil
+	if len(items) == 1 && !cfg.DisableSingleItemBypass {
+		return RunFZFResult{Code: 0, Selected: []string{items[0]}}, nil
 	}
 
-	args := fzfArgs(mode, query)
+	args := fzfArgs(mode, query, cfg)
 	options, err := jfzf.ParseOptions(true, args)
 	if err != nil {
-		return jfzf.ExitError, err
+		return RunFZFResult{Code: jfzf.ExitError}, err
 	}
 
 	inputChan := make(chan string)
@@ -68,18 +92,55 @@ func RunFZF(mode, query string, stdin io.Reader, stdout io.Writer) (int, error) 
 
 	code, err := jfzf.Run(options)
 	close(outputChan)
-	selected := <-resultChan
-	for _, item := range selected {
-		if _, writeErr := fmt.Fprintln(stdout, item); writeErr != nil && err == nil {
-			err = writeErr
-			code = jfzf.ExitError
-		}
+	result := RunFZFResult{
+		Code:     code,
+		Selected: <-resultChan,
 	}
-	return code, err
+	if len(cfg.ExpectKeys) == 0 || len(result.Selected) == 0 {
+		return result, err
+	}
+	result.Key, result.Selected = splitExpectOutput(result.Selected, cfg.ExpectKeys)
+	return result, err
 }
 
-func fzfArgs(mode, query string) []string {
-	args := []string{"--reverse", "--border", "--no-scrollbar", "--select-1", "--exit-0"}
+func splitExpectOutput(lines []string, expectKeys []string) (string, []string) {
+	if len(lines) == 0 {
+		return "", nil
+	}
+
+	first := strings.TrimSpace(lines[0])
+	if first == "" {
+		if len(lines) == 1 {
+			return "", nil
+		}
+		// Some fzf builds emit an empty first line for Enter when --expect is used.
+		return "", lines[1:]
+	}
+
+	expectSet := make(map[string]struct{}, len(expectKeys))
+	for _, key := range expectKeys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		expectSet[key] = struct{}{}
+	}
+	if _, ok := expectSet[first]; ok {
+		return first, lines[1:]
+	}
+
+	// Other builds don't emit a key line when Enter is pressed; keep full selection.
+	return "", lines
+}
+
+func fzfArgs(mode, query string, cfg RunFZFOptions) []string {
+	args := []string{"--reverse", "--border", "--no-scrollbar", "--exit-0"}
+	if !cfg.DisableSelectOne {
+		args = append(args, "--select-1")
+	}
+	if cfg.DisableSort {
+		args = append(args, "--no-sort")
+	}
 	switch mode {
 	case "paths":
 		args = append(args, "--scheme=path", "--prompt=@ ")
@@ -94,6 +155,29 @@ func fzfArgs(mode, query string) []string {
 	}
 	if query != "" {
 		args = append(args, "--query="+query)
+	}
+	if header := strings.TrimSpace(cfg.Header); header != "" {
+		args = append(args, "--header="+header)
+	}
+	if len(cfg.ExpectKeys) > 0 {
+		keys := make([]string, 0, len(cfg.ExpectKeys))
+		for _, key := range cfg.ExpectKeys {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			keys = append(keys, key)
+		}
+		if len(keys) > 0 {
+			args = append(args, "--expect="+strings.Join(keys, ","))
+		}
+	}
+	for _, binding := range cfg.Bindings {
+		binding = strings.TrimSpace(binding)
+		if binding == "" {
+			continue
+		}
+		args = append(args, "--bind="+binding)
 	}
 	return args
 }
@@ -116,8 +200,8 @@ func readStdinItems(stdin io.Reader) ([]string, error) {
 
 	var items []string
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		items = append(items, line)
