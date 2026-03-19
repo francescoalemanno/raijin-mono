@@ -3,11 +3,10 @@
 #
 # This provides the ":" alias for raijin
 
-_RAIJIN_BINDING_KEY="${RAIJIN_SESSION_BINDING_KEY:-shell-bash-$$-$RANDOM}"
-_RAIJIN_BINDING_OWNER_PID="${RAIJIN_SESSION_BINDING_OWNER_PID:-$$}"
+# Export binding context so direct raijin invocations also work
+export RAIJIN_SESSION_BINDING_KEY="${RAIJIN_SESSION_BINDING_KEY:-shell-bash-$$-$RANDOM}"
+export RAIJIN_SESSION_BINDING_OWNER_PID="${RAIJIN_SESSION_BINDING_OWNER_PID:-$$}"
 _raijin_main() {
-  RAIJIN_SESSION_BINDING_KEY="$_RAIJIN_BINDING_KEY" \
-  RAIJIN_SESSION_BINDING_OWNER_PID="$_RAIJIN_BINDING_OWNER_PID" \
   "{{.RaijinBin}}" "$@"
 }
 

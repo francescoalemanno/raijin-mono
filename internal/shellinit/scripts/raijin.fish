@@ -3,18 +3,15 @@
 #
 # This provides the ":" alias for raijin
 
-set -g __raijin_binding_key "$RAIJIN_SESSION_BINDING_KEY"
-if test -z "$__raijin_binding_key"
-    set -g __raijin_binding_key "shell-fish-$fish_pid-(random)"
+# Export binding context so direct raijin invocations also work
+if test -z "$RAIJIN_SESSION_BINDING_KEY"
+    set -gx RAIJIN_SESSION_BINDING_KEY "shell-fish-$fish_pid-(random)"
 end
-set -g __raijin_binding_owner_pid "$RAIJIN_SESSION_BINDING_OWNER_PID"
-if test -z "$__raijin_binding_owner_pid"
-    set -g __raijin_binding_owner_pid "$fish_pid"
+if test -z "$RAIJIN_SESSION_BINDING_OWNER_PID"
+    set -gx RAIJIN_SESSION_BINDING_OWNER_PID "$fish_pid"
 end
 
 function __raijin_main
-    set -lx RAIJIN_SESSION_BINDING_KEY "$__raijin_binding_key"
-    set -lx RAIJIN_SESSION_BINDING_OWNER_PID "$__raijin_binding_owner_pid"
     "{{.RaijinBin}}" $argv
 end
 

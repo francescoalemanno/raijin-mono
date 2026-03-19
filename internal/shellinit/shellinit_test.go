@@ -287,7 +287,7 @@ func TestBashInitProvidesColonAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init(bash) failed: %v", err)
 	}
-	if !strings.Contains(script, `_RAIJIN_BINDING_KEY="${RAIJIN_SESSION_BINDING_KEY:-shell-bash-$$-$RANDOM}"`) {
+	if !strings.Contains(script, `export RAIJIN_SESSION_BINDING_KEY="${RAIJIN_SESSION_BINDING_KEY:-shell-bash-$$-$RANDOM}"`) {
 		t.Fatalf("bash init missing binding key export")
 	}
 	if !strings.Contains(script, `_raijin_main() {`) {
@@ -318,7 +318,7 @@ func TestZshInitProvidesColonAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init(zsh) failed: %v", err)
 	}
-	if !strings.Contains(script, `typeset -h _RAIJIN_BINDING_KEY="${RAIJIN_SESSION_BINDING_KEY:-shell-zsh-$$-$RANDOM}"`) {
+	if !strings.Contains(script, `export RAIJIN_SESSION_BINDING_KEY="${RAIJIN_SESSION_BINDING_KEY:-shell-zsh-$$-$RANDOM}"`) {
 		t.Fatalf("zsh init missing binding key setup")
 	}
 	if !strings.Contains(script, "_raijin_main() {") {
@@ -386,8 +386,8 @@ func TestFishInitProvidesColonAlias(t *testing.T) {
 	if !strings.Contains(script, `function __raijin_main`) {
 		t.Fatalf("fish init missing wrapper function")
 	}
-	if !strings.Contains(script, `set -g __raijin_binding_key "$RAIJIN_SESSION_BINDING_KEY"`) {
-		t.Fatalf("fish init missing binding key setup")
+	if !strings.Contains(script, `set -gx RAIJIN_SESSION_BINDING_KEY`) {
+		t.Fatalf("fish init missing binding key export")
 	}
 	if !strings.Contains(script, `alias : "__raijin_main"`) {
 		t.Fatalf("fish init missing : alias")
