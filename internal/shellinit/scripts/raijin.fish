@@ -15,7 +15,7 @@ end
 function __raijin_main
     set -lx RAIJIN_SESSION_BINDING_KEY "$__raijin_binding_key"
     set -lx RAIJIN_SESSION_BINDING_OWNER_PID "$__raijin_binding_owner_pid"
-    command raijin $argv
+    "{{.RaijinBin}}" $argv
 end
 
 # --- Main : alias ---
@@ -23,6 +23,6 @@ alias : "__raijin_main"
 
 # --- Completion for ":" alias ---
 function __raijin_colon_complete
-    raijin -complete (commandline) 2>/dev/null
+    "{{.RaijinBin}}" -complete (commandline) 2>/dev/null
 end
 complete -c : -f -a '(__raijin_colon_complete)'

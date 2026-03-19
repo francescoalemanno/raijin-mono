@@ -17,13 +17,20 @@ import (
 //go:embed scripts/*
 var scriptFS embed.FS
 
+// InitData holds template data for shell integration scripts.
+type InitData struct {
+	RaijinBin string
+}
+
 // SupportedShells returns the list of shells that have init scripts.
 func SupportedShells() []string {
 	return []string{"zsh", "bash", "fish"}
 }
 
 // Init returns the shell integration script for the given shell.
-func Init(shell string) (string, error) {
+// The raijinBin parameter should be the path to the raijin executable
+// (typically from os.Executable()).
+func Init(shell, raijinBin string) (string, error) {
 	var filename string
 	switch shell {
 	case "zsh":
@@ -39,13 +46,13 @@ func Init(shell string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading init script for %s: %w", shell, err)
 	}
-	// Execute template (kept for future extensibility, no data needed currently)
 	tmpl, err := template.New(filename).Parse(string(data))
 	if err != nil {
 		return "", fmt.Errorf("parsing init script template for %s: %w", shell, err)
 	}
 	var rendered bytes.Buffer
-	if err := tmpl.Execute(&rendered, nil); err != nil {
+	dataObj := InitData{RaijinBin: raijinBin}
+	if err := tmpl.Execute(&rendered, dataObj); err != nil {
 		return "", fmt.Errorf("rendering init script for %s: %w", shell, err)
 	}
 	return strings.TrimRight(rendered.String(), "\n") + "\n", nil

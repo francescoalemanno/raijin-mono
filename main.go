@@ -35,7 +35,11 @@ func main() {
 	}
 
 	if shell := strings.TrimSpace(*initFlag); shell != "" {
-		script, err := shellinit.Init(shell)
+		exe, err := os.Executable()
+		if err != nil {
+			exe = "raijin"
+		}
+		script, err := shellinit.Init(shell, exe)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

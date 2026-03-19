@@ -283,7 +283,7 @@ func TestCompleteSelectionReturnsOriginalWhenPickerCancelled(t *testing.T) {
 }
 
 func TestBashInitProvidesColonAlias(t *testing.T) {
-	script, err := Init("bash")
+	script, err := Init("bash", "raijin")
 	if err != nil {
 		t.Fatalf("Init(bash) failed: %v", err)
 	}
@@ -308,13 +308,13 @@ func TestBashInitProvidesColonAlias(t *testing.T) {
 	if !strings.Contains(script, "complete -F _raijin_colon_complete :") {
 		t.Fatalf("bash init missing completion for : alias")
 	}
-	if !strings.Contains(script, `raijin -complete "$line"`) {
+	if !strings.Contains(script, `"raijin" -complete "$line"`) {
 		t.Fatalf("bash init completion should delegate to raijin -complete")
 	}
 }
 
 func TestZshInitProvidesColonAlias(t *testing.T) {
-	script, err := Init("zsh")
+	script, err := Init("zsh", "raijin")
 	if err != nil {
 		t.Fatalf("Init(zsh) failed: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestZshInitProvidesColonAlias(t *testing.T) {
 }
 
 func TestFishInitProvidesColonAlias(t *testing.T) {
-	script, err := Init("fish")
+	script, err := Init("fish", "raijin")
 	if err != nil {
 		t.Fatalf("Init(fish) failed: %v", err)
 	}
@@ -401,8 +401,25 @@ func TestFishInitProvidesColonAlias(t *testing.T) {
 	if !strings.Contains(script, "__raijin_colon_complete") {
 		t.Fatalf("fish init missing completion helper")
 	}
-	if !strings.Contains(script, "raijin -complete (commandline) 2>/dev/null") {
+	if !strings.Contains(script, `"raijin" -complete (commandline) 2>/dev/null`) {
 		t.Fatalf("fish init completion should delegate to raijin -complete")
+	}
+}
+
+func TestInitTemplatesCustomBinaryPath(t *testing.T) {
+	customPath := "/usr/local/bin/my-raijin"
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		script, err := Init(shell, customPath)
+		if err != nil {
+			t.Fatalf("Init(%s) failed: %v", shell, err)
+		}
+		if !strings.Contains(script, customPath) {
+			t.Fatalf("Init(%s) should template custom binary path %q, got:\n%s", shell, customPath, script)
+		}
+		// Ensure it doesn't contain the default "raijin" command (unless the custom path happens to end with it)
+		if shell == "bash" && strings.Contains(script, "command raijin") {
+			t.Fatalf("Init(%s) should not contain hardcoded 'raijin' command", shell)
+		}
 	}
 }
 

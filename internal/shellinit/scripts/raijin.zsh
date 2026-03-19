@@ -1,11 +1,10 @@
-typeset -h _RAIJIN_BIN="${RAIJIN_BIN:-raijin}"
 typeset -h _RAIJIN_BINDING_KEY="${RAIJIN_SESSION_BINDING_KEY:-shell-zsh-$$-$RANDOM}"
 typeset -h _RAIJIN_BINDING_OWNER_PID="${RAIJIN_SESSION_BINDING_OWNER_PID:-$$}"
 
 _raijin_exec() {
   RAIJIN_SESSION_BINDING_KEY="$_RAIJIN_BINDING_KEY" \
   RAIJIN_SESSION_BINDING_OWNER_PID="$_RAIJIN_BINDING_OWNER_PID" \
-  "$_RAIJIN_BIN" "$@"
+  "{{.RaijinBin}}" "$@"
 }
 
 _raijin_main() {
