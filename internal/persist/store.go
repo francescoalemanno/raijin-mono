@@ -674,13 +674,6 @@ func (st *Store) EnsureSessionPersisted(sessionID string) error {
 	return st.flushHeaderLocked(sessionID)
 }
 
-// IsLoadedSessionEphemeral reports whether the loaded session is still pending.
-func (st *Store) IsLoadedSessionEphemeral(sessionID string) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.loaded == sessionID && st.pending
-}
-
 // loadSessionIndex scans the journal directory and replays only session-level
 // entries to build the in-memory session index cheaply at startup.
 func (st *Store) loadSessionIndex() error {

@@ -24,7 +24,6 @@ type Binding struct {
 	Key              string `json:"-"`
 	SessionID        string `json:"session_id"`
 	OwnerPID         int    `json:"owner_pid,omitempty"`
-	Ephemeral        bool   `json:"ephemeral,omitempty"`
 	SessionCreatedAt int64  `json:"session_created_at,omitempty"`
 	SessionUpdatedAt int64  `json:"session_updated_at,omitempty"`
 }

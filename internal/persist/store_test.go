@@ -685,7 +685,6 @@ func TestBindingRoundTripSupportsEphemeralSessionReattach(t *testing.T) {
 		Key:              "bind-test",
 		SessionID:        sess.ID,
 		OwnerPID:         1234,
-		Ephemeral:        true,
 		SessionCreatedAt: sess.CreatedAt,
 		SessionUpdatedAt: sess.UpdatedAt,
 	}); err != nil {

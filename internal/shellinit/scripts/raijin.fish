@@ -1,10 +1,7 @@
 # Raijin shell integration for fish
 # Add to your config.fish:  raijin --init fish | source
 #
-# This script autogenerates ":" shortcuts as aliases:
-#   :               → raijin
-#   :status         → raijin /status
-#   :+skill         → raijin +skill
+# This provides the ":" alias for raijin
 
 set -g __raijin_binding_key "$RAIJIN_SESSION_BINDING_KEY"
 if test -z "$__raijin_binding_key"
@@ -21,17 +18,11 @@ function __raijin_main
     command raijin $argv
 end
 
-# --- Generated : aliases ---
+# --- Main : alias ---
 alias : "__raijin_main"
-{{- range .CommandShortcuts }}
-alias :{{ . }} "__raijin_main /{{ . }}"
-{{- end }}
-{{- range .SkillShortcuts }}
-alias :+{{ . }} "__raijin_main +{{ . }}"
-{{- end }}
 
 # --- Completion for ":" alias ---
 function __raijin_colon_complete
-    raijin --complete (commandline) 2>/dev/null
+    raijin -complete (commandline) 2>/dev/null
 end
 complete -c : -f -a '(__raijin_colon_complete)'

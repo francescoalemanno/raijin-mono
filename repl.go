@@ -1,28 +1,13 @@
 package main
 
 import (
-	"errors"
 	"strconv"
 	"strings"
 
-	"github.com/francescoalemanno/raijin-mono/internal/shellinit"
+	"github.com/francescoalemanno/raijin-mono/internal/completion"
 )
 
-const (
-	replPickerModeComplete = "complete"
-	replPickerModeMention  = "mention"
-)
-
-type replPickerRequest struct {
-	mode       string
-	line       string
-	tokenStart int
-	tokenEnd   int
-	query      string
-	candidates []string
-}
-
-type replCompletionPicker func(mode, query string, candidates []string) (string, error)
+type replCompletionPicker func(query string, candidates []completion.Candidate, tokenType completion.TokenType) (string, error)
 
 func replSubprocessArgs(baseArgs []string, prompt string) []string {
 	args := make([]string, 0, len(baseArgs)+1)
@@ -110,34 +95,46 @@ func (c *replAutoCompleter) Do(line []rune, pos int) ([][]rune, int) {
 		pos = len(line)
 	}
 
-	start := pos
-	for start > 0 && !isREPLSpace(byte(line[start-1])) {
-		start--
-	}
-	prefix := string(line[start:pos])
-	if strings.HasPrefix(prefix, ":") {
+	token := completion.Parse(string(line), pos)
+	if token.Type == completion.TokenUnknown {
 		return nil, 0
 	}
 
-	context := string(line[:pos])
-	candidates := replCompletionCandidates(context)
-	if len(candidates) == 0 {
+	candidates := completion.GetCandidates(token)
+	filtered := completion.FilterCandidates(candidates, token)
+
+	if len(filtered) == 0 {
 		return nil, 0
 	}
 
-	prefixMatches := candidates[:0]
-	for _, candidate := range candidates {
-		if strings.HasPrefix(candidate, prefix) {
-			prefixMatches = append(prefixMatches, candidate)
+	// For colon-prefixed or bare (universal) tokens, return all filtered candidates
+	// The full token will be replaced
+	if strings.HasPrefix(token.Raw, ":") || token.Type == completion.TokenUniversal {
+		out := make([][]rune, 0, len(filtered))
+		for _, c := range filtered {
+			// Return the full value including prefix (e.g., "/add-model")
+			out = append(out, []rune(c.Value))
+		}
+		return out, len(token.Raw)
+	}
+
+	// Build prefix from current text after token start
+	prefix := string(line[token.Start:pos])
+
+	// Find prefix matches
+	var matches []completion.Candidate
+	for _, c := range filtered {
+		if strings.HasPrefix(c.Value, prefix) {
+			matches = append(matches, c)
 		}
 	}
-	if len(prefixMatches) == 0 {
+	if len(matches) == 0 {
 		return nil, 0
 	}
 
-	out := make([][]rune, 0, len(prefixMatches))
-	for _, cand := range prefixMatches {
-		out = append(out, []rune(strings.TrimPrefix(cand, prefix)))
+	out := make([][]rune, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, []rune(strings.TrimPrefix(m.Value, prefix)))
 	}
 	return out, len(prefix)
 }
@@ -146,162 +143,68 @@ func replCompleteLineWithMatches(line string, pos int, key rune, showMatches fun
 	return replCompleteLineWithPicker(line, pos, key, nil, showMatches)
 }
 
-func replBuildPickerRequest(line string, pos int, key rune) (string, int, *replPickerRequest, bool) {
-	if key != '\t' {
-		return "", 0, nil, false
-	}
-	if pos < 0 {
-		pos = 0
-	}
-	if pos > len(line) {
-		pos = len(line)
-	}
-
-	tokenStart, tokenEnd := replTokenBounds(line, pos)
-	tokenPrefix := line[tokenStart:pos]
-	if tokenPrefix == "" {
-		return line, pos, nil, true
-	}
-	if strings.HasPrefix(tokenPrefix, ":") {
-		return line, pos, nil, true
-	}
-	if strings.HasPrefix(tokenPrefix, "@") {
-		return line, pos, &replPickerRequest{
-			mode:       replPickerModeMention,
-			line:       line,
-			tokenStart: tokenStart,
-			tokenEnd:   tokenEnd,
-			query:      replMentionQuery(tokenPrefix),
-		}, true
-	}
-
-	context := line[:pos]
-	candidates := replCompletionCandidates(context)
-	if len(candidates) == 0 {
-		return line, pos, nil, true
-	}
-	if len(candidates) == 1 {
-		replacement := candidates[0]
-		newLine := line[:tokenStart] + replacement + line[tokenEnd:]
-		newPos := tokenStart + len(replacement)
-		return newLine, newPos, nil, true
-	}
-	return line, pos, &replPickerRequest{
-		mode:       replPickerModeComplete,
-		line:       line,
-		tokenStart: tokenStart,
-		tokenEnd:   tokenEnd,
-		query:      replCompletionQuery(context),
-		candidates: append([]string(nil), candidates...),
-	}, true
-}
-
 func replCompleteLineWithPicker(line string, pos int, key rune, pick replCompletionPicker, showMatches func([]string)) (string, int, bool) {
-	newLine, newPos, req, ok := replBuildPickerRequest(line, pos, key)
-	if !ok {
+	if key != '\t' {
 		return "", 0, false
 	}
-	if req == nil {
-		return newLine, newPos, true
+
+	token := completion.Parse(line, pos)
+	if token.Type == completion.TokenUnknown {
+		return line, pos, true
 	}
-	if req.mode == replPickerModeComplete && showMatches != nil {
-		showMatches(req.candidates)
+
+	candidates := completion.GetCandidates(token)
+	filtered := completion.FilterCandidates(candidates, token)
+
+	if len(filtered) == 0 {
+		return line, pos, true
 	}
+
+	// Single match - apply directly
+	if len(filtered) == 1 {
+		result := completion.Apply(line, token, filtered[0].Value)
+		newPos := token.Start + len(filtered[0].Value)
+		// Apply adds ": " prefix for colon-prefixed tokens
+		if strings.HasPrefix(token.Raw, ":") {
+			newPos += 2 // for ": "
+		}
+		return result, newPos, true
+	}
+
+	// Show matches if callback provided
+	if showMatches != nil {
+		display := make([]string, len(filtered))
+		for i, c := range filtered {
+			display[i] = c.Display
+		}
+		showMatches(display)
+	}
+
+	// No picker - stay at current state
 	if pick == nil {
 		return line, pos, true
 	}
-	selected, err := pick(req.mode, req.query, req.candidates)
+
+	// Use picker
+	selected, err := pick(token.Query, filtered, token.Type)
 	if err != nil || selected == "" {
 		return line, pos, true
 	}
-	resolved, err := replApplyPickerSelection(req, selected)
-	if err != nil {
-		return line, pos, true
-	}
-	replacement := selected
-	if req.mode == replPickerModeMention {
-		replacement = replFormatMention(selected)
-	}
-	return resolved, req.tokenStart + len(replacement), true
-}
 
-func replCompletionCandidates(context string) []string {
-	return shellinit.Candidates(context)
-}
-
-func replApplyPickerSelection(req *replPickerRequest, selected string) (string, error) {
-	if req == nil {
-		return "", errors.New("picker request is required")
-	}
-	if selected == "" {
-		return req.line, nil
-	}
-	replacement := selected
-	if req.mode == replPickerModeMention {
-		replacement = replFormatMention(selected)
-	}
-	return req.line[:req.tokenStart] + replacement + req.line[req.tokenEnd:], nil
-}
-
-func replCompletionQuery(context string) string {
-	context = strings.TrimSpace(context)
-	if context == "" {
-		return ""
-	}
-	parts := strings.Fields(context)
-	if len(parts) == 0 {
-		return ""
-	}
-	token := parts[len(parts)-1]
-	switch {
-	case strings.HasPrefix(token, "+"):
-		return strings.TrimPrefix(token, "+")
-	case strings.HasPrefix(token, "/"):
-		return strings.TrimPrefix(token, "/")
-	default:
-		return token
-	}
-}
-
-func replMentionQuery(token string) string {
-	return strings.TrimPrefix(token, "@")
-}
-
-func replFormatMention(path string) string {
-	if strings.ContainsAny(path, " \t") {
-		escaped := strings.ReplaceAll(path, "\\", "\\\\")
-		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-		return `@"` + escaped + `"`
-	}
-	return "@" + path
-}
-
-func replTokenBounds(line string, pos int) (start, end int) {
-	start = pos
-	for start > 0 {
-		if isREPLSpace(line[start-1]) {
-			break
+	// Find the candidate with this display value to get the full value
+	for _, c := range filtered {
+		if c.Display == selected {
+			result := completion.Apply(line, token, c.Value)
+			newPos := token.Start + len(c.Value)
+			// Apply adds ": " prefix for colon-prefixed tokens
+			if strings.HasPrefix(token.Raw, ":") {
+				newPos += 2 // for ": "
+			}
+			return result, newPos, true
 		}
-		start--
 	}
 
-	end = pos
-	for end < len(line) {
-		if isREPLSpace(line[end]) {
-			break
-		}
-		end++
-	}
-	return start, end
-}
-
-func isREPLSpace(b byte) bool {
-	switch b {
-	case ' ', '\t', '\n', '\r':
-		return true
-	default:
-		return false
-	}
+	return line, pos, true
 }
 
 func longestCommonPrefix(items []string) string {

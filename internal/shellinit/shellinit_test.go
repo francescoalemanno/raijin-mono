@@ -1,10 +1,13 @@
 package shellinit
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/francescoalemanno/raijin-mono/internal/completion"
 )
 
 func TestCompletionsIncludeOneShotStatus(t *testing.T) {
@@ -43,56 +46,59 @@ func TestCompletionsIncludeSkills(t *testing.T) {
 }
 
 func TestCompleteSlashCommand(t *testing.T) {
-	out := Complete(":/add")
+	out := Complete("/add")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	found := false
 	for _, line := range lines {
-		if line == ":/add-model" {
+		if line == "/add-model" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected :/add-model in completions, got %q", lines)
+		t.Fatalf("expected /add-model in completions, got %q", lines)
 	}
 }
 
 func TestCompleteBareCommandToken(t *testing.T) {
-	out := Complete(":add")
+	// Bare tokens (without /, +, or @ prefix) now trigger universal completion
+	// They autocomplete among all candidates (skills + builtins + templates)
+	out := Complete("add")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
+	// Should find "/add-model" among the completions
 	found := false
 	for _, line := range lines {
-		if line == ":/add-model" {
+		if line == "/add-model" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected :/add-model in bare-token completions, got %q", lines)
+		t.Fatalf("expected universal completion to include '/add-model' for 'add', got %q", lines)
 	}
 }
 
 func TestCompleteUsesFuzzyMatchingForCommands(t *testing.T) {
-	out := Complete(":rs")
+	out := Complete("/rs")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	found := false
 	for _, line := range lines {
-		if line == ":/reasoning" {
+		if line == "/reasoning" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected fuzzy completion :/reasoning for :rs, got %q", lines)
+		t.Fatalf("expected fuzzy completion /reasoning for /rs, got %q", lines)
 	}
 }
 
 func TestCompleteSkillsPrefix(t *testing.T) {
-	out := Complete(":+")
+	out := Complete("+")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	found := false
 	for _, line := range lines {
-		if strings.HasPrefix(line, ":+") {
+		if strings.HasPrefix(line, "+") {
 			found = true
 			break
 		}
@@ -102,21 +108,20 @@ func TestCompleteSkillsPrefix(t *testing.T) {
 	}
 }
 
-func TestCompleteColonShowsSkillsAndCommands(t *testing.T) {
-	out := Complete(":")
+func TestCompleteSlashShowsSkillsAndCommands(t *testing.T) {
+	// "/" alone doesn't trigger completions - need a prefix or trigger char
+	// This test verifies that "/" with some context works
+	out := Complete("/")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	foundSkill := false
 	foundCommand := false
 	for _, line := range lines {
-		if strings.HasPrefix(line, ":+") {
-			foundSkill = true
-		}
-		if strings.HasPrefix(line, ":/") {
+		if strings.HasPrefix(line, "/") {
 			foundCommand = true
+			break
 		}
 	}
-	if !foundSkill || !foundCommand {
-		t.Fatalf("expected both skill and command completions, got %q", lines)
+	if !foundCommand {
+		t.Fatalf("expected command completions for /, got %q", lines)
 	}
 }
 
@@ -136,19 +141,20 @@ func TestCompleteMidSentenceSkillToken(t *testing.T) {
 }
 
 func TestCompleteMidSentenceSlashToken(t *testing.T) {
-	out := Complete(":please run /add")
+	out := Complete("please run /add")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	found := false
 	for _, line := range lines {
-		if line == "/add-model" || line == ":/add-model" {
+		if line == "/add-model" {
 			found = true
 			break
 		}
 	}
-	if found {
-		t.Fatalf("expected no /command completion for mid-sentence token, got %q", lines)
+	if !found {
+		t.Fatalf("expected /command completion for mid-sentence token, got %q", lines)
 	}
 }
+
 
 func TestCompleteMidSentenceSkillWithPrefixStillCompletes(t *testing.T) {
 	out := Complete(":please use +tm")
@@ -165,7 +171,118 @@ func TestCompleteMidSentenceSkillWithPrefixStillCompletes(t *testing.T) {
 	}
 }
 
-func TestBashInitGeneratesColonShortcuts(t *testing.T) {
+func TestCompleteSelectionReturnsOriginalOnNoMatch(t *testing.T) {
+	prevMatches := completionMatchesForSelect
+	t.Cleanup(func() {
+		completionMatchesForSelect = prevMatches
+	})
+	completionMatchesForSelect = func(current string) []string {
+		return nil
+	}
+
+	input := "see @rea"
+	if got := CompleteSelection(input); got != input {
+		t.Fatalf("CompleteSelection(%q) = %q, want %q", input, got, input)
+	}
+}
+
+func TestCompleteSelectionReturnsSingleMatchWithoutFZF(t *testing.T) {
+	prevMatches := completionMatchesForSelect
+	t.Cleanup(func() {
+		completionMatchesForSelect = prevMatches
+	})
+	completionMatchesForSelect = func(current string) []string {
+		return []string{"@readme.md"}
+	}
+
+	prev := runFZFForComplete
+	t.Cleanup(func() {
+		runFZFForComplete = prev
+	})
+	runFZFForComplete = func(mode, query string, stdin io.Reader, stdout io.Writer) (int, error) {
+		t.Fatalf("runFZFForComplete should not be called for a single match")
+		return 1, nil
+	}
+
+	input := "see @rea"
+	want := "see @readme.md"
+	if got := CompleteSelection(input); got != want {
+		t.Fatalf("CompleteSelection(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestCompleteSelectionUsesFZFWhenMultipleMatches(t *testing.T) {
+	prevMatches := completionMatchesForSelect
+	t.Cleanup(func() {
+		completionMatchesForSelect = prevMatches
+	})
+	completionMatchesForSelect = func(current string) []string {
+		return []string{"@readme.md", "@real.txt"}
+	}
+
+	prev := runFZFForComplete
+	t.Cleanup(func() {
+		runFZFForComplete = prev
+	})
+
+	var expected string
+	runFZFForComplete = func(mode, query string, stdin io.Reader, stdout io.Writer) (int, error) {
+		if mode != "complete" {
+			t.Fatalf("mode = %q, want complete", mode)
+		}
+		if query != "re" {
+			t.Fatalf("query = %q, want re", query)
+		}
+		raw, err := io.ReadAll(stdin)
+		if err != nil {
+			t.Fatalf("read stdin: %v", err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		if len(lines) < 2 {
+			t.Fatalf("expected at least 2 completion candidates, got %q", lines)
+		}
+		expected = lines[1]
+		if _, err := io.WriteString(stdout, expected+"\n"); err != nil {
+			t.Fatalf("write stdout: %v", err)
+		}
+		return 0, nil
+	}
+
+	input := "see @re"
+	got := CompleteSelection(input)
+	if expected == "" {
+		t.Fatalf("expected stub picker to provide a selected candidate")
+	}
+	want := "see " + expected
+	if got != want {
+		t.Fatalf("CompleteSelection(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestCompleteSelectionReturnsOriginalWhenPickerCancelled(t *testing.T) {
+	prevMatches := completionMatchesForSelect
+	t.Cleanup(func() {
+		completionMatchesForSelect = prevMatches
+	})
+	completionMatchesForSelect = func(current string) []string {
+		return []string{"@readme.md", "@real.txt"}
+	}
+
+	prev := runFZFForComplete
+	t.Cleanup(func() {
+		runFZFForComplete = prev
+	})
+	runFZFForComplete = func(mode, query string, stdin io.Reader, stdout io.Writer) (int, error) {
+		return 130, nil
+	}
+
+	input := "see @re"
+	if got := CompleteSelection(input); got != input {
+		t.Fatalf("CompleteSelection(%q) = %q, want %q on cancel", input, got, input)
+	}
+}
+
+func TestBashInitProvidesColonAlias(t *testing.T) {
 	script, err := Init("bash")
 	if err != nil {
 		t.Fatalf("Init(bash) failed: %v", err)
@@ -179,11 +296,11 @@ func TestBashInitGeneratesColonShortcuts(t *testing.T) {
 	if !strings.Contains(script, "alias :='_raijin_main'") {
 		t.Fatalf("bash init missing : alias")
 	}
-	if !strings.Contains(script, "alias :status='_raijin_main /status'") {
-		t.Fatalf("bash init missing generated :status alias")
+	if strings.Contains(script, "alias :status") {
+		t.Fatalf("bash init should not generate :status shorthand alias")
 	}
-	if !strings.Contains(script, "alias :+") {
-		t.Fatalf("bash init missing generated :+skill aliases")
+	if strings.Contains(script, "alias :+") {
+		t.Fatalf("bash init should not generate :+skill shorthand aliases")
 	}
 	if strings.Contains(script, "bind -x") || strings.Contains(script, "complete -D") {
 		t.Fatalf("bash init should not use keybinding or completion interception")
@@ -191,12 +308,12 @@ func TestBashInitGeneratesColonShortcuts(t *testing.T) {
 	if !strings.Contains(script, "complete -F _raijin_colon_complete :") {
 		t.Fatalf("bash init missing completion for : alias")
 	}
-	if !strings.Contains(script, `raijin --complete "$line"`) {
-		t.Fatalf("bash init completion should delegate to raijin --complete")
+	if !strings.Contains(script, `raijin -complete "$line"`) {
+		t.Fatalf("bash init completion should delegate to raijin -complete")
 	}
 }
 
-func TestZshInitGeneratesColonShortcuts(t *testing.T) {
+func TestZshInitProvidesColonAlias(t *testing.T) {
 	script, err := Init("zsh")
 	if err != nil {
 		t.Fatalf("Init(zsh) failed: %v", err)
@@ -210,73 +327,58 @@ func TestZshInitGeneratesColonShortcuts(t *testing.T) {
 	if !strings.Contains(script, "alias :='noglob _raijin_main'") {
 		t.Fatalf("zsh init missing : alias with noglob")
 	}
-	if !strings.Contains(script, "alias :status='noglob _raijin_main /status'") {
-		t.Fatalf("zsh init missing generated :status alias with noglob")
+	if strings.Contains(script, "alias :status") {
+		t.Fatalf("zsh init should not generate :status shorthand alias")
 	}
-	if !strings.Contains(script, "alias :+") {
-		t.Fatalf("zsh init missing generated :+skill aliases")
+	if strings.Contains(script, "alias :+") {
+		t.Fatalf("zsh init should not generate :+skill shorthand aliases")
 	}
-	// Verify all command/skill aliases use noglob
-	if strings.Contains(script, "alias :help='raijin /help'") {
-		t.Fatalf("zsh init aliases should use noglob and $_RAIJIN_BIN")
+	if !strings.Contains(script, "_raijin_exec()") {
+		t.Fatalf("zsh init missing execution helper")
 	}
-	if !strings.Contains(script, `"$_RAIJIN_BIN" --complete "$line"`) {
-		t.Fatalf("zsh init completion should delegate to raijin --complete")
+	if !strings.Contains(script, `-complete "$LBUFFER"`) {
+		t.Fatalf("zsh init completion should delegate to raijin -complete")
 	}
-	if !strings.Contains(script, `"$_RAIJIN_BIN" --fzf paths --fzf-query "$query"`) {
-		t.Fatalf("zsh init missing embedded path picker")
+	if !strings.Contains(script, "zle -I") {
+		t.Fatalf("zsh init missing zle -I for interactive completion")
 	}
-	if !strings.Contains(script, `| "$_RAIJIN_BIN" --fzf complete --fzf-query "$current_word" 2>/dev/null`) {
-		t.Fatalf("zsh init missing embedded completion picker")
-	}
-	if strings.Contains(script, "command find .") || strings.Contains(script, " fzf ") || strings.Contains(script, "fdfind ") || strings.Contains(script, "fd --type") {
-		t.Fatalf("zsh init should not depend on external path/fzf tools")
+	if !strings.Contains(script, "[[ ! \"$LBUFFER\" =~ '[@:+/]' ]]") {
+		t.Fatalf("zsh init missing trigger check optimization")
 	}
 	if !strings.Contains(script, "zle -N raijin-completion-widget _raijin_completion_widget") {
-		t.Fatalf("zsh init missing custom tab completion widget")
+		t.Fatalf("zsh init missing tab completion widget")
 	}
-	if !strings.Contains(script, "_raijin_should_use_command_picker") {
-		t.Fatalf("zsh init missing command picker context helper")
+
+	if !strings.Contains(script, "bindkey -M main '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M emacs '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M viins '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M vicmd '^I' raijin-completion-widget") {
+		t.Fatalf("zsh init missing tab keybindings")
 	}
-	if !strings.Contains(script, "_raijin_register_widgets_precmd") {
-		t.Fatalf("zsh init missing deferred widget registration hook")
-	}
-	if !strings.Contains(script, "bindkey -M main '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M emacs '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M viins '^I' raijin-completion-widget") {
-		t.Fatalf("zsh init missing tab keybinding for custom completion widget")
-	}
-	if !strings.Contains(script, "zle -N raijin-accept-line _raijin_accept_line") {
-		t.Fatalf("zsh init missing custom accept-line widget")
-	}
-	if !strings.Contains(script, "bindkey -M main '^M' raijin-accept-line") || !strings.Contains(script, "bindkey -M emacs '^M' raijin-accept-line") || !strings.Contains(script, "bindkey -M viins '^M' raijin-accept-line") || !strings.Contains(script, "bindkey -M vicmd '^M' raijin-accept-line") {
-		t.Fatalf("zsh init missing enter keybinding for accept-line widget")
-	}
-	if !strings.Contains(script, "zle -N bracketed-paste _raijin_bracketed_paste") {
-		t.Fatalf("zsh init missing bracketed-paste refresh widget")
-	}
-	if !strings.Contains(script, "_raijin_register_widget_hooks") || !strings.Contains(script, "add-zle-hook-widget line-init _raijin_rebind_widgets_hook") || !strings.Contains(script, "add-zle-hook-widget keymap-select _raijin_rebind_widgets_hook") {
-		t.Fatalf("zsh init missing widget rebind hooks")
+	if !strings.Contains(script, "add-zle-hook-widget line-init _raijin_bind_tab") || !strings.Contains(script, "add-zle-hook-widget keymap-select _raijin_bind_tab") {
+		t.Fatalf("zsh init missing tab rebind hooks")
 	}
 	if !strings.Contains(script, "zle .expand-or-complete") {
 		t.Fatalf("zsh init should use builtin expand-or-complete as fallback")
 	}
-	if !strings.Contains(script, "_raijin_enable_syntax_highlighting") {
-		t.Fatalf("zsh init missing syntax-highlighting hook")
+
+	removed := []string{
+		"--fzf",
+		"--fzf-query",
+		"_raijin_should_use_command_picker",
+		"_raijin_register_widgets_precmd",
+		"_raijin_register_widget_hooks",
+		"_raijin_enable_syntax_highlighting",
+		"_raijin_accept_line",
+		"_raijin_colon_completer",
+		"compdef _raijin_colon_complete :",
+		"zle -N bracketed-paste",
 	}
-	if !strings.Contains(script, "compdef _raijin_colon_complete :") {
-		t.Fatalf("zsh init missing completion wiring for : alias")
-	}
-	if !strings.Contains(script, "_raijin_register_colon_completion_precmd") {
-		t.Fatalf("zsh init missing deferred completion registration hook")
-	}
-	if !strings.Contains(script, "_raijin_colon_completer") {
-		t.Fatalf("zsh init missing global colon completer fallback")
-	}
-	if !strings.Contains(script, "if [[ -o interactive ]] && (( $+builtins[zle] )); then") {
-		t.Fatalf("zsh init should configure global colon completer only in interactive zle shells")
+	for _, token := range removed {
+		if strings.Contains(script, token) {
+			t.Fatalf("zsh init should not include legacy logic token %q", token)
+		}
 	}
 }
 
-func TestFishInitGeneratesColonShortcuts(t *testing.T) {
+func TestFishInitProvidesColonAlias(t *testing.T) {
 	script, err := Init("fish")
 	if err != nil {
 		t.Fatalf("Init(fish) failed: %v", err)
@@ -290,17 +392,17 @@ func TestFishInitGeneratesColonShortcuts(t *testing.T) {
 	if !strings.Contains(script, `alias : "__raijin_main"`) {
 		t.Fatalf("fish init missing : alias")
 	}
-	if !strings.Contains(script, `alias :status "__raijin_main /status"`) {
-		t.Fatalf("fish init missing generated :status alias")
+	if strings.Contains(script, `alias :status`) {
+		t.Fatalf("fish init should not generate :status shorthand alias")
 	}
-	if !strings.Contains(script, "alias :+") {
-		t.Fatalf("fish init missing generated :+skill aliases")
+	if strings.Contains(script, "alias :+") {
+		t.Fatalf("fish init should not generate :+skill shorthand aliases")
 	}
 	if !strings.Contains(script, "__raijin_colon_complete") {
 		t.Fatalf("fish init missing completion helper")
 	}
-	if !strings.Contains(script, "raijin --complete (commandline) 2>/dev/null") {
-		t.Fatalf("fish init completion should delegate to raijin --complete")
+	if !strings.Contains(script, "raijin -complete (commandline) 2>/dev/null") {
+		t.Fatalf("fish init completion should delegate to raijin -complete")
 	}
 }
 
@@ -324,9 +426,21 @@ func TestMentionPathsSkipsExcludedDirs(t *testing.T) {
 	mustWrite("build/out.txt")
 	mustWrite("_external-cache/generated.txt")
 
-	paths, err := mentionPaths(root)
+	// Change to the temp directory to test path collection
+	originalWD, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("mentionPaths failed: %v", err)
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(originalWD)
+
+	// Use completion package to get paths
+	candidates := completion.GetCandidates(completion.Token{Type: completion.TokenFiles})
+	var paths []string
+	for _, c := range candidates {
+		paths = append(paths, c.Display)
 	}
 
 	joined := strings.Join(paths, "\n")

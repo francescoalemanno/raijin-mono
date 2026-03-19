@@ -22,9 +22,7 @@ func main() {
 	newFlag := flag.Bool("new", false, "force a new session")
 	initFlag := flag.String("init", "", "print shell integration script (zsh, bash, fish)")
 	completionsFlag := flag.Bool("completions", false, "print available commands, templates, and skills for shell completion")
-	completeFlag := flag.String("complete", "", "print completion candidates for a token")
-	fzfModeFlag := flag.String("fzf", "", "run native fzf endpoint (default, complete, paths)")
-	fzfQueryFlag := flag.String("fzf-query", "", "set the initial query for --fzf")
+	completeFlag := flag.String("complete", "", "resolve completion for a token or input line")
 	removeModelFlag := flag.String("remove-model", "", "remove configured model by name")
 	removeSessionFlag := flag.String("remove-session", "", "remove persisted session by id (full or short)")
 	profileDirFlag := flag.String("profile-dir", "", "write live profiling artifacts under this directory")
@@ -51,15 +49,8 @@ func main() {
 		os.Exit(0)
 	}
 	if token := strings.TrimSpace(*completeFlag); token != "" {
-		fmt.Println(shellinit.Complete(token))
+		fmt.Println(shellinit.CompleteSelection(token))
 		os.Exit(0)
-	}
-	if mode := strings.TrimSpace(*fzfModeFlag); mode != "" {
-		code, err := shellinit.RunFZF(mode, strings.TrimSpace(*fzfQueryFlag), os.Stdin, os.Stdout)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
-		}
-		os.Exit(code)
 	}
 	didDelete := false
 	if modelName := strings.TrimSpace(*removeModelFlag); modelName != "" {

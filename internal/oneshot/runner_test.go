@@ -25,13 +25,12 @@ func bindTestContext(t *testing.T) string {
 	return key
 }
 
-func bindSession(t *testing.T, key string, store *persist.Store, sess persist.Session, ephemeral bool) {
+func bindSession(t *testing.T, key string, store *persist.Store, sess persist.Session) {
 	t.Helper()
 	if err := store.SaveBinding(persist.Binding{
 		Key:              key,
 		SessionID:        sess.ID,
 		OwnerPID:         4242,
-		Ephemeral:        ephemeral,
 		SessionCreatedAt: sess.CreatedAt,
 		SessionUpdatedAt: sess.UpdatedAt,
 	}); err != nil {
@@ -69,8 +68,8 @@ func TestRunNewCreatesEphemeralBoundSessionWithoutPersistingMessages(t *testing.
 	if err != nil {
 		t.Fatalf("LoadBinding: %v", err)
 	}
-	if !binding.Ephemeral {
-		t.Fatalf("binding should remain ephemeral after /new: %#v", binding)
+	if binding.SessionID == "" {
+		t.Fatalf("binding should have a session ID after /new: %#v", binding)
 	}
 }
 
@@ -174,6 +173,7 @@ func TestRunHelpIncludesPromptTemplates(t *testing.T) {
 func TestRunPromptRequiresBoundContext(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv(persist.SessionBindingKeyEnv, "")
 
 	err := Run(Options{}, "hello")
 	if err == nil {
@@ -294,7 +294,7 @@ func TestRunHistoryReplaysUserOnlyOutput(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create user message: %v", err)
 	}
-	bindSession(t, key, store, sess, false)
+	bindSession(t, key, store, sess)
 
 	out := captureStdout(t, func() {
 		if err := Run(Options{}, "/history"); err != nil {
@@ -339,7 +339,7 @@ func TestRunHistoryReplaysAssistantOutput(t *testing.T) {
 	if _, err := msgs.Create(context.Background(), sess.ID, second); err != nil {
 		t.Fatalf("create second assistant message: %v", err)
 	}
-	bindSession(t, key, store, sess, false)
+	bindSession(t, key, store, sess)
 
 	out := captureStdout(t, func() {
 		if err := Run(Options{}, "/history"); err != nil {
@@ -380,7 +380,7 @@ func TestRunHistoryUsesStandardRendererMarkdownPath(t *testing.T) {
 	if _, err := msgs.Create(context.Background(), sess.ID, reply); err != nil {
 		t.Fatalf("create assistant message: %v", err)
 	}
-	bindSession(t, key, store, sess, false)
+	bindSession(t, key, store, sess)
 
 	out := captureStdout(t, func() {
 		if err := Run(Options{}, "/history"); err != nil {

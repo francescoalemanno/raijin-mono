@@ -16,8 +16,8 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"github.com/francescoalemanno/raijin-mono/internal/completion"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
-	"github.com/francescoalemanno/raijin-mono/internal/shellinit"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/google/uuid"
 	"golang.org/x/term"
@@ -26,21 +26,15 @@ import (
 const (
 	replPrompt             = "raijin❯ "
 	replContinuationPrompt = "   ...❯ "
-	replPickerModeComplete = "complete"
-	replPickerModeMention  = "mention"
 )
 
 type replRunStats struct {
 	Duration time.Duration
 }
 
-type replPickerRequest struct {
-	mode       string
-	line       string
-	tokenStart int
-	tokenEnd   int
-	query      string
-	candidates []string
+type replPickerResult struct {
+	token    completion.Token
+	selected string
 }
 
 type replStatusMsg struct {
@@ -53,9 +47,8 @@ type replRunDoneMsg struct {
 }
 
 type replPickerDoneMsg struct {
-	req      *replPickerRequest
-	selected string
-	err      error
+	result replPickerResult
+	err    error
 }
 
 type replStatus struct {
@@ -81,9 +74,8 @@ type replModel struct {
 }
 
 type replPickerExec struct {
-	mode       string
-	query      string
-	candidates []string
+	token      completion.Token
+	candidates []completion.Candidate
 	selected   string
 }
 
@@ -169,12 +161,32 @@ func (m replModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, tea.Println(RenderThemedErr(libagent.FormatErrorForCLI(msg.err)))
 		}
-		line, err := replApplyPickerSelection(msg.req, msg.selected)
-		if err != nil {
-			return m, tea.Println(RenderThemedErr(libagent.FormatErrorForCLI(err)))
+		result := msg.result
+		if result.selected == "" {
+			return m, nil
 		}
+		// Find the candidate with matching display to get full value
+		candidates := completion.GetCandidates(result.token)
+		filtered := completion.FilterCandidates(candidates, result.token)
+		var selectedValue string
+		for _, c := range filtered {
+			if c.Display == result.selected {
+				selectedValue = c.Value
+				break
+			}
+		}
+		if selectedValue == "" {
+			// Fallback: assume the selected is the full value
+			selectedValue = result.selected
+			// Ensure prefix is preserved if needed
+			if result.token.HasPrefix && !strings.HasPrefix(selectedValue, prefixForType(result.token.Type)) {
+				selectedValue = prefixForType(result.token.Type) + selectedValue
+			}
+		}
+		newLine := completion.Apply(m.editor.Value(), result.token, selectedValue)
+		newPos := result.token.Start + len(selectedValue)
 		m.resetHistoryNav()
-		m.setEditorState(line, runePosForByteOffset(line, replPickerCursorBytePos(msg.req, msg.selected)))
+		m.setEditorState(newLine, runePosForByteOffset(newLine, newPos))
 		return m, nil
 	case tea.PasteMsg:
 		return m, m.updateEditor(msg)
@@ -281,18 +293,41 @@ func (m *replModel) handleTab() (tea.Model, tea.Cmd) {
 	m.ensureEditor()
 	line := m.editor.Value()
 	bytePos := byteOffsetForRunePos(line, m.editorRunePos())
-	newLine, newBytePos, req, ok := replBuildPickerRequest(line, bytePos)
-	if !ok {
+
+	token := completion.Parse(line, bytePos)
+	if token.Type == completion.TokenUnknown {
 		return *m, nil
 	}
-	if req == nil {
-		if newLine != line {
-			m.resetHistoryNav()
-			m.setEditorState(newLine, runePosForByteOffset(newLine, newBytePos))
+
+	// Skip : prefix (shell convention)
+	if strings.HasPrefix(token.Raw, ":") {
+		return *m, nil
+	}
+
+	candidates := completion.GetCandidates(token)
+	filtered := completion.FilterCandidates(candidates, token)
+
+	if len(filtered) == 0 {
+		return *m, nil
+	}
+
+	// Single match - apply directly
+	if len(filtered) == 1 {
+		newLine := completion.Apply(line, token, filtered[0].Value)
+		newPos := token.Start + len(filtered[0].Value)
+		m.resetHistoryNav()
+		m.setEditorState(newLine, runePosForByteOffset(newLine, newPos))
+		return *m, nil
+	}
+
+	// Multiple matches - use fzf picker
+	picker := &replPickerExec{token: token, candidates: filtered}
+	return *m, tea.Exec(picker, func(err error) tea.Msg {
+		return replPickerDoneMsg{
+			result: replPickerResult{token: token, selected: picker.selected},
+			err:    err,
 		}
-		return *m, nil
-	}
-	return *m, replPickerCmd(req)
+	})
 }
 
 func (m *replModel) submit() (tea.Model, tea.Cmd) {
@@ -408,17 +443,6 @@ func replInputEndBinding() key.Binding {
 	return key.NewBinding(key.WithKeys("super+right"))
 }
 
-func replPickerCursorBytePos(req *replPickerRequest, selected string) int {
-	if req == nil {
-		return 0
-	}
-	replacement := selected
-	if req.mode == replPickerModeMention {
-		replacement = replFormatMention(selected)
-	}
-	return req.tokenStart + len(replacement)
-}
-
 func replRunePosForLineColumn(value string, line, col int) int {
 	lines := strings.Split(value, "\n")
 	if len(lines) == 0 {
@@ -471,55 +495,102 @@ func replPromptExecCmd(baseArgs []string, binding replBinding, prompt string) (t
 	}), nil
 }
 
-func replPickerCmd(req *replPickerRequest) tea.Cmd {
-	if req == nil {
+func (c *replPickerExec) Run() error {
+	// Determine fzf mode based on token type
+	mode := "repl-complete"
+	prompt := "Raijin > "
+	switch c.token.Type {
+	case completion.TokenFiles:
+		mode = "paths"
+		prompt = "@ "
+	case completion.TokenCommands:
+		prompt = "/ "
+	case completion.TokenSkills:
+		prompt = "+ "
+	}
+
+	// Build fzf input from candidate displays
+	var stdin bytes.Buffer
+	for _, c := range c.candidates {
+		stdin.WriteString(c.Display)
+		stdin.WriteByte('\n')
+	}
+
+	// Use shellinit.RunFZF through the completion picker
+	var stdout bytes.Buffer
+	// For paths mode, we need special handling
+	if mode == "paths" {
+		// Get paths directly from completion package
+		pathCandidates := completion.GetCandidates(completion.Token{Type: completion.TokenFiles})
+		filtered := completion.FilterCandidates(pathCandidates, c.token)
+		var pathStdin bytes.Buffer
+		for _, pc := range filtered {
+			pathStdin.WriteString(pc.Display)
+			pathStdin.WriteByte('\n')
+		}
+		code, err := runFZFWithPrompt("paths", c.token.Query, prompt, &pathStdin, &stdout)
+		if err != nil {
+			return err
+		}
+		if code == 0 {
+			c.selected = strings.TrimSpace(stdout.String())
+		}
 		return nil
 	}
-	picker := &replPickerExec{
-		mode:       req.mode,
-		query:      req.query,
-		candidates: append([]string(nil), req.candidates...),
+
+	code, err := runFZFWithPrompt("repl-complete", c.token.Query, prompt, &stdin, &stdout)
+	if err != nil {
+		return err
 	}
-	return tea.Exec(picker, func(err error) tea.Msg {
-		return replPickerDoneMsg{
-			req:      req,
-			selected: picker.selected,
-			err:      err,
-		}
-	})
+	if code == 0 {
+		c.selected = strings.TrimSpace(stdout.String())
+	}
+	return nil
 }
 
-func (c *replPickerExec) Run() error {
-	switch c.mode {
-	case replPickerModeMention:
-		var stdout bytes.Buffer
-		code, err := shellinit.RunFZF("paths", c.query, bytes.NewReader(nil), &stdout)
-		if err != nil {
-			return err
-		}
-		if code == 0 {
-			c.selected = strings.TrimSpace(stdout.String())
-		}
-		return nil
-	default:
-		var stdin bytes.Buffer
-		for _, candidate := range c.candidates {
-			if strings.TrimSpace(candidate) == "" {
-				continue
-			}
-			stdin.WriteString(candidate)
-			stdin.WriteByte('\n')
-		}
-		var stdout bytes.Buffer
-		code, err := shellinit.RunFZF("repl-complete", c.query, &stdin, &stdout)
-		if err != nil {
-			return err
-		}
-		if code == 0 {
-			c.selected = strings.TrimSpace(stdout.String())
-		}
-		return nil
+func runFZFWithPrompt(mode, query, prompt string, stdin io.Reader, stdout io.Writer) (int, error) {
+	// Import from shellinit but use custom prompt
+	args := []string{"--reverse", "--border", "--no-scrollbar", "--exit-0", "--select-1", "--prompt=" + prompt}
+	if mode != "paths" {
+		// repl-complete doesn't use height for fullscreen
+	} else {
+		args = append(args, "--scheme=path")
 	}
+	if query != "" {
+		args = append(args, "--query="+query)
+	}
+	args = append(args, "--bind=tab:accept")
+
+	// We need to access shellinit.RunFZF, but it's not exported
+	// Use the completion package's FZFPicker instead
+	picker := &completion.FZFPicker{UseFullscreen: mode == "paths", Prompt: prompt}
+	candidates := []completion.Candidate{}
+	// Read from stdin and create candidates
+	if stdin != nil {
+		data, _ := io.ReadAll(stdin)
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				candidates = append(candidates, completion.Candidate{
+					Value:     line,
+					Display:   line,
+					QueryText: line,
+				})
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return 1, nil
+	}
+	selected, err := picker.Pick(candidates, completion.Token{Type: completion.TokenUniversal, Query: query})
+	if err != nil {
+		return 1, err
+	}
+	if selected == "" {
+		return 1, nil
+	}
+	fmt.Fprintln(stdout, selected)
+	return 0, nil
 }
 
 func (c *replPickerExec) SetStdin(io.Reader)  {}
@@ -807,104 +878,6 @@ func isREPLExitInput(input string) bool {
 	}
 }
 
-func replBuildPickerRequest(line string, pos int) (string, int, *replPickerRequest, bool) {
-	tokenStart, tokenEnd := replTokenBounds(line, pos)
-	tokenPrefix := line[tokenStart:pos]
-	if tokenPrefix == "" || strings.HasPrefix(tokenPrefix, ":") {
-		return line, pos, nil, true
-	}
-	if strings.HasPrefix(tokenPrefix, "@") {
-		return line, pos, &replPickerRequest{
-			mode:       replPickerModeMention,
-			line:       line,
-			tokenStart: tokenStart,
-			tokenEnd:   tokenEnd,
-			query:      strings.TrimPrefix(tokenPrefix, "@"),
-		}, true
-	}
-	context := line[:pos]
-	candidates := shellinit.Candidates(context)
-	if len(candidates) == 0 {
-		return line, pos, nil, true
-	}
-	if len(candidates) == 1 {
-		replacement := candidates[0]
-		return line[:tokenStart] + replacement + line[tokenEnd:], tokenStart + len(replacement), nil, true
-	}
-	return line, pos, &replPickerRequest{
-		mode:       replPickerModeComplete,
-		line:       line,
-		tokenStart: tokenStart,
-		tokenEnd:   tokenEnd,
-		query:      replCompletionQuery(context),
-		candidates: append([]string(nil), candidates...),
-	}, true
-}
-
-func replApplyPickerSelection(req *replPickerRequest, selected string) (string, error) {
-	if req == nil {
-		return "", errors.New("picker request is required")
-	}
-	if selected == "" {
-		return req.line, nil
-	}
-	replacement := selected
-	if req.mode == replPickerModeMention {
-		replacement = replFormatMention(selected)
-	}
-	return req.line[:req.tokenStart] + replacement + req.line[req.tokenEnd:], nil
-}
-
-func replCompletionQuery(context string) string {
-	context = strings.TrimSpace(context)
-	if context == "" {
-		return ""
-	}
-	parts := strings.Fields(context)
-	if len(parts) == 0 {
-		return ""
-	}
-	token := parts[len(parts)-1]
-	switch {
-	case strings.HasPrefix(token, "+"):
-		return strings.TrimPrefix(token, "+")
-	case strings.HasPrefix(token, "/"):
-		return strings.TrimPrefix(token, "/")
-	default:
-		return token
-	}
-}
-
-func replFormatMention(path string) string {
-	if strings.ContainsAny(path, " \t") {
-		escaped := strings.ReplaceAll(path, "\\", "\\\\")
-		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-		return `@"` + escaped + `"`
-	}
-	return "@" + path
-}
-
-func replTokenBounds(line string, pos int) (start, end int) {
-	start = pos
-	for start > 0 && !isREPLSpace(line[start-1]) {
-		start--
-	}
-	end = pos
-	for end < len(line) && !isREPLSpace(line[end]) {
-		end++
-	}
-	return start, end
-}
-
-func isREPLSpace(b byte) bool {
-	switch b {
-	case ' ', '\t', '\n', '\r':
-		return true
-	default:
-		return false
-	}
-}
-
 func byteOffsetForRunePos(s string, runePos int) int {
 	if runePos <= 0 {
 		return 0
@@ -928,4 +901,17 @@ func runePosForByteOffset(s string, bytePos int) int {
 		return utf8.RuneCountInString(s)
 	}
 	return utf8.RuneCountInString(s[:bytePos])
+}
+
+func prefixForType(t completion.TokenType) string {
+	switch t {
+	case completion.TokenFiles:
+		return "@"
+	case completion.TokenCommands:
+		return "/"
+	case completion.TokenSkills:
+		return "+"
+	default:
+		return ""
+	}
 }

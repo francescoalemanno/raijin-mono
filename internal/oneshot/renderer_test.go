@@ -230,8 +230,8 @@ func TestRendererLiveSpinnerLabelPriority(t *testing.T) {
 		ToolName:   "read",
 		ToolArgs:   `{"path":"README.md"}`,
 	})
-	if got := spinnerLabelForTest(r); got != "Tool calling" {
-		t.Fatalf("spinner label during tool call = %q, want %q", got, "Tool calling")
+	if got := spinnerLabelForTest(r); got != "read (20 bytes)" {
+		t.Fatalf("spinner label during tool call = %q, want %q", got, "read (20 bytes)")
 	}
 }
 
@@ -271,8 +271,8 @@ func TestRendererLiveSpinnerTimerResetsWhenPhaseChanges(t *testing.T) {
 		ToolName:   "read",
 		ToolArgs:   `{"path":"README.md"}`,
 	})
-	if got := spinnerLabelForTest(r); got != "Tool calling" {
-		t.Fatalf("spinner label after tool start = %q, want %q", got, "Tool calling")
+	if got := spinnerLabelForTest(r); got != "read (20 bytes)" {
+		t.Fatalf("spinner label after tool start = %q, want %q", got, "read (20 bytes)")
 	}
 	if got := spinnerElapsedForTest(r); got != "0.00s" {
 		t.Fatalf("spinner elapsed after switch to tool calling = %q, want %q", got, "0.00s")
@@ -367,6 +367,51 @@ func TestRendererPersistentSpinnerDoesNothingForNonTTY(t *testing.T) {
 	}
 	if r.spinnerVisible {
 		t.Fatalf("expected spinner to remain hidden for non-tty renderer")
+	}
+}
+
+func TestRendererLiveSpinnerShowsMultiplePendingTools(t *testing.T) {
+	var stderr bytes.Buffer
+	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, true, rendererOptions{
+		persistentSpinner: true,
+		spinnerInterval:   time.Hour,
+	})
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	// First tool starts - shows compact format with byte size
+	r.handleEvent(libagent.AgentEvent{
+		Type:       libagent.AgentEventTypeToolExecutionStart,
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		ToolArgs:   `{"path":"main.go"}`,
+	})
+	if got := spinnerLabelForTest(r); got != "read (18 bytes)" {
+		t.Fatalf("spinner label with one pending tool = %q, want %q", got, "read (18 bytes)")
+	}
+
+	// Second tool starts - shows "Tool calls (N, X bytes)" format
+	r.handleEvent(libagent.AgentEvent{
+		Type:       libagent.AgentEventTypeToolExecutionStart,
+		ToolCallID: "call-2",
+		ToolName:   "bash",
+		ToolArgs:   `{"command":"go build"}`,
+	})
+	// 18 bytes (first) + 22 bytes (second) = 40 bytes
+	if got := spinnerLabelForTest(r); got != "Tool calls (2, 40 bytes)" {
+		t.Fatalf("spinner label with two pending tools = %q, want %q", got, "Tool calls (2, 40 bytes)")
+	}
+
+	// Third tool starts
+	r.handleEvent(libagent.AgentEvent{
+		Type:       libagent.AgentEventTypeToolExecutionStart,
+		ToolCallID: "call-3",
+		ToolName:   "glob",
+		ToolArgs:   `{"pattern":"*.go"}`,
+	})
+	// 18 + 22 + 18 = 58 bytes
+	if got := spinnerLabelForTest(r); got != "Tool calls (3, 58 bytes)" {
+		t.Fatalf("spinner label with three pending tools = %q, want %q", got, "Tool calls (3, 58 bytes)")
 	}
 }
 

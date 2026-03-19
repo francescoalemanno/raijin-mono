@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -672,7 +673,7 @@ func (r *renderer) stopPersistentSpinner() {
 
 func (r *renderer) spinnerLabelLocked() string {
 	if len(r.pending) > 0 {
-		return "Tool calling"
+		return r.pendingToolsLabelLocked()
 	}
 	if r.thinking {
 		return "Thinking"
@@ -684,6 +685,64 @@ func (r *renderer) spinnerLabelLocked() string {
 		return "Thinking"
 	}
 	return "Thinking"
+}
+
+// pendingToolsLabelLocked generates a compact label for pending tools.
+// Uses a short format to avoid line wrapping issues with long JSON params.
+func (r *renderer) pendingToolsLabelLocked() string {
+	if len(r.pending) == 0 {
+		return "Tool calling"
+	}
+
+	// Collect pending tools with their info for stable sorting
+	type pendingInfo struct {
+		id     string
+		name   string
+		params string
+	}
+	pendingList := make([]pendingInfo, 0, len(r.pending))
+	for id, p := range r.pending {
+		if !p.ended {
+			pendingList = append(pendingList, pendingInfo{
+				id:     id,
+				name:   p.toolName,
+				params: r.bestParams(p),
+			})
+		}
+	}
+
+	if len(pendingList) == 0 {
+		return "Tool calling"
+	}
+
+	// Sort by ID for deterministic ordering
+	sort.Slice(pendingList, func(i, j int) bool {
+		return pendingList[i].id < pendingList[j].id
+	})
+
+	// Calculate total parameter bytes
+	totalBytes := 0
+	for _, p := range pendingList {
+		totalBytes += len(p.params)
+	}
+
+	// Build compact label
+	if len(pendingList) == 1 {
+		return fmt.Sprintf("%s (%s)", pendingList[0].name, formatByteSize(totalBytes))
+	}
+	return fmt.Sprintf("Tool calls (%d, %s)", len(pendingList), formatByteSize(totalBytes))
+}
+
+// formatByteSize returns a human-readable byte size string.
+func formatByteSize(bytes int) string {
+	switch {
+	case bytes < 1024:
+		return fmt.Sprintf("%d bytes", bytes)
+	case bytes < 1024*1024:
+		return fmt.Sprintf("%.1fKB", float64(bytes)/1024)
+	default:
+		return fmt.Sprintf("%.1fMB", float64(bytes)/(1024*1024))
+	}
 }
 
 func (r *renderer) spinnerElapsedLocked() string {

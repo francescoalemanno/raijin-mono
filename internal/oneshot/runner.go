@@ -741,20 +741,15 @@ func runPrompt(opts Options, promptText string, forceNew bool) error {
 		r.handleEvent(event)
 	})
 
-	err = sess.Agent().Run(context.Background(), agent.SessionAgentCall{
+	runErr := sess.Agent().Run(context.Background(), agent.SessionAgentCall{
 		SessionID:       sess.ID(),
 		Prompt:          text,
 		Attachments:     attachments,
 		MaxOutputTokens: maxTokens,
 	})
-	if err != nil {
-		return err
-	}
-	if err := sess.EnsurePersisted(); err != nil {
-		return err
-	}
-
-	return nil
+	// Always sync the binding even when the run is interrupted (e.g. Ctrl+C).
+	_ = sess.EnsurePersisted()
+	return runErr
 }
 
 // stderrWriter is a helper to write status messages to stderr.

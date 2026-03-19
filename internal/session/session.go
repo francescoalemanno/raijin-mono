@@ -95,18 +95,22 @@ func (s *Session) Bind(ctx context.Context, forceNew, createIfMissing bool) erro
 	binding.Key = key
 	binding.OwnerPID = ownerPID
 	s.binding = &binding
-	if binding.Ephemeral {
-		sess, err := s.persistStore.CreateEphemeralWithID(binding.SessionID, binding.SessionCreatedAt)
-		if err != nil {
+
+	// Check whether the session journal exists on disk. If it does, load it
+	// properly so the tree and leaf pointer are recovered. Otherwise treat it
+	// as a fresh ephemeral session.
+	if _, err := s.persistStore.GetSession(binding.SessionID); err == nil {
+		if err := s.persistStore.OpenSession(binding.SessionID); err != nil {
 			return err
 		}
-		s.id = sess.ID
+		s.id = binding.SessionID
 		return nil
 	}
-	if err := s.persistStore.OpenSession(binding.SessionID); err != nil {
+	sess, err := s.persistStore.CreateEphemeralWithID(binding.SessionID, binding.SessionCreatedAt)
+	if err != nil {
 		return err
 	}
-	s.id = binding.SessionID
+	s.id = sess.ID
 	return nil
 }
 
@@ -182,7 +186,6 @@ func (s *Session) SwitchTo(ctx context.Context, sessionID string) error {
 	s.id = sessionID
 	if s.binding != nil {
 		s.binding.SessionID = sessionID
-		s.binding.Ephemeral = false
 		if persisted, err := s.persistStore.GetSession(sessionID); err == nil {
 			s.binding.SessionCreatedAt = persisted.CreatedAt
 			s.binding.SessionUpdatedAt = persisted.UpdatedAt
@@ -255,7 +258,6 @@ func (s *Session) newBackendSession(ctx context.Context) error {
 	s.id = sess.ID
 	if s.binding != nil {
 		s.binding.SessionID = sess.ID
-		s.binding.Ephemeral = true
 		s.binding.SessionCreatedAt = sess.CreatedAt
 		s.binding.SessionUpdatedAt = sess.UpdatedAt
 	}
@@ -276,11 +278,9 @@ func (s *Session) syncBinding() error {
 	}
 	s.binding.SessionID = s.id
 	if sess, err := s.persistStore.GetSession(s.id); err == nil {
-		s.binding.Ephemeral = s.persistStore.IsLoadedSessionEphemeral(s.id)
 		s.binding.SessionCreatedAt = sess.CreatedAt
 		s.binding.SessionUpdatedAt = sess.UpdatedAt
 	} else {
-		s.binding.Ephemeral = true
 		s.binding.SessionUpdatedAt = max(s.binding.SessionUpdatedAt, s.binding.SessionCreatedAt)
 		if s.binding.SessionCreatedAt == 0 {
 			s.binding.SessionCreatedAt = s.binding.SessionUpdatedAt
