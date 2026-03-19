@@ -15,18 +15,27 @@ alias :='_raijin_main'
 
 # --- Completion for ":" alias ---
 _raijin_colon_complete() {
-  local line="${COMP_LINE}"
-  [[ -n "$line" ]] || line=": ${COMP_WORDS[*]:1}"
   local cur="${COMP_WORDS[COMP_CWORD]}"
+  local line="${COMP_LINE}"
+  
+  # Don't complete the command name itself (word index 0)
+  if [[ $COMP_CWORD -eq 0 ]]; then
+    COMPREPLY=()
+    return
+  fi
+  
+  # For empty command line, construct the line from words
+  [[ -n "$line" ]] || line=": ${COMP_WORDS[*]:1}"
+  
   local out
-  out="$("{{.RaijinBin}}" -complete "$line" 2>/dev/null)"
+  out="$("{{.RaijinBin}}" -complete-list "$line" 2>/dev/null)"
   COMPREPLY=()
   while IFS= read -r item; do
     [[ -n "$item" ]] || continue
-    if [[ "$cur" != :* && "$item" == :* ]]; then
-      item="${item#:}"
-    fi
     COMPREPLY+=( "$item" )
   done <<< "$out"
+  
+  # Disable space suffix so completion doesn't add unwanted space
+  compopt -o nospace 2>/dev/null || true
 }
 complete -F _raijin_colon_complete :

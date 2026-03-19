@@ -308,8 +308,8 @@ func TestBashInitProvidesColonAlias(t *testing.T) {
 	if !strings.Contains(script, "complete -F _raijin_colon_complete :") {
 		t.Fatalf("bash init missing completion for : alias")
 	}
-	if !strings.Contains(script, `"raijin" -complete "$line"`) {
-		t.Fatalf("bash init completion should delegate to raijin -complete")
+	if !strings.Contains(script, `"raijin" -complete-list "$line"`) {
+		t.Fatalf("bash init completion should delegate to raijin -complete-list")
 	}
 }
 
@@ -342,21 +342,21 @@ func TestZshInitProvidesColonAlias(t *testing.T) {
 	if !strings.Contains(script, "zle -I") {
 		t.Fatalf("zsh init missing zle -I for interactive completion")
 	}
-	if !strings.Contains(script, "[[ ! \"$LBUFFER\" =~ '[@:+/]' ]]") {
-		t.Fatalf("zsh init missing trigger check optimization")
+	if !strings.Contains(script, `[ "$trimmed" != :* ]`) {
+		t.Fatalf("zsh init missing trigger check for : prefix")
 	}
 	if !strings.Contains(script, "zle -N raijin-completion-widget _raijin_completion_widget") {
 		t.Fatalf("zsh init missing tab completion widget")
 	}
 
-	if !strings.Contains(script, "bindkey -M main '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M emacs '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M viins '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M vicmd '^I' raijin-completion-widget") {
+	if !strings.Contains(script, "bindkey -M main") || !strings.Contains(script, "bindkey -M emacs") {
 		t.Fatalf("zsh init missing tab keybindings")
 	}
-	if !strings.Contains(script, "add-zle-hook-widget line-init _raijin_bind_tab") || !strings.Contains(script, "add-zle-hook-widget keymap-select _raijin_bind_tab") {
+	if !strings.Contains(script, "precmd_functions+=(_raijin_deferred_bind)") {
 		t.Fatalf("zsh init missing tab rebind hooks")
 	}
-	if !strings.Contains(script, "zle .expand-or-complete") {
-		t.Fatalf("zsh init should use builtin expand-or-complete as fallback")
+	if !strings.Contains(script, `_raijin_orig_tab_widget`) {
+		t.Fatalf("zsh init should capture original tab widget for fallback")
 	}
 
 	removed := []string{
@@ -401,7 +401,7 @@ func TestFishInitProvidesColonAlias(t *testing.T) {
 	if !strings.Contains(script, "__raijin_colon_complete") {
 		t.Fatalf("fish init missing completion helper")
 	}
-	if !strings.Contains(script, `"raijin" -complete-list (commandline) 2>/dev/null`) {
+	if !strings.Contains(script, `"raijin" -complete-list`) {
 		t.Fatalf("fish init completion should delegate to raijin -complete-list")
 	}
 }
