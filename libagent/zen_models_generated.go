@@ -291,6 +291,30 @@ var zenGeneratedModels = []ModelInfo{
 	},
 	{
 		ProviderID:        ZenProviderID,
+		ModelID:           "gpt-5.4-mini",
+		Name:              "GPT-5.4 Mini",
+		ContextWindow:     400000,
+		DefaultMaxTokens:  128000,
+		CanReason:         true,
+		SupportsImages:    true,
+		CostPer1MIn:       0.75,
+		CostPer1MOut:      4.5,
+		CostPer1MInCached: 0.075,
+	},
+	{
+		ProviderID:        ZenProviderID,
+		ModelID:           "gpt-5.4-nano",
+		Name:              "GPT-5.4 Nano",
+		ContextWindow:     400000,
+		DefaultMaxTokens:  128000,
+		CanReason:         true,
+		SupportsImages:    true,
+		CostPer1MIn:       0.2,
+		CostPer1MOut:      1.25,
+		CostPer1MInCached: 0.02,
+	},
+	{
+		ProviderID:        ZenProviderID,
 		ModelID:           "gpt-5.4-pro",
 		Name:              "GPT-5.4 Pro",
 		ContextWindow:     1050000,
@@ -315,10 +339,19 @@ var zenGeneratedModels = []ModelInfo{
 	},
 	{
 		ProviderID:       ZenProviderID,
-		ModelID:          "mimo-v2-flash-free",
-		Name:             "MiMo V2 Flash Free",
+		ModelID:          "mimo-v2-omni-free",
+		Name:             "MiMo V2 Omni Free",
 		ContextWindow:    262144,
-		DefaultMaxTokens: 65536,
+		DefaultMaxTokens: 64000,
+		CanReason:        true,
+		SupportsImages:   true,
+	},
+	{
+		ProviderID:       ZenProviderID,
+		ModelID:          "mimo-v2-pro-free",
+		Name:             "MiMo V2 Pro Free",
+		ContextWindow:    1048576,
+		DefaultMaxTokens: 64000,
 		CanReason:        true,
 	},
 	{
@@ -385,10 +418,22 @@ var zenGoGeneratedModels = []ModelInfo{
 		CostPer1MOut:      1.2,
 		CostPer1MInCached: 0.03,
 	},
+	{
+		ProviderID:        ZenGoProviderID,
+		ModelID:           "minimax-m2.7",
+		Name:              "MiniMax M2.7",
+		ContextWindow:     204800,
+		DefaultMaxTokens:  131072,
+		CanReason:         true,
+		CostPer1MIn:       0.3,
+		CostPer1MOut:      1.2,
+		CostPer1MInCached: 0.06,
+	},
 }
 
 // zenGoAnthropicModels lists Go models that use Anthropic API format.
 // All other Go models use OpenAI-compatible format.
 var zenGoAnthropicModels = map[string]bool{
+	"minimax-m2.7": true,
 	"minimax-m2.5": true,
 }
