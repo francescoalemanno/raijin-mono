@@ -20,6 +20,6 @@ alias : "__raijin_main"
 
 # --- Completion for ":" alias ---
 function __raijin_colon_complete
-    "{{.RaijinBin}}" -complete (commandline) 2>/dev/null
+    "{{.RaijinBin}}" -complete-list (commandline) 2>/dev/null
 end
-complete -c : -f -a '(__raijin_colon_complete)'
+complete -c : -f -a "(__raijin_colon_complete)"

@@ -401,8 +401,8 @@ func TestFishInitProvidesColonAlias(t *testing.T) {
 	if !strings.Contains(script, "__raijin_colon_complete") {
 		t.Fatalf("fish init missing completion helper")
 	}
-	if !strings.Contains(script, `"raijin" -complete (commandline) 2>/dev/null`) {
-		t.Fatalf("fish init completion should delegate to raijin -complete")
+	if !strings.Contains(script, `"raijin" -complete-list (commandline) 2>/dev/null`) {
+		t.Fatalf("fish init completion should delegate to raijin -complete-list")
 	}
 }
 

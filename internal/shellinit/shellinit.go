@@ -69,8 +69,6 @@ func Completions() string {
 
 // Complete resolves shell completions and returns one candidate per line.
 // It accepts either a token or the full current input line.
-//
-// Deprecated: Use completion.FilterCandidates directly for new code.
 func Complete(current string) string {
 	token := completion.ParseLastToken(current)
 	if token.Type == completion.TokenUnknown {

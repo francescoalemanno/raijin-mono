@@ -22,7 +22,8 @@ func main() {
 	newFlag := flag.Bool("new", false, "force a new session")
 	initFlag := flag.String("init", "", "print shell integration script (zsh, bash, fish)")
 	completionsFlag := flag.Bool("completions", false, "print available commands, templates, and skills for shell completion")
-	completeFlag := flag.String("complete", "", "resolve completion for a token or input line")
+	completeFlag := flag.String("complete", "", "resolve completion for a token or input line (interactive fzf)")
+	completeListFlag := flag.String("complete-list", "", "list completion candidates for a token or input line (for shell integration)")
 	removeModelFlag := flag.String("remove-model", "", "remove configured model by name")
 	removeSessionFlag := flag.String("remove-session", "", "remove persisted session by id (full or short)")
 	profileDirFlag := flag.String("profile-dir", "", "write live profiling artifacts under this directory")
@@ -54,6 +55,10 @@ func main() {
 	}
 	if token := strings.TrimSpace(*completeFlag); token != "" {
 		fmt.Println(shellinit.CompleteSelection(token))
+		os.Exit(0)
+	}
+	if token := strings.TrimSpace(*completeListFlag); token != "" {
+		fmt.Print(shellinit.Complete(token))
 		os.Exit(0)
 	}
 	didDelete := false
