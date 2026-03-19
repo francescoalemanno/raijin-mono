@@ -36,6 +36,11 @@ func RaijinSessionsDir() string {
 	return RaijinPath("sessions")
 }
 
+// RaijinBindingsDir returns the path to the raijin bindings directory.
+func RaijinBindingsDir() string {
+	return RaijinPath("bindings")
+}
+
 // RaijinAuthPath returns the path to the raijin auth file.
 func RaijinAuthPath() string {
 	return RaijinPath("auth.json")

@@ -40,7 +40,7 @@ func reloadTestStore(t *testing.T, src *Store, sessionID string) *Store {
 		t.Fatalf("loadSessionIndex: %v", err)
 	}
 	st.mu.Lock()
-	st.current = sessionID
+	st.loaded = sessionID
 	st.mu.Unlock()
 	if err := st.loadSessionTree(sessionID); err != nil {
 		t.Fatalf("loadSessionTree: %v", err)
@@ -220,7 +220,7 @@ func TestReplayJournal_RoundTrip(t *testing.T) {
 	}
 	_ = st2.loadSessionIndex()
 	st2.mu.Lock()
-	st2.current = sess.ID
+	st2.loaded = sess.ID
 	st2.mu.Unlock()
 	_ = st2.loadSessionTree(sess.ID)
 
@@ -433,7 +433,7 @@ func TestAppendCompaction_ReplayRoundTrip(t *testing.T) {
 		t.Fatalf("loadSessionIndex: %v", err)
 	}
 	st2.mu.Lock()
-	st2.current = sess.ID
+	st2.loaded = sess.ID
 	st2.mu.Unlock()
 	if err := st2.loadSessionTree(sess.ID); err != nil {
 		t.Fatalf("loadSessionTree: %v", err)
@@ -623,7 +623,7 @@ func treeContainsID(entries []TreeEntry, id string) bool {
 	return false
 }
 
-func TestRemoveSession_AllowsRemovingActiveSessionAndSwitchesCurrent(t *testing.T) {
+func TestRemoveSession_AllowsRemovingLoadedSession(t *testing.T) {
 	t.Parallel()
 
 	st, s1 := newEphemeralTestStore(t)
@@ -637,24 +637,23 @@ func TestRemoveSession_AllowsRemovingActiveSessionAndSwitchesCurrent(t *testing.
 	if err := st.EnsureSessionPersisted(s2.ID); err != nil {
 		t.Fatalf("EnsureSessionPersisted(s2): %v", err)
 	}
-
-	if err := st.SetCurrent(s1.ID); err != nil {
-		t.Fatalf("SetCurrent(s1): %v", err)
+	if err := st.OpenSession(s1.ID); err != nil {
+		t.Fatalf("OpenSession(s1): %v", err)
 	}
 
 	if err := st.RemoveSession(s1.ID); err != nil {
-		t.Fatalf("RemoveSession(active): %v", err)
+		t.Fatalf("RemoveSession(loaded): %v", err)
 	}
 
-	if got := st.CurrentSessionID(); got != s2.ID {
-		t.Fatalf("CurrentSessionID() = %q, want %q", got, s2.ID)
+	if _, err := st.GetSession(s2.ID); err != nil {
+		t.Fatalf("expected remaining session %q to be present: %v", s2.ID, err)
 	}
 	if _, err := st.GetSession(s1.ID); err == nil {
 		t.Fatalf("expected removed session %q to be absent", s1.ID)
 	}
 }
 
-func TestRemoveSession_RemovingLastActiveSessionClearsCurrent(t *testing.T) {
+func TestRemoveSession_RemovingLastLoadedSessionLeavesNoSummaries(t *testing.T) {
 	t.Parallel()
 
 	st, s1 := newEphemeralTestStore(t)
@@ -663,13 +662,56 @@ func TestRemoveSession_RemovingLastActiveSessionClearsCurrent(t *testing.T) {
 	}
 
 	if err := st.RemoveSession(s1.ID); err != nil {
-		t.Fatalf("RemoveSession(active): %v", err)
-	}
-
-	if got := st.CurrentSessionID(); got != "" {
-		t.Fatalf("CurrentSessionID() = %q, want empty", got)
+		t.Fatalf("RemoveSession(loaded): %v", err)
 	}
 	if got := len(st.ListSessionSummaries()); got != 0 {
 		t.Fatalf("ListSessionSummaries len = %d, want 0", got)
+	}
+}
+
+func TestBindingRoundTripSupportsEphemeralSessionReattach(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	st, err := OpenStore()
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	sess, err := st.CreateEphemeral()
+	if err != nil {
+		t.Fatalf("CreateEphemeral: %v", err)
+	}
+	if err := st.SaveBinding(Binding{
+		Key:              "bind-test",
+		SessionID:        sess.ID,
+		OwnerPID:         1234,
+		Ephemeral:        true,
+		SessionCreatedAt: sess.CreatedAt,
+		SessionUpdatedAt: sess.UpdatedAt,
+	}); err != nil {
+		t.Fatalf("SaveBinding: %v", err)
+	}
+
+	reopened, err := OpenStore()
+	if err != nil {
+		t.Fatalf("OpenStore(reopened): %v", err)
+	}
+	binding, err := reopened.LoadBinding("bind-test")
+	if err != nil {
+		t.Fatalf("LoadBinding: %v", err)
+	}
+	reattached, err := reopened.CreateEphemeralWithID(binding.SessionID, binding.SessionCreatedAt)
+	if err != nil {
+		t.Fatalf("CreateEphemeralWithID: %v", err)
+	}
+	if reattached.ID != sess.ID {
+		t.Fatalf("reattached session id = %q, want %q", reattached.ID, sess.ID)
+	}
+	msgs, err := reopened.Messages().List(context.Background(), reattached.ID)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected empty ephemeral history after reattach, got %d messages", len(msgs))
 	}
 }

@@ -1,7 +1,7 @@
 // Package oneshot implements the first-class non-interactive CLI mode for Raijin.
 // It streams events to stderr with styled status lines and writes the final
-// assistant response to stdout. Sessions are resumed automatically unless
-// explicitly reset with /new.
+// assistant response to stdout. Conversational commands require an explicit
+// bound REPL or shell context.
 package oneshot
 
 import (
@@ -20,7 +20,6 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/commands"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
 	"github.com/francescoalemanno/raijin-mono/internal/input"
-	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/session"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
@@ -286,11 +285,7 @@ func resolveEditorCommand(getenv func(string) string, lookPath func(string) (str
 }
 
 func handleNew(opts Options) error {
-	sess, err := openSession(opts, true)
-	if err != nil {
-		return err
-	}
-	if err := sess.EnsurePersisted(); err != nil {
+	if _, err := openSession(opts, true, true); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, renderStatusSuccess("✓")+" New session created")
@@ -341,7 +336,7 @@ func renderSkills() string {
 }
 
 func handleCompact(opts Options, instructions string, forceNew bool) error {
-	sess, err := openSession(opts, forceNew)
+	sess, err := openSession(opts, forceNew, false)
 	if err != nil {
 		return err
 	}
@@ -362,21 +357,21 @@ func handleCompact(opts Options, instructions string, forceNew bool) error {
 }
 
 func handleSessions(opts Options) error {
-	store, err := persist.OpenStore()
+	sess, err := openSession(opts, false, false)
 	if err != nil {
 		return err
 	}
-	summaries := store.ListSessionSummaries()
+	summaries := sess.ListSessionSummaries()
 	if len(summaries) == 0 {
 		fmt.Println("No previous sessions found")
 		return nil
 	}
 
-	return runSessionSelector(summaries, opts, store)
+	return runSessionSelector(summaries, sess)
 }
 
 func handleTree(opts Options) error {
-	sess, err := openSession(opts, false)
+	sess, err := openSession(opts, false, false)
 	if err != nil {
 		return err
 	}
@@ -390,7 +385,7 @@ func handleTree(opts Options) error {
 }
 
 func handleHistory(opts Options, forceNew bool) error {
-	sess, err := openSession(opts, forceNew)
+	sess, err := openSession(opts, forceNew, false)
 	if err != nil {
 		return err
 	}
@@ -580,7 +575,7 @@ func handleModels(opts Options) error {
 }
 
 func handleStatus(opts Options, forceNew bool) error {
-	sess, err := openSession(opts, forceNew)
+	sess, err := openSession(opts, forceNew, false)
 	if err != nil {
 		return err
 	}
@@ -678,19 +673,7 @@ func latestAssistantUsageTokens(msgs []libagent.Message) int64 {
 // Session management
 // ---------------------------------------------------------------------------
 
-func openSession(opts Options, forceNew bool) (*session.Session, error) {
-	// Before creating the chatsession (which eagerly creates a new ephemeral
-	// session), snapshot the last active session ID from state.json so we can
-	// resume it afterwards.
-	var lastSessionID string
-	if !forceNew {
-		if store, err := persist.OpenStore(); err == nil {
-			if !store.IsSessionOwnedByOtherProcess() {
-				lastSessionID = store.CurrentSessionID()
-			}
-		}
-	}
-
+func openSession(opts Options, forceNew, createIfMissing bool) (*session.Session, error) {
 	sess, err := session.New(opts.RuntimeModel)
 	if err != nil && sess == nil {
 		return nil, err
@@ -698,19 +681,9 @@ func openSession(opts Options, forceNew bool) (*session.Session, error) {
 	if sess == nil {
 		return nil, errors.New("failed to create session")
 	}
-
-	if forceNew {
-		return sess, nil
+	if err := sess.Bind(context.Background(), forceNew, createIfMissing); err != nil {
+		return nil, err
 	}
-
-	// Resume the last session if one existed.
-	if lastSessionID != "" && lastSessionID != sess.ID() {
-		if err := sess.SwitchTo(context.Background(), lastSessionID); err == nil {
-			return sess, nil
-		}
-		// Fall through to the freshly created session on error.
-	}
-
 	return sess, nil
 }
 
@@ -719,7 +692,7 @@ func openSession(opts Options, forceNew bool) (*session.Session, error) {
 // ---------------------------------------------------------------------------
 
 func runPrompt(opts Options, promptText string, forceNew bool) error {
-	sess, err := openSession(opts, forceNew)
+	sess, err := openSession(opts, forceNew, true)
 	if err != nil {
 		return err
 	}
@@ -775,6 +748,9 @@ func runPrompt(opts Options, promptText string, forceNew bool) error {
 		MaxOutputTokens: maxTokens,
 	})
 	if err != nil {
+		return err
+	}
+	if err := sess.EnsurePersisted(); err != nil {
 		return err
 	}
 

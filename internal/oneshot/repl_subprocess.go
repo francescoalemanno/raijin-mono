@@ -16,8 +16,10 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/shellinit"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
+	"github.com/google/uuid"
 	"golang.org/x/term"
 )
 
@@ -63,6 +65,7 @@ type replStatus struct {
 
 type replModel struct {
 	baseArgs []string
+	binding  replBinding
 
 	status       string
 	statusLoaded bool
@@ -82,6 +85,11 @@ type replPickerExec struct {
 	query      string
 	candidates []string
 	selected   string
+}
+
+type replBinding struct {
+	key      string
+	ownerPID int
 }
 
 func newREPLEditor() textarea.Model {
@@ -115,13 +123,19 @@ func RunSubprocessREPL(baseArgs []string) error {
 		return errors.New("no prompt provided and repl mode requires a terminal")
 	}
 
-	initialStatus := replStatusQuery(baseArgs)
+	baseArgs = replSanitizeBaseArgs(baseArgs)
+	binding, err := replEnsureBindingEnv()
+	if err != nil {
+		return err
+	}
+	initialStatus := replStatusQuery(baseArgs, binding)
 	fmt.Fprintln(os.Stdout, RenderThemedAccent("Raijin REPL")+" "+RenderThemedDim("subprocess mode"))
 	fmt.Fprintln(os.Stdout, RenderThemedDim("ctrl+d or /exit to quit · tab autocomplete · up/down history"))
 	fmt.Fprintln(os.Stdout, renderPrintedStatusLine(initialStatus))
 
 	model := replModel{
 		baseArgs:     append([]string(nil), baseArgs...),
+		binding:      binding,
 		status:       initialStatus,
 		statusLoaded: true,
 		editor:       newREPLEditor(),
@@ -150,7 +164,7 @@ func (m replModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusLoaded = true
 		return m, tea.Println(renderPrintedStatusLine(m.status))
 	case replRunDoneMsg:
-		return m, tea.Batch(replFeedbackCmd(msg.stats, msg.err), replStatusCmd(m.baseArgs))
+		return m, tea.Batch(replFeedbackCmd(msg.stats, msg.err), replStatusCmd(m.baseArgs, m.binding))
 	case replPickerDoneMsg:
 		if msg.err != nil {
 			return m, tea.Println(RenderThemedErr(libagent.FormatErrorForCLI(msg.err)))
@@ -303,7 +317,7 @@ func (m *replModel) submit() (tea.Model, tea.Cmd) {
 	}
 
 	m.history = append(m.history, prompt)
-	cmd, err := replPromptExecCmd(m.baseArgs, prompt)
+	cmd, err := replPromptExecCmd(m.baseArgs, m.binding, prompt)
 	if err != nil {
 		return *m, tea.Println(RenderThemedErr(libagent.FormatErrorForCLI(err)))
 	}
@@ -441,14 +455,14 @@ func replLineColumnForRunePos(value string, runePos int) (line, col int) {
 	return last, len([]rune(lines[last]))
 }
 
-func replPromptExecCmd(baseArgs []string, prompt string) (tea.Cmd, error) {
+func replPromptExecCmd(baseArgs []string, binding replBinding, prompt string) (tea.Cmd, error) {
 	started := time.Now()
 	exePath, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("resolve executable path: %w", err)
 	}
 	cmd := exec.Command(exePath, replSubprocessArgs(baseArgs, prompt)...)
-	cmd.Env = os.Environ()
+	cmd.Env = replCommandEnv(binding)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return replRunDoneMsg{
 			stats: replRunStats{Duration: time.Since(started)},
@@ -512,10 +526,10 @@ func (c *replPickerExec) SetStdin(io.Reader)  {}
 func (c *replPickerExec) SetStdout(io.Writer) {}
 func (c *replPickerExec) SetStderr(io.Writer) {}
 
-func replStatusCmd(baseArgs []string) tea.Cmd {
+func replStatusCmd(baseArgs []string, binding replBinding) tea.Cmd {
 	args := append([]string(nil), baseArgs...)
 	return func() tea.Msg {
-		return replStatusMsg{label: replStatusQuery(args)}
+		return replStatusMsg{label: replStatusQuery(args, binding)}
 	}
 }
 
@@ -620,14 +634,14 @@ func looksLikePath(v string) bool {
 	return strings.HasPrefix(v, "~") || strings.HasPrefix(v, "/") || strings.HasPrefix(v, ".")
 }
 
-func replStatusQuery(baseArgs []string) string {
+func replStatusQuery(baseArgs []string, binding replBinding) string {
 	status := &replStatus{}
-	status.update(baseArgs)
+	status.update(baseArgs, binding)
 	return status.rightPrompt()
 }
 
-func (s *replStatus) update(baseArgs []string) {
-	label := s.queryStatus(baseArgs)
+func (s *replStatus) update(baseArgs []string, binding replBinding) {
+	label := s.queryStatus(baseArgs, binding)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.label = label
@@ -639,7 +653,7 @@ func (s *replStatus) rightPrompt() string {
 	return s.label
 }
 
-func (s *replStatus) queryStatus(baseArgs []string) string {
+func (s *replStatus) queryStatus(baseArgs []string, binding replBinding) string {
 	exePath, err := os.Executable()
 	if err != nil {
 		return ""
@@ -648,7 +662,7 @@ func (s *replStatus) queryStatus(baseArgs []string) string {
 	cmd := exec.Command(exePath, replSubprocessArgs(baseArgs, "/status")...)
 	cmd.Stdout = &buf
 	cmd.Stderr = io.Discard
-	cmd.Env = os.Environ()
+	cmd.Env = replCommandEnv(binding)
 	if err := cmd.Run(); err != nil {
 		return ""
 	}
@@ -705,6 +719,28 @@ func parseStatusOutput(output string) string {
 	return strings.Join(parts, " · ")
 }
 
+func replEnsureBindingEnv() (replBinding, error) {
+	key := strings.TrimSpace(os.Getenv(persist.SessionBindingKeyEnv))
+	if rawOwner := strings.TrimSpace(os.Getenv(persist.SessionBindingOwnerPIDEnv)); key != "" && rawOwner != "" {
+		ownerPID, err := strconv.Atoi(rawOwner)
+		if err == nil && ownerPID > 0 {
+			return replBinding{key: key, ownerPID: ownerPID}, nil
+		}
+	}
+
+	binding := replBinding{
+		key:      "repl-" + uuid.NewString(),
+		ownerPID: os.Getpid(),
+	}
+	if err := os.Setenv(persist.SessionBindingKeyEnv, binding.key); err != nil {
+		return replBinding{}, fmt.Errorf("set repl binding key env: %w", err)
+	}
+	if err := os.Setenv(persist.SessionBindingOwnerPIDEnv, strconv.Itoa(binding.ownerPID)); err != nil {
+		return replBinding{}, fmt.Errorf("set repl binding owner env: %w", err)
+	}
+	return binding, nil
+}
+
 func replNormalizeExecError(err error) error {
 	if err == nil {
 		return nil
@@ -734,6 +770,27 @@ func replSubprocessArgs(baseArgs []string, prompt string) []string {
 	args = append(args, baseArgs...)
 	args = append(args, prompt)
 	return args
+}
+
+func replSanitizeBaseArgs(baseArgs []string) []string {
+	out := make([]string, 0, len(baseArgs))
+	for _, arg := range baseArgs {
+		if arg == "--new" {
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
+func replCommandEnv(binding replBinding) []string {
+	env := os.Environ()
+	if binding.key == "" || binding.ownerPID <= 0 {
+		return env
+	}
+	env = append(env, persist.SessionBindingKeyEnv+"="+binding.key)
+	env = append(env, persist.SessionBindingOwnerPIDEnv+"="+strconv.Itoa(binding.ownerPID))
+	return env
 }
 
 func replMultilineContinuation(line string) (string, bool) {

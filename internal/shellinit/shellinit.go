@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/francescoalemanno/raijin-mono/internal/commands"
+	fzfmatch "github.com/francescoalemanno/raijin-mono/internal/fzf"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
 )
@@ -76,12 +77,21 @@ func Complete(current string) string {
 	if query == "" {
 		return strings.Join(candidates, "\n")
 	}
-
-	var out []string
+	type rankedCandidate struct {
+		value  string
+		suffix string
+	}
+	ranked := make([]rankedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		if strings.HasPrefix(completionCandidateSuffix(token, prefix, candidate), query) {
-			out = append(out, candidate)
-		}
+		ranked = append(ranked, rankedCandidate{
+			value:  candidate,
+			suffix: completionCandidateSuffix(token, prefix, candidate),
+		})
+	}
+	matches := fzfmatch.Rank(ranked, query, func(c rankedCandidate) string { return c.suffix })
+	out := make([]string, 0, len(matches))
+	for _, candidate := range matches {
+		out = append(out, candidate.value)
 	}
 	return strings.Join(out, "\n")
 }

@@ -17,9 +17,32 @@ import (
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-func TestRunNewPersistsSessionWithoutMessages(t *testing.T) {
+func bindTestContext(t *testing.T) string {
+	t.Helper()
+	key := strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
+	t.Setenv(persist.SessionBindingKeyEnv, key)
+	t.Setenv(persist.SessionBindingOwnerPIDEnv, "4242")
+	return key
+}
+
+func bindSession(t *testing.T, key string, store *persist.Store, sess persist.Session, ephemeral bool) {
+	t.Helper()
+	if err := store.SaveBinding(persist.Binding{
+		Key:              key,
+		SessionID:        sess.ID,
+		OwnerPID:         4242,
+		Ephemeral:        ephemeral,
+		SessionCreatedAt: sess.CreatedAt,
+		SessionUpdatedAt: sess.UpdatedAt,
+	}); err != nil {
+		t.Fatalf("SaveBinding: %v", err)
+	}
+}
+
+func TestRunNewCreatesEphemeralBoundSessionWithoutPersistingMessages(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	key := bindTestContext(t)
 
 	if err := Run(Options{}, "/new"); err != nil {
 		t.Fatalf("Run(/new): %v", err)
@@ -30,27 +53,31 @@ func TestRunNewPersistsSessionWithoutMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob sessions: %v", err)
 	}
-	if len(matches) != 1 {
+	if len(matches) != 0 {
 		entries, _ := os.ReadDir(sessionsDir)
 		names := make([]string, 0, len(entries))
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}
-		t.Fatalf("expected exactly one persisted session file, got %d (%v)", len(matches), names)
+		t.Fatalf("expected no persisted session files, got %d (%v)", len(matches), names)
 	}
-
-	data, err := os.ReadFile(matches[0])
+	store, err := persist.OpenStore()
 	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", matches[0], err)
+		t.Fatalf("OpenStore: %v", err)
 	}
-	if !strings.Contains(string(data), `"typ":"session"`) {
-		t.Fatalf("expected session header entry in %s, got %q", matches[0], string(data))
+	binding, err := store.LoadBinding(key)
+	if err != nil {
+		t.Fatalf("LoadBinding: %v", err)
+	}
+	if !binding.Ephemeral {
+		t.Fatalf("binding should remain ephemeral after /new: %#v", binding)
 	}
 }
 
 func TestRunStatusPrintsModelAndContextFill(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	bindTestContext(t)
 
 	opts := Options{
 		ModelCfg: libagent.ModelConfig{
@@ -75,6 +102,42 @@ func TestRunStatusPrintsModelAndContextFill(t *testing.T) {
 	}
 	if !strings.Contains(out, "Context: 24.0%") {
 		t.Fatalf("expected context percentage in output, got %q", out)
+	}
+}
+
+func TestRunStatusDoesNotCreateEmptyBoundSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bindTestContext(t)
+
+	opts := Options{
+		ModelCfg: libagent.ModelConfig{
+			Provider:      "openai",
+			Model:         "gpt-test",
+			ThinkingLevel: libagent.ThinkingLevelHigh,
+			ContextWindow: 10000,
+		},
+	}
+	if err := Run(opts, "/status"); err != nil {
+		t.Fatalf("Run(/status): %v", err)
+	}
+
+	sessionsDir := filepath.Join(home, ".config", "raijin", "sessions")
+	sessionMatches, err := filepath.Glob(filepath.Join(sessionsDir, "*.jsonl"))
+	if err != nil {
+		t.Fatalf("Glob sessions: %v", err)
+	}
+	if len(sessionMatches) != 0 {
+		t.Fatalf("expected no persisted sessions, got %v", sessionMatches)
+	}
+
+	bindingsDir := filepath.Join(home, ".config", "raijin", "bindings")
+	bindingMatches, err := filepath.Glob(filepath.Join(bindingsDir, "*.json"))
+	if err != nil {
+		t.Fatalf("Glob bindings: %v", err)
+	}
+	if len(bindingMatches) != 0 {
+		t.Fatalf("expected no persisted bindings, got %v", bindingMatches)
 	}
 }
 
@@ -105,6 +168,19 @@ func TestRunHelpIncludesPromptTemplates(t *testing.T) {
 	}
 	if !strings.Contains(out, "+commit") {
 		t.Fatalf("expected embedded +commit skill in /help output, got %q", out)
+	}
+}
+
+func TestRunPromptRequiresBoundContext(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	err := Run(Options{}, "hello")
+	if err == nil {
+		t.Fatalf("expected unbound prompt to fail")
+	}
+	if !strings.Contains(err.Error(), "bound context") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -180,6 +256,7 @@ func TestRunReasoningRejectsInvalidLevel(t *testing.T) {
 func TestRunHistoryNoOutputYet(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	bindTestContext(t)
 
 	if err := Run(Options{}, "/new"); err != nil {
 		t.Fatalf("Run(/new): %v", err)
@@ -199,6 +276,7 @@ func TestRunHistoryNoOutputYet(t *testing.T) {
 func TestRunHistoryReplaysUserOnlyOutput(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	key := bindTestContext(t)
 
 	store, err := persist.OpenStore()
 	if err != nil {
@@ -216,6 +294,7 @@ func TestRunHistoryReplaysUserOnlyOutput(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create user message: %v", err)
 	}
+	bindSession(t, key, store, sess, false)
 
 	out := captureStdout(t, func() {
 		if err := Run(Options{}, "/history"); err != nil {
@@ -232,6 +311,7 @@ func TestRunHistoryReplaysUserOnlyOutput(t *testing.T) {
 func TestRunHistoryReplaysAssistantOutput(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	key := bindTestContext(t)
 
 	store, err := persist.OpenStore()
 	if err != nil {
@@ -259,6 +339,7 @@ func TestRunHistoryReplaysAssistantOutput(t *testing.T) {
 	if _, err := msgs.Create(context.Background(), sess.ID, second); err != nil {
 		t.Fatalf("create second assistant message: %v", err)
 	}
+	bindSession(t, key, store, sess, false)
 
 	out := captureStdout(t, func() {
 		if err := Run(Options{}, "/history"); err != nil {
@@ -276,6 +357,7 @@ func TestRunHistoryReplaysAssistantOutput(t *testing.T) {
 func TestRunHistoryUsesStandardRendererMarkdownPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	key := bindTestContext(t)
 
 	store, err := persist.OpenStore()
 	if err != nil {
@@ -298,6 +380,7 @@ func TestRunHistoryUsesStandardRendererMarkdownPath(t *testing.T) {
 	if _, err := msgs.Create(context.Background(), sess.ID, reply); err != nil {
 		t.Fatalf("create assistant message: %v", err)
 	}
+	bindSession(t, key, store, sess, false)
 
 	out := captureStdout(t, func() {
 		if err := Run(Options{}, "/history"); err != nil {

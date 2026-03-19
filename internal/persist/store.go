@@ -2,7 +2,8 @@
 // Each session is stored as a single newline-delimited JSON file under
 // ~/.config/raijin/sessions/<uuid>.jsonl. Entries form a tree via parentId;
 // an in-memory leaf pointer tracks the current position in the tree.
-// A state.json in the same directory tracks the most recently active session.
+// Bound REPL and shell contexts persist their session attachment separately
+// under ~/.config/raijin/bindings.
 package persist
 
 import (
@@ -19,7 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode"
 
@@ -133,21 +133,21 @@ type Session struct {
 }
 
 // Store is the entry point for persistence. It manages a directory of
-// session journal files and keeps the current session's tree in memory.
+// session journal files and keeps one loaded session tree in memory.
 type Store struct {
 	dir string
 	mu  sync.Mutex
 
 	// session index (loaded at startup from file headers)
 	sessions map[string]Session
-	current  string // current active session ID
+	loaded   string // loaded session ID for this Store instance
 
-	// current session's in-memory tree
+	// loaded session's in-memory tree
 	nodes   map[string]*treeNode
 	order   []string // message node IDs in append order (for List)
 	leafID  string   // current leaf node ID (navigation pointer)
 	titled  bool     // whether the current session title has been set
-	pending bool     // true = ephemeral (no file written yet)
+	pending bool     // true = loaded session is ephemeral (no file written yet)
 }
 
 // OpenStore opens (or creates) the sessions directory and loads a Store.
@@ -169,7 +169,6 @@ func OpenStore() (*Store, error) {
 	if err := st.loadSessionIndex(); err != nil {
 		return nil, err
 	}
-	st.loadState()
 	return st, nil
 }
 
@@ -184,7 +183,7 @@ func (st *Store) ListSessionSummaries() []SessionSummary {
 
 	out := make([]SessionSummary, 0, len(st.sessions))
 	for _, sess := range st.sessions {
-		if st.current == sess.ID && st.pending {
+		if st.loaded == sess.ID && st.pending {
 			continue
 		}
 		out = append(out, SessionSummary{
@@ -203,16 +202,28 @@ func (st *Store) ListSessionSummaries() []SessionSummary {
 // CreateEphemeral registers a fresh session in memory only.
 // No journal file is written until the first message is stored.
 func (st *Store) CreateEphemeral() (Session, error) {
+	return st.CreateEphemeralWithID("", time.Now().Unix())
+}
+
+// CreateEphemeralWithID loads an ephemeral session into memory.
+// No journal file is written until the first message is stored.
+func (st *Store) CreateEphemeralWithID(sessionID string, createdAt int64) (Session, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = uuid.New().String()
+	}
+	if createdAt <= 0 {
+		createdAt = time.Now().Unix()
+	}
 	now := time.Now().Unix()
 	sess := Session{
-		ID:        uuid.New().String(),
-		CreatedAt: now,
+		ID:        sessionID,
+		CreatedAt: createdAt,
 		UpdatedAt: now,
 	}
 
 	st.mu.Lock()
 	st.sessions[sess.ID] = sess
-	st.current = sess.ID
+	st.loaded = sess.ID
 	st.nodes = make(map[string]*treeNode)
 	st.order = nil
 	st.leafID = ""
@@ -223,21 +234,40 @@ func (st *Store) CreateEphemeral() (Session, error) {
 	return sess, nil
 }
 
+// OpenSession loads an existing persisted session into memory.
+func (st *Store) OpenSession(sessionID string) error {
+	st.mu.Lock()
+	if _, ok := st.sessions[sessionID]; !ok {
+		st.mu.Unlock()
+		return ErrSessionNotFound
+	}
+	prev := st.loaded
+	st.loaded = sessionID
+	needLoad := sessionID != prev || st.pending || len(st.nodes) == 0
+	st.nodes = make(map[string]*treeNode)
+	st.order = nil
+	st.leafID = ""
+	st.titled = false
+	st.pending = false
+	st.mu.Unlock()
+
+	if needLoad {
+		_ = st.loadSessionTree(sessionID)
+	}
+	return nil
+}
+
 // RemoveSession permanently deletes a session from memory and from disk.
-// If the removed session is active, current is reassigned to the most recently
-// updated remaining session (or cleared when none remain).
 func (st *Store) RemoveSession(sessionID string) error {
 	st.mu.Lock()
 	if _, ok := st.sessions[sessionID]; !ok {
 		st.mu.Unlock()
 		return ErrSessionNotFound
 	}
-	removingActive := st.current == sessionID
+	removingLoaded := st.loaded == sessionID
 	delete(st.sessions, sessionID)
-	nextCurrent := st.current
-	if removingActive {
-		nextCurrent = latestSessionIDLocked(st.sessions)
-		st.current = nextCurrent
+	if removingLoaded {
+		st.loaded = ""
 		st.nodes = make(map[string]*treeNode)
 		st.order = nil
 		st.leafID = ""
@@ -247,27 +277,10 @@ func (st *Store) RemoveSession(sessionID string) error {
 	st.mu.Unlock()
 
 	_ = os.Remove(st.journalPath(sessionID))
-	if removingActive {
-		st.saveState(nextCurrent)
-	}
 	return nil
 }
 
-func latestSessionIDLocked(sessions map[string]Session) string {
-	var (
-		bestID  string
-		bestUpd int64
-	)
-	for id, sess := range sessions {
-		if bestID == "" || sess.UpdatedAt > bestUpd || (sess.UpdatedAt == bestUpd && id < bestID) {
-			bestID = id
-			bestUpd = sess.UpdatedAt
-		}
-	}
-	return bestID
-}
-
-// AppendCompaction appends a compaction checkpoint entry to the current session.
+// AppendCompaction appends a compaction checkpoint entry to the loaded session.
 // The entry records a summary and the first message ID that should remain visible.
 func (st *Store) AppendCompaction(summary, firstKeptID string, tokensBefore int64) error {
 	summary = strings.TrimSpace(summary)
@@ -279,7 +292,7 @@ func (st *Store) AppendCompaction(summary, firstKeptID string, tokensBefore int6
 	}
 
 	st.mu.Lock()
-	sessionID := st.current
+	sessionID := st.loaded
 	if sessionID == "" {
 		st.mu.Unlock()
 		return ErrSessionNotFound
@@ -328,11 +341,10 @@ func (st *Store) AppendCompaction(summary, firstKeptID string, tokensBefore int6
 		sess.UpdatedAt = time.Now().Unix()
 		st.sessions[sessionID] = sess
 	}
-	st.saveStateLocked(sessionID)
 	return nil
 }
 
-// Navigate moves the leaf pointer to targetID within the current session.
+// Navigate moves the leaf pointer to targetID within the loaded session.
 // If target is a user message, the leaf is set to its parent (so the user
 // can re-submit the message from the editor) and its text is returned.
 // For all other node types the leaf is set to target itself.
@@ -352,7 +364,7 @@ func (st *Store) Navigate(targetID string) (editorText string, err error) {
 		}
 	}
 
-	sessionID := st.current
+	sessionID := st.loaded
 	if sessionID == "" {
 		st.mu.Unlock()
 		return "", ErrSessionNotFound
@@ -381,7 +393,7 @@ func (st *Store) Navigate(targetID string) (editorText string, err error) {
 	return editorText, nil
 }
 
-// GetTree returns all tree entries for the current session using Pi's
+// GetTree returns all tree entries for the loaded session using Pi's
 // flattenTree algorithm: active branch first at every branch point, depth
 // increases only at branch points, connector/gutter metadata is recomputed
 // for the visible set (tool-call-only assistant messages are hidden and their
@@ -590,14 +602,10 @@ func (st *Store) journalPath(sessionID string) string {
 	return filepath.Join(st.dir, sessionID+".jsonl")
 }
 
-func (st *Store) statePath() string {
-	return filepath.Join(st.dir, "state.json")
-}
-
 // flushHeader writes the session.create entry if the session is still ephemeral.
 // Caller must hold mu or be certain no concurrent writes are happening.
 func (st *Store) flushHeaderLocked(sessionID string) error {
-	if !st.pending || st.current != sessionID {
+	if !st.pending || st.loaded != sessionID {
 		return nil
 	}
 	sess, ok := st.sessions[sessionID]
@@ -614,7 +622,6 @@ func (st *Store) flushHeaderLocked(sessionID string) error {
 		return err
 	}
 	st.pending = false
-	st.saveStateLocked(sessionID)
 	return nil
 }
 
@@ -653,45 +660,6 @@ func (st *Store) appendEntryLocked(sessionID string, entry jEntry) error {
 	return closeErr
 }
 
-type stateFile struct {
-	CurrentSessionID string `json:"current_session_id"`
-	PID              int    `json:"pid,omitempty"`
-}
-
-func (st *Store) saveStateLocked(sessionID string) {
-	data, _ := json.Marshal(stateFile{CurrentSessionID: sessionID, PID: os.Getpid()})
-	_ = os.WriteFile(st.statePath(), data, filePerm)
-}
-
-func (st *Store) saveState(sessionID string) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.saveStateLocked(sessionID)
-}
-
-func (st *Store) loadState() {
-	data, err := os.ReadFile(st.statePath())
-	if err != nil {
-		return
-	}
-	var sf stateFile
-	if json.Unmarshal(data, &sf) != nil || sf.CurrentSessionID == "" {
-		return
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if _, ok := st.sessions[sf.CurrentSessionID]; ok {
-		st.current = sf.CurrentSessionID
-	}
-}
-
-// CurrentSessionID returns the ID of the currently active session.
-func (st *Store) CurrentSessionID() string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.current
-}
-
 // EnsureSessionPersisted flushes an ephemeral session header so the session is
 // visible to future process invocations even before the first message is sent.
 func (st *Store) EnsureSessionPersisted(sessionID string) error {
@@ -706,27 +674,11 @@ func (st *Store) EnsureSessionPersisted(sessionID string) error {
 	return st.flushHeaderLocked(sessionID)
 }
 
-// IsSessionOwnedByOtherProcess reads state.json and checks whether another
-// live process owns the current session (based on the PID field).
-func (st *Store) IsSessionOwnedByOtherProcess() bool {
-	data, err := os.ReadFile(st.statePath())
-	if err != nil {
-		return false
-	}
-	var sf stateFile
-	if json.Unmarshal(data, &sf) != nil || sf.PID == 0 {
-		return false
-	}
-	if sf.PID == os.Getpid() {
-		return false
-	}
-	p, err := os.FindProcess(sf.PID)
-	if err != nil {
-		return false
-	}
-	// Signal 0 checks if process exists without actually signaling it
-	err = p.Signal(syscall.Signal(0))
-	return err == nil
+// IsLoadedSessionEphemeral reports whether the loaded session is still pending.
+func (st *Store) IsLoadedSessionEphemeral(sessionID string) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.loaded == sessionID && st.pending
 }
 
 // loadSessionIndex scans the journal directory and replays only session-level
@@ -764,7 +716,7 @@ func (st *Store) loadSessionTree(sessionID string) error {
 	leafID = sanitizeLoadedLeafPath(nodes, leafID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if st.current != sessionID {
+	if st.loaded != sessionID {
 		return nil // switched away while loading
 	}
 	st.nodes = nodes
@@ -1124,34 +1076,6 @@ func (st *Store) GetSession(id string) (Session, error) {
 	return sess, nil
 }
 
-// SetCurrent makes sessionID the active session and loads its tree.
-func (st *Store) SetCurrent(id string) error {
-	st.mu.Lock()
-	if _, ok := st.sessions[id]; !ok {
-		st.mu.Unlock()
-		return ErrSessionNotFound
-	}
-	prev := st.current
-	st.current = id
-	needLoad := id != prev
-	st.mu.Unlock()
-
-	if needLoad {
-		// Reset tree so it gets reloaded on first message access.
-		st.mu.Lock()
-		st.nodes = make(map[string]*treeNode)
-		st.order = nil
-		st.leafID = ""
-		st.titled = false
-		st.pending = false
-		st.mu.Unlock()
-
-		_ = st.loadSessionTree(id)
-	}
-	st.saveState(id)
-	return nil
-}
-
 // setTitleIfUnset assigns the session title if it has not been set yet.
 func (st *Store) setTitleIfUnset(sessionID, title string) {
 	st.mu.Lock()
@@ -1181,11 +1105,11 @@ type messageService struct {
 
 func (ms *messageService) ensureLoaded(sessionID string) {
 	ms.store.mu.Lock()
-	isCurrent := ms.store.current == sessionID
-	alreadyLoaded := isCurrent && (len(ms.store.nodes) > 0 || ms.store.pending)
+	isLoaded := ms.store.loaded == sessionID
+	alreadyLoaded := isLoaded && (len(ms.store.nodes) > 0 || ms.store.pending)
 	ms.store.mu.Unlock()
 
-	if !isCurrent || alreadyLoaded {
+	if !isLoaded || alreadyLoaded {
 		return
 	}
 	_ = ms.store.loadSessionTree(sessionID)
@@ -1266,11 +1190,14 @@ func (ms *messageService) Update(_ context.Context, msg libagent.Message) error 
 		return libagent.ErrMessageNotFound
 	}
 	meta := libagent.MessageMetaOf(msg)
+	sessionID := strings.TrimSpace(meta.SessionID)
+	if sessionID == "" {
+		return libagent.ErrMessageNotFound
+	}
 	meta.UpdatedAt = time.Now().Unix()
 	toStore := libagent.CloneMessage(msg)
 	libagent.SetMessageMeta(toStore, meta)
 	ms.store.nodes[id].msg = toStore
-	sessionID := ms.store.current
 	ms.store.mu.Unlock()
 
 	jm := messageToJMsg(toStore)
@@ -1291,7 +1218,7 @@ func (ms *messageService) Get(_ context.Context, id string) (libagent.Message, e
 	return libagent.CloneMessage(n.msg), nil
 }
 
-// List returns messages on the path from the current leaf to the root,
+// List returns messages on the path from the loaded leaf to the root,
 // in chronological order (oldest first).
 func (ms *messageService) List(_ context.Context, sessionID string) ([]libagent.Message, error) {
 	ms.ensureLoaded(sessionID)
@@ -1299,7 +1226,7 @@ func (ms *messageService) List(_ context.Context, sessionID string) ([]libagent.
 	ms.store.mu.Lock()
 	defer ms.store.mu.Unlock()
 
-	if ms.store.current != sessionID {
+	if ms.store.loaded != sessionID {
 		return nil, nil
 	}
 

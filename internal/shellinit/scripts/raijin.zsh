@@ -7,17 +7,23 @@
 #   :+skill         → raijin +skill
 
 typeset -h _RAIJIN_BIN="${RAIJIN_BIN:-raijin}"
+typeset -h _RAIJIN_BINDING_KEY="${RAIJIN_SESSION_BINDING_KEY:-shell-zsh-$$-$RANDOM}"
+typeset -h _RAIJIN_BINDING_OWNER_PID="${RAIJIN_SESSION_BINDING_OWNER_PID:-$$}"
 
 # --- Generated : aliases ---
 # Use noglob to prevent zsh glob expansion on special characters like ?, *, etc.
 # The wrapper function receives arguments unexpanded.
-_raijin_main() { "$_RAIJIN_BIN" "$@"; }
+_raijin_main() {
+  RAIJIN_SESSION_BINDING_KEY="$_RAIJIN_BINDING_KEY" \
+  RAIJIN_SESSION_BINDING_OWNER_PID="$_RAIJIN_BINDING_OWNER_PID" \
+  "$_RAIJIN_BIN" "$@"
+}
 alias :='noglob _raijin_main'
 {{- range .CommandShortcuts }}
-alias :{{ . }}='noglob "$_RAIJIN_BIN" /{{ . }}'
+alias :{{ . }}='noglob _raijin_main /{{ . }}'
 {{- end }}
 {{- range .SkillShortcuts }}
-alias :+{{ . }}='noglob "$_RAIJIN_BIN" +{{ . }}'
+alias :+{{ . }}='noglob _raijin_main +{{ . }}'
 {{- end }}
 
 _raijin_complete_candidates() {
@@ -47,7 +53,17 @@ _raijin_format_mention() {
   printf '@%s' "$path"
 }
 
+_raijin_should_use_command_picker() {
+  local line="$1"
+  local current_word="$2"
+  [[ "$current_word" == :* || "$current_word" == +* || "$current_word" == /* ]] && return 0
+  [[ "$line" =~ '^:([[:space:]]*)?$' ]] && return 0
+  [[ "$line" =~ '^:[^[:space:]]*$' ]] && return 0
+  return 1
+}
+
 _raijin_completion_widget() {
+  local line="$LBUFFER"
   local current_word="${LBUFFER##*[[:space:]]}"
   local left_len=$(( ${#LBUFFER} - ${#current_word} ))
   local left_buffer="${LBUFFER[1,$left_len]}"
@@ -69,8 +85,7 @@ _raijin_completion_widget() {
   fi
 
   # Forge-style completion for :command and +skill tokens, driven by raijin --complete.
-  if [[ "$current_word" == :* || "$current_word" == +* || "$current_word" == /* ]]; then
-    local line="$LBUFFER"
+  if _raijin_should_use_command_picker "$line" "$current_word"; then
     local -a completions
     completions=("${(@f)$(_raijin_complete_candidates "$line")}")
     (( ${#completions[@]} > 0 )) || { zle redisplay; return 0; }
@@ -94,7 +109,7 @@ _raijin_completion_widget() {
     return 0
   fi
 
-  zle expand-or-complete
+  zle .expand-or-complete
 }
 
 _raijin_bracketed_paste() {
@@ -108,6 +123,24 @@ _raijin_accept_line() {
     BUFFER=":${match[1]}${match[2]}"
   fi
   zle accept-line
+}
+
+_raijin_bind_widget_keys() {
+  bindkey -M main '^I' raijin-completion-widget
+  bindkey -M emacs '^I' raijin-completion-widget
+  bindkey -M viins '^I' raijin-completion-widget
+  bindkey -M main '^M' raijin-accept-line
+  bindkey -M main '^J' raijin-accept-line
+  bindkey -M emacs '^M' raijin-accept-line
+  bindkey -M emacs '^J' raijin-accept-line
+  bindkey -M viins '^M' raijin-accept-line
+  bindkey -M viins '^J' raijin-accept-line
+  bindkey -M vicmd '^M' raijin-accept-line
+  bindkey -M vicmd '^J' raijin-accept-line
+}
+
+_raijin_rebind_widgets_hook() {
+  _raijin_bind_widget_keys
 }
 
 _raijin_enable_syntax_highlighting() {
@@ -128,18 +161,43 @@ _raijin_enable_syntax_highlighting_precmd() {
   precmd_functions=(${precmd_functions:#_raijin_enable_syntax_highlighting_precmd})
 }
 
-if [[ -o interactive ]] && (( $+builtins[zle] )); then
+_raijin_register_widgets() {
+  [[ -o interactive ]] || return 1
+  (( $+builtins[zle] )) || return 1
   zle -N raijin-completion-widget _raijin_completion_widget
   zle -N raijin-accept-line _raijin_accept_line
-  bindkey -M emacs '^I' raijin-completion-widget
-  bindkey -M viins '^I' raijin-completion-widget
-  bindkey -M emacs '^M' raijin-accept-line
-  bindkey -M emacs '^J' raijin-accept-line
-  bindkey -M viins '^M' raijin-accept-line
-  bindkey -M viins '^J' raijin-accept-line
-  bindkey -M vicmd '^M' raijin-accept-line
-  bindkey -M vicmd '^J' raijin-accept-line
+  _raijin_bind_widget_keys
   zle -N bracketed-paste _raijin_bracketed_paste
+  return 0
+}
+_raijin_register_widgets_precmd() {
+  _raijin_register_widgets || return 0
+}
+if ! _raijin_register_widgets; then
+  if [[ " ${precmd_functions[*]} " != *" _raijin_register_widgets_precmd "* ]]; then
+    precmd_functions+=(_raijin_register_widgets_precmd)
+  fi
+fi
+
+_raijin_register_widget_hooks() {
+  [[ -o interactive ]] || return 1
+  (( $+builtins[zle] )) || return 1
+  autoload -Uz add-zle-hook-widget 2>/dev/null || return 1
+  if [[ -z "${_RAIJIN_WIDGET_HOOKS_REGISTERED-}" ]]; then
+    add-zle-hook-widget line-init _raijin_rebind_widgets_hook >/dev/null 2>&1 || return 1
+    add-zle-hook-widget keymap-select _raijin_rebind_widgets_hook >/dev/null 2>&1 || return 1
+    typeset -g _RAIJIN_WIDGET_HOOKS_REGISTERED=1
+  fi
+  return 0
+}
+_raijin_register_widget_hooks_precmd() {
+  _raijin_register_widget_hooks || return 0
+  precmd_functions=(${precmd_functions:#_raijin_register_widget_hooks_precmd})
+}
+if ! _raijin_register_widget_hooks; then
+  if [[ " ${precmd_functions[*]} " != *" _raijin_register_widget_hooks_precmd "* ]]; then
+    precmd_functions+=(_raijin_register_widget_hooks_precmd)
+  fi
 fi
 
 _raijin_enable_syntax_highlighting
@@ -183,7 +241,7 @@ _raijin_colon_completer() {
   compadd -Q -S " " -- "${completions[@]}"
   return 0
 }
-if [[ ! -o interactive ]] || (( !$+builtins[zle] )); then
+if [[ -o interactive ]] && (( $+builtins[zle] )); then
   typeset -ga _raijin_existing_completers
   if zstyle -a ':completion:*' completer _raijin_existing_completers; then
     typeset -gi _raijin_has_colon_completer=0

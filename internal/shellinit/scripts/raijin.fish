@@ -6,13 +6,28 @@
 #   :status         → raijin /status
 #   :+skill         → raijin +skill
 
+set -g __raijin_binding_key "$RAIJIN_SESSION_BINDING_KEY"
+if test -z "$__raijin_binding_key"
+    set -g __raijin_binding_key "shell-fish-$fish_pid-(random)"
+end
+set -g __raijin_binding_owner_pid "$RAIJIN_SESSION_BINDING_OWNER_PID"
+if test -z "$__raijin_binding_owner_pid"
+    set -g __raijin_binding_owner_pid "$fish_pid"
+end
+
+function __raijin_main
+    set -lx RAIJIN_SESSION_BINDING_KEY "$__raijin_binding_key"
+    set -lx RAIJIN_SESSION_BINDING_OWNER_PID "$__raijin_binding_owner_pid"
+    command raijin $argv
+end
+
 # --- Generated : aliases ---
-alias : "raijin"
+alias : "__raijin_main"
 {{- range .CommandShortcuts }}
-alias :{{ . }} "raijin /{{ . }}"
+alias :{{ . }} "__raijin_main /{{ . }}"
 {{- end }}
 {{- range .SkillShortcuts }}
-alias :+{{ . }} "raijin +{{ . }}"
+alias :+{{ . }} "__raijin_main +{{ . }}"
 {{- end }}
 
 # --- Completion for ":" alias ---

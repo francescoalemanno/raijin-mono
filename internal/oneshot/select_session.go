@@ -9,14 +9,14 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/session"
 )
 
-func runSessionSelector(summaries []persist.SessionSummary, opts Options, store *persist.Store) error {
+func runSessionSelector(summaries []persist.SessionSummary, sess *session.Session) error {
 	for {
 		if len(summaries) == 0 {
 			fmt.Println("No previous sessions found")
 			return nil
 		}
 
-		activeID := store.CurrentSessionID()
+		activeID := sess.ID()
 		fzfItems := make([]fzfPickerItem, 0, len(summaries))
 		for _, summary := range summaries {
 			title := summary.Title
@@ -40,7 +40,7 @@ func runSessionSelector(summaries []persist.SessionSummary, opts Options, store 
 		case fzfPickerActionCancel:
 			return nil
 		case fzfPickerActionDelete:
-			if err := store.RemoveSession(chosenID); err != nil {
+			if err := sess.RemoveSession(chosenID); err != nil {
 				return err
 			}
 			var deletedTitle string
@@ -59,19 +59,11 @@ func runSessionSelector(summaries []persist.SessionSummary, opts Options, store 
 				renderStatusSuccess("✓"),
 				deletedShortID,
 				deletedTitle)
-			summaries = store.ListSessionSummaries()
+			summaries = sess.ListSessionSummaries()
 			continue
 		case fzfPickerActionSelect:
-			if err := store.SetCurrent(chosenID); err != nil {
+			if err := sess.SwitchTo(context.Background(), chosenID); err != nil {
 				return err
-			}
-
-			sess, sessErr := session.New(opts.RuntimeModel)
-			if sessErr != nil && sess == nil {
-				return sessErr
-			}
-			if sess != nil {
-				_ = sess.SwitchTo(context.Background(), chosenID)
 			}
 
 			var selected persist.SessionSummary

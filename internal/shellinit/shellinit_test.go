@@ -72,6 +72,21 @@ func TestCompleteBareCommandToken(t *testing.T) {
 	}
 }
 
+func TestCompleteUsesFuzzyMatchingForCommands(t *testing.T) {
+	out := Complete(":rs")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	found := false
+	for _, line := range lines {
+		if line == ":/reasoning" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected fuzzy completion :/reasoning for :rs, got %q", lines)
+	}
+}
+
 func TestCompleteSkillsPrefix(t *testing.T) {
 	out := Complete(":+")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
@@ -155,17 +170,20 @@ func TestBashInitGeneratesColonShortcuts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init(bash) failed: %v", err)
 	}
-	if !strings.Contains(script, "alias :='raijin'") {
+	if !strings.Contains(script, `_RAIJIN_BINDING_KEY="${RAIJIN_SESSION_BINDING_KEY:-shell-bash-$$-$RANDOM}"`) {
+		t.Fatalf("bash init missing binding key export")
+	}
+	if !strings.Contains(script, `_raijin_main() {`) {
+		t.Fatalf("bash init missing wrapper function")
+	}
+	if !strings.Contains(script, "alias :='_raijin_main'") {
 		t.Fatalf("bash init missing : alias")
 	}
-	if !strings.Contains(script, "alias :status='raijin /status'") {
+	if !strings.Contains(script, "alias :status='_raijin_main /status'") {
 		t.Fatalf("bash init missing generated :status alias")
 	}
 	if !strings.Contains(script, "alias :+") {
 		t.Fatalf("bash init missing generated :+skill aliases")
-	}
-	if strings.Contains(script, ":() {") {
-		t.Fatalf("bash init should not emit function shortcuts")
 	}
 	if strings.Contains(script, "bind -x") || strings.Contains(script, "complete -D") {
 		t.Fatalf("bash init should not use keybinding or completion interception")
@@ -183,13 +201,16 @@ func TestZshInitGeneratesColonShortcuts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init(zsh) failed: %v", err)
 	}
-	if !strings.Contains(script, "_raijin_main() { \"$_RAIJIN_BIN\" \"$@\"; }") {
+	if !strings.Contains(script, `typeset -h _RAIJIN_BINDING_KEY="${RAIJIN_SESSION_BINDING_KEY:-shell-zsh-$$-$RANDOM}"`) {
+		t.Fatalf("zsh init missing binding key setup")
+	}
+	if !strings.Contains(script, "_raijin_main() {") {
 		t.Fatalf("zsh init missing _raijin_main wrapper function")
 	}
 	if !strings.Contains(script, "alias :='noglob _raijin_main'") {
 		t.Fatalf("zsh init missing : alias with noglob")
 	}
-	if !strings.Contains(script, "alias :status='noglob \"$_RAIJIN_BIN\" /status'") {
+	if !strings.Contains(script, "alias :status='noglob _raijin_main /status'") {
 		t.Fatalf("zsh init missing generated :status alias with noglob")
 	}
 	if !strings.Contains(script, "alias :+") {
@@ -214,17 +235,29 @@ func TestZshInitGeneratesColonShortcuts(t *testing.T) {
 	if !strings.Contains(script, "zle -N raijin-completion-widget _raijin_completion_widget") {
 		t.Fatalf("zsh init missing custom tab completion widget")
 	}
-	if !strings.Contains(script, "bindkey -M emacs '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M viins '^I' raijin-completion-widget") {
+	if !strings.Contains(script, "_raijin_should_use_command_picker") {
+		t.Fatalf("zsh init missing command picker context helper")
+	}
+	if !strings.Contains(script, "_raijin_register_widgets_precmd") {
+		t.Fatalf("zsh init missing deferred widget registration hook")
+	}
+	if !strings.Contains(script, "bindkey -M main '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M emacs '^I' raijin-completion-widget") || !strings.Contains(script, "bindkey -M viins '^I' raijin-completion-widget") {
 		t.Fatalf("zsh init missing tab keybinding for custom completion widget")
 	}
 	if !strings.Contains(script, "zle -N raijin-accept-line _raijin_accept_line") {
 		t.Fatalf("zsh init missing custom accept-line widget")
 	}
-	if !strings.Contains(script, "bindkey -M emacs '^M' raijin-accept-line") || !strings.Contains(script, "bindkey -M viins '^M' raijin-accept-line") || !strings.Contains(script, "bindkey -M vicmd '^M' raijin-accept-line") {
+	if !strings.Contains(script, "bindkey -M main '^M' raijin-accept-line") || !strings.Contains(script, "bindkey -M emacs '^M' raijin-accept-line") || !strings.Contains(script, "bindkey -M viins '^M' raijin-accept-line") || !strings.Contains(script, "bindkey -M vicmd '^M' raijin-accept-line") {
 		t.Fatalf("zsh init missing enter keybinding for accept-line widget")
 	}
 	if !strings.Contains(script, "zle -N bracketed-paste _raijin_bracketed_paste") {
 		t.Fatalf("zsh init missing bracketed-paste refresh widget")
+	}
+	if !strings.Contains(script, "_raijin_register_widget_hooks") || !strings.Contains(script, "add-zle-hook-widget line-init _raijin_rebind_widgets_hook") || !strings.Contains(script, "add-zle-hook-widget keymap-select _raijin_rebind_widgets_hook") {
+		t.Fatalf("zsh init missing widget rebind hooks")
+	}
+	if !strings.Contains(script, "zle .expand-or-complete") {
+		t.Fatalf("zsh init should use builtin expand-or-complete as fallback")
 	}
 	if !strings.Contains(script, "_raijin_enable_syntax_highlighting") {
 		t.Fatalf("zsh init missing syntax-highlighting hook")
@@ -238,6 +271,9 @@ func TestZshInitGeneratesColonShortcuts(t *testing.T) {
 	if !strings.Contains(script, "_raijin_colon_completer") {
 		t.Fatalf("zsh init missing global colon completer fallback")
 	}
+	if !strings.Contains(script, "if [[ -o interactive ]] && (( $+builtins[zle] )); then") {
+		t.Fatalf("zsh init should configure global colon completer only in interactive zle shells")
+	}
 }
 
 func TestFishInitGeneratesColonShortcuts(t *testing.T) {
@@ -245,17 +281,20 @@ func TestFishInitGeneratesColonShortcuts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init(fish) failed: %v", err)
 	}
-	if !strings.Contains(script, `alias : "raijin"`) {
+	if !strings.Contains(script, `function __raijin_main`) {
+		t.Fatalf("fish init missing wrapper function")
+	}
+	if !strings.Contains(script, `set -g __raijin_binding_key "$RAIJIN_SESSION_BINDING_KEY"`) {
+		t.Fatalf("fish init missing binding key setup")
+	}
+	if !strings.Contains(script, `alias : "__raijin_main"`) {
 		t.Fatalf("fish init missing : alias")
 	}
-	if !strings.Contains(script, `alias :status "raijin /status"`) {
+	if !strings.Contains(script, `alias :status "__raijin_main /status"`) {
 		t.Fatalf("fish init missing generated :status alias")
 	}
 	if !strings.Contains(script, "alias :+") {
 		t.Fatalf("fish init missing generated :+skill aliases")
-	}
-	if strings.Contains(script, "function :") {
-		t.Fatalf("fish init should not emit function shortcuts")
 	}
 	if !strings.Contains(script, "__raijin_colon_complete") {
 		t.Fatalf("fish init missing completion helper")

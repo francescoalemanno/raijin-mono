@@ -14,6 +14,9 @@ func TestFZFArgsForREPLCompletionUseFullscreen(t *testing.T) {
 	if !strings.Contains(args, "--prompt=Raijin > ") {
 		t.Fatalf("repl-complete args missing prompt, got %q", args)
 	}
+	if !strings.Contains(args, "--bind=tab:accept") {
+		t.Fatalf("repl-complete args should allow tab to accept selection, got %q", args)
+	}
 	if !strings.Contains(args, "--query=sts") {
 		t.Fatalf("repl-complete args missing query, got %q", args)
 	}
@@ -23,6 +26,9 @@ func TestFZFArgsForShellCompletionKeepDialogHeight(t *testing.T) {
 	args := strings.Join(fzfArgs("complete", "", RunFZFOptions{}), " ")
 	if !strings.Contains(args, "--height=80%") {
 		t.Fatalf("complete args should keep dialog height, got %q", args)
+	}
+	if !strings.Contains(args, "--bind=tab:accept") {
+		t.Fatalf("complete args should allow tab to accept selection, got %q", args)
 	}
 }
 
@@ -36,6 +42,9 @@ func TestFZFArgsForPathsUseFullscreen(t *testing.T) {
 	}
 	if !strings.Contains(args, "--prompt=@ ") {
 		t.Fatalf("paths args missing prompt, got %q", args)
+	}
+	if !strings.Contains(args, "--bind=tab:accept") {
+		t.Fatalf("paths args should allow tab to accept selection, got %q", args)
 	}
 }
 

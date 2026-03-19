@@ -1,10 +1,13 @@
 package oneshot
 
 import (
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/francescoalemanno/raijin-mono/internal/persist"
 )
 
 func TestReplStatusRefreshPrintsEvenWhenUnchanged(t *testing.T) {
@@ -189,5 +192,55 @@ func TestReplSoftWrapping(t *testing.T) {
 	lines = strings.Split(view, "\n")
 	if !strings.Contains(lines[1], "\x1b[7m") {
 		t.Fatalf("line 1 should contain cursor at position 6, but didn't:\n%q", lines[1])
+	}
+}
+
+func TestReplSanitizeBaseArgsRemovesNewFlag(t *testing.T) {
+	got := replSanitizeBaseArgs([]string{"--new", "--profile-dir", "profiles"})
+	if len(got) != 2 || got[0] != "--profile-dir" || got[1] != "profiles" {
+		t.Fatalf("replSanitizeBaseArgs() = %#v", got)
+	}
+}
+
+func TestReplCommandEnvIncludesBinding(t *testing.T) {
+	env := replCommandEnv(replBinding{key: "repl-test", ownerPID: 1234})
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, persist.SessionBindingKeyEnv+"=repl-test") {
+		t.Fatalf("expected binding key in env, got %q", joined)
+	}
+	if !strings.Contains(joined, persist.SessionBindingOwnerPIDEnv+"=1234") {
+		t.Fatalf("expected binding owner pid in env, got %q", joined)
+	}
+}
+
+func TestReplEnsureBindingEnvUsesExistingShellStyleVars(t *testing.T) {
+	t.Setenv(persist.SessionBindingKeyEnv, "shell-zsh-42-7")
+	t.Setenv(persist.SessionBindingOwnerPIDEnv, "42")
+
+	binding, err := replEnsureBindingEnv()
+	if err != nil {
+		t.Fatalf("replEnsureBindingEnv: %v", err)
+	}
+	if binding.key != "shell-zsh-42-7" || binding.ownerPID != 42 {
+		t.Fatalf("binding = %#v", binding)
+	}
+}
+
+func TestReplEnsureBindingEnvSetsProcessEnvWhenMissing(t *testing.T) {
+	t.Setenv(persist.SessionBindingKeyEnv, "")
+	t.Setenv(persist.SessionBindingOwnerPIDEnv, "")
+
+	binding, err := replEnsureBindingEnv()
+	if err != nil {
+		t.Fatalf("replEnsureBindingEnv: %v", err)
+	}
+	if binding.key == "" || binding.ownerPID <= 0 {
+		t.Fatalf("binding = %#v", binding)
+	}
+	if got := strings.TrimSpace(os.Getenv(persist.SessionBindingKeyEnv)); got != binding.key {
+		t.Fatalf("binding key env = %q, want %q", got, binding.key)
+	}
+	if got := strings.TrimSpace(os.Getenv(persist.SessionBindingOwnerPIDEnv)); got != strconv.Itoa(binding.ownerPID) {
+		t.Fatalf("binding owner env = %q, want %q", got, strconv.Itoa(binding.ownerPID))
 	}
 }

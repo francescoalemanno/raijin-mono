@@ -2,7 +2,11 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 
@@ -22,6 +26,7 @@ type Session struct {
 	agentTools   []libagent.Tool
 	eventCB      func(libagent.AgentEvent)
 	persistStore *persist.Store
+	binding      *persist.Binding
 }
 
 // New creates and initializes a chat session runtime.
@@ -43,7 +48,6 @@ func New(runtimeModel libagent.RuntimeModel) (*Session, error) {
 			return s, err
 		}
 	} else {
-		s.ensureSessionID(context.Background())
 		s.refreshRuntime()
 	}
 
@@ -54,6 +58,57 @@ func (s *Session) Agent() *agent.SessionAgent { return s.agent }
 func (s *Session) ID() string                 { return s.id }
 func (s *Session) Tools() []libagent.Tool     { return s.agentTools }
 func (s *Session) Paths() *tools.PathRegistry { return s.paths }
+
+// Bind attaches the session to an explicit binding context.
+func (s *Session) Bind(ctx context.Context, forceNew, createIfMissing bool) error {
+	_ = ctx
+	if s.persistStore == nil {
+		return errors.New("session store not available")
+	}
+	key := strings.TrimSpace(osBindingKey())
+	if key == "" {
+		return errors.New("conversation commands require a bound context; use the REPL or shell integration")
+	}
+
+	ownerPID, err := osBindingOwnerPID()
+	if err != nil {
+		return err
+	}
+
+	if forceNew {
+		s.binding = &persist.Binding{Key: key, OwnerPID: ownerPID}
+		return s.newBackendSession(context.Background())
+	}
+
+	binding, err := s.persistStore.LoadBinding(key)
+	if err != nil && !errors.Is(err, persist.ErrBindingNotFound) {
+		return err
+	}
+	if errors.Is(err, persist.ErrBindingNotFound) {
+		s.binding = &persist.Binding{Key: key, OwnerPID: ownerPID}
+		if !createIfMissing {
+			return nil
+		}
+		return s.newBackendSession(context.Background())
+	}
+
+	binding.Key = key
+	binding.OwnerPID = ownerPID
+	s.binding = &binding
+	if binding.Ephemeral {
+		sess, err := s.persistStore.CreateEphemeralWithID(binding.SessionID, binding.SessionCreatedAt)
+		if err != nil {
+			return err
+		}
+		s.id = sess.ID
+		return nil
+	}
+	if err := s.persistStore.OpenSession(binding.SessionID); err != nil {
+		return err
+	}
+	s.id = binding.SessionID
+	return nil
+}
 
 // ListMessages returns all stored messages for the current backend session.
 func (s *Session) ListMessages(ctx context.Context) ([]libagent.Message, error) {
@@ -83,7 +138,6 @@ func (s *Session) Reconfigure(runtimeModel libagent.RuntimeModel) error {
 	}
 
 	s.agent = ag
-	s.ensureSessionID(context.Background())
 	s.refreshRuntime()
 	return nil
 }
@@ -107,7 +161,11 @@ func (s *Session) Clear(ctx context.Context) error {
 // Navigate moves the leaf pointer to targetID within the current session's tree.
 // If the target is a user message, it returns the message text for editor pre-population.
 func (s *Session) Navigate(targetID string) (editorText string, err error) {
-	return s.persistStore.Navigate(targetID)
+	editorText, err = s.persistStore.Navigate(targetID)
+	if err != nil {
+		return "", err
+	}
+	return editorText, s.syncBinding()
 }
 
 // GetTree returns the flat tree entry list for the current session.
@@ -118,11 +176,19 @@ func (s *Session) GetTree() []persist.TreeEntry {
 // SwitchTo loads a previously persisted session and makes it current.
 func (s *Session) SwitchTo(ctx context.Context, sessionID string) error {
 	_ = ctx
-	if err := s.persistStore.SetCurrent(sessionID); err != nil {
+	if err := s.persistStore.OpenSession(sessionID); err != nil {
 		return err
 	}
 	s.id = sessionID
-	return nil
+	if s.binding != nil {
+		s.binding.SessionID = sessionID
+		s.binding.Ephemeral = false
+		if persisted, err := s.persistStore.GetSession(sessionID); err == nil {
+			s.binding.SessionCreatedAt = persisted.CreatedAt
+			s.binding.SessionUpdatedAt = persisted.UpdatedAt
+		}
+	}
+	return s.syncBinding()
 }
 
 // ListSessionSummaries returns persisted sessions, newest first.
@@ -132,12 +198,21 @@ func (s *Session) ListSessionSummaries() []persist.SessionSummary {
 
 // RemoveSession permanently deletes a non-active persisted session.
 func (s *Session) RemoveSession(sessionID string) error {
-	return s.persistStore.RemoveSession(sessionID)
+	if err := s.persistStore.RemoveSession(sessionID); err != nil {
+		return err
+	}
+	if s.id == sessionID {
+		s.id = ""
+	}
+	return nil
 }
 
 // AppendCompaction stores a compaction checkpoint for the active session.
 func (s *Session) AppendCompaction(summary, firstKeptID string, tokensBefore int64) error {
-	return s.persistStore.AppendCompaction(summary, firstKeptID, tokensBefore)
+	if err := s.persistStore.AppendCompaction(summary, firstKeptID, tokensBefore); err != nil {
+		return err
+	}
+	return s.syncBinding()
 }
 
 // EnsurePersisted flushes the session header if the current session is still
@@ -146,7 +221,10 @@ func (s *Session) EnsurePersisted() error {
 	if s.persistStore == nil || s.id == "" {
 		return nil
 	}
-	return s.persistStore.EnsureSessionPersisted(s.id)
+	if err := s.persistStore.EnsureSessionPersisted(s.id); err != nil {
+		return err
+	}
+	return s.syncBinding()
 }
 
 // HasHistory returns true when current session has at least one stored message.
@@ -170,15 +248,18 @@ func (s *Session) registerTools() {
 
 func (s *Session) newBackendSession(ctx context.Context) error {
 	_ = ctx
-	if s.agent == nil {
-		return nil
-	}
 	sess, err := s.persistStore.CreateEphemeral()
 	if err != nil {
 		return err
 	}
 	s.id = sess.ID
-	return nil
+	if s.binding != nil {
+		s.binding.SessionID = sess.ID
+		s.binding.Ephemeral = true
+		s.binding.SessionCreatedAt = sess.CreatedAt
+		s.binding.SessionUpdatedAt = sess.UpdatedAt
+	}
+	return s.syncBinding()
 }
 
 func (s *Session) refreshRuntime() {
@@ -189,12 +270,41 @@ func (s *Session) refreshRuntime() {
 	s.SetEventCallback(s.eventCB)
 }
 
-func (s *Session) ensureSessionID(ctx context.Context) {
-	_ = ctx
-	if s.id != "" {
-		return
+func (s *Session) syncBinding() error {
+	if s.persistStore == nil || s.binding == nil || strings.TrimSpace(s.binding.Key) == "" || s.id == "" {
+		return nil
 	}
-	if sess, err := s.persistStore.CreateEphemeral(); err == nil {
-		s.id = sess.ID
+	s.binding.SessionID = s.id
+	if sess, err := s.persistStore.GetSession(s.id); err == nil {
+		s.binding.Ephemeral = s.persistStore.IsLoadedSessionEphemeral(s.id)
+		s.binding.SessionCreatedAt = sess.CreatedAt
+		s.binding.SessionUpdatedAt = sess.UpdatedAt
+	} else {
+		s.binding.Ephemeral = true
+		s.binding.SessionUpdatedAt = max(s.binding.SessionUpdatedAt, s.binding.SessionCreatedAt)
+		if s.binding.SessionCreatedAt == 0 {
+			s.binding.SessionCreatedAt = s.binding.SessionUpdatedAt
+		}
 	}
+	return s.persistStore.SaveBinding(*s.binding)
+}
+
+func osBindingKey() string {
+	return strings.TrimSpace(getenv(persist.SessionBindingKeyEnv))
+}
+
+func osBindingOwnerPID() (int, error) {
+	raw := strings.TrimSpace(getenv(persist.SessionBindingOwnerPIDEnv))
+	if raw == "" {
+		return 0, errors.New("conversation commands require a bound context; missing binding owner")
+	}
+	pid, err := strconv.Atoi(raw)
+	if err != nil || pid <= 0 {
+		return 0, errors.New("conversation commands require a bound context; invalid binding owner")
+	}
+	return pid, nil
+}
+
+var getenv = func(key string) string {
+	return os.Getenv(key)
 }

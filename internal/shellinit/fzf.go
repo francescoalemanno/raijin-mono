@@ -144,11 +144,14 @@ func fzfArgs(mode, query string, cfg RunFZFOptions) []string {
 	switch mode {
 	case "paths":
 		args = append(args, "--scheme=path", "--prompt=@ ")
+		args = append(args, "--bind=tab:accept")
 	case "complete":
 		args = append(args, "--height=80%")
 		args = append(args, "--prompt=Raijin > ")
+		args = append(args, "--bind=tab:accept")
 	case "repl-complete":
 		args = append(args, "--prompt=Raijin > ")
+		args = append(args, "--bind=tab:accept")
 	default:
 		args = append(args, "--height=80%")
 		args = append(args, "--prompt=> ")
