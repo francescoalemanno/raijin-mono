@@ -19,8 +19,8 @@ var syntheticGeneratedModels = []ModelInfo{
 		ContextWindow:    191488,
 		DefaultMaxTokens: 65536,
 		CanReason:        true,
-		CostPer1MIn:      0.6,
-		CostPer1MOut:     3,
+		CostPer1MIn:      0.4,
+		CostPer1MOut:     2,
 	},
 	{
 		ProviderID:       SyntheticProviderID,
@@ -133,8 +133,8 @@ var syntheticGeneratedModels = []ModelInfo{
 		ContextWindow:    262144,
 		DefaultMaxTokens: 65536,
 		CanReason:        true,
-		CostPer1MIn:      0.6,
-		CostPer1MOut:     3,
+		CostPer1MIn:      0.3,
+		CostPer1MOut:     1,
 	},
 	{
 		ProviderID:       SyntheticProviderID,
@@ -162,7 +162,7 @@ var syntheticGeneratedModels = []ModelInfo{
 		ContextWindow:    196608,
 		DefaultMaxTokens: 65536,
 		CanReason:        true,
-		CostPer1MIn:      0.06,
-		CostPer1MOut:     0.4,
+		CostPer1MIn:      0.1,
+		CostPer1MOut:     0.5,
 	},
 }
