@@ -69,6 +69,13 @@ func TestFZFArgsIncludeExpectAndBind(t *testing.T) {
 	}
 }
 
+func TestFZFArgsIncludeInitialPositionBinding(t *testing.T) {
+	args := strings.Join(fzfArgs("default", "", RunFZFOptions{InitialPosition: 7}), " ")
+	if !strings.Contains(args, "--bind=load:pos(7)") {
+		t.Fatalf("args missing initial position bind, got %q", args)
+	}
+}
+
 func TestSplitExpectOutputEnterWithEmptyFirstLine(t *testing.T) {
 	key, selected := splitExpectOutput([]string{"", "model-a"}, []string{"ctrl-x"})
 	if key != "" {

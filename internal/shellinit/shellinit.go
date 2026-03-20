@@ -214,6 +214,7 @@ type RunFZFOptions struct {
 	DisableSelectOne        bool
 	DisableSort             bool
 	Header                  string
+	InitialPosition         int
 }
 
 // RunFZFResult holds the outcome of running fzf.
@@ -357,6 +358,9 @@ func fzfArgs(mode, query string, cfg RunFZFOptions) []string {
 	}
 	if header := strings.TrimSpace(cfg.Header); header != "" {
 		args = append(args, "--header="+header)
+	}
+	if cfg.InitialPosition > 1 {
+		args = append(args, fmt.Sprintf("--bind=load:pos(%d)", cfg.InitialPosition))
 	}
 	if len(cfg.ExpectKeys) > 0 {
 		keys := make([]string, 0, len(cfg.ExpectKeys))
