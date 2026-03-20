@@ -34,7 +34,7 @@ func renderBashToolPreview(name string, params map[string]any) string {
 	if command == "" {
 		return renderGenericPreview(name, params)
 	}
-	commandPreview := truncateForPreview(strings.TrimSpace(command), 72)
+	commandPreview := strings.TrimSpace(command)
 	if timeout > 0 {
 		return fmt.Sprintf("%s %s (timeout=%ds)", name, commandPreview, timeout)
 	}

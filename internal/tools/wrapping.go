@@ -326,7 +326,7 @@ func renderRawPreview(toolName, toolCallParams string) string {
 	if trimmed == "" {
 		return name
 	}
-	return fmt.Sprintf("%s %s", name, truncateForPreview(trimmed, 96))
+	return fmt.Sprintf("%s %s", name, trimmed)
 }
 
 func renderGenericPreview(name string, params map[string]any) string {
@@ -378,7 +378,7 @@ func renderParamValue(v any) string {
 		if x == "" {
 			return `""`
 		}
-		return quoteIfNeeded(truncateForPreview(x, 40))
+		return quoteIfNeeded(x)
 	case float64:
 		if x == float64(int64(x)) {
 			return strconv.FormatInt(int64(x), 10)
@@ -393,7 +393,7 @@ func renderParamValue(v any) string {
 		if text == "" {
 			return `""`
 		}
-		return quoteIfNeeded(truncateForPreview(text, 40))
+		return quoteIfNeeded(text)
 	}
 }
 
@@ -450,15 +450,4 @@ func quoteIfNeeded(s string) string {
 		return strconv.Quote(s)
 	}
 	return s
-}
-
-func truncateForPreview(s string, maxRunes int) string {
-	if maxRunes <= 0 {
-		return ""
-	}
-	runes := []rune(strings.TrimSpace(s))
-	if len(runes) <= maxRunes {
-		return string(runes)
-	}
-	return string(runes[:maxRunes-1]) + "…"
 }
