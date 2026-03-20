@@ -67,6 +67,7 @@ func loadCatalogEntries() []catalogEntry {
 type apiKeyInput struct {
 	prompt   string
 	value    string
+	cursor   int // cursor position in runes (not bytes)
 	done     bool
 	quitting bool
 }
@@ -84,17 +85,128 @@ func (m apiKeyInput) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.done = true
 			return m, tea.Quit
 		case "backspace":
-			if len(m.value) > 0 {
-				m.value = m.value[:len(m.value)-1]
-			}
+			m.deleteBackward()
+		case "delete":
+			m.deleteForward()
+		case "left":
+			m.moveLeft()
+		case "right":
+			m.moveRight()
+		case "home":
+			m.cursor = 0
+		case "end":
+			m.cursor = m.runeLen()
+		case "ctrl+a":
+			m.cursor = 0
+		case "ctrl+e":
+			m.cursor = m.runeLen()
+		case "ctrl+b":
+			m.moveLeft()
+		case "ctrl+f":
+			m.moveRight()
+		case "ctrl+h":
+			m.deleteBackward()
+		case "ctrl+d":
+			m.deleteForward()
+		case "ctrl+u":
+			// Delete from cursor to beginning of line
+			m.value = m.value[m.cursorRuneOffset():]
+			m.cursor = 0
+		case "ctrl+k":
+			// Delete from cursor to end of line
+			m.value = m.value[:m.cursorRuneOffset()]
+		case "ctrl+w":
+			// Delete word backward
+			m.deleteWordBackward()
 		default:
-			r := msg.String()
-			if len(r) == 1 && r[0] >= ' ' {
-				m.value += r
+			// Handle character input - use Runes to properly support unicode and paste
+			if len(msg.Runes) > 0 {
+				for _, r := range msg.Runes {
+					if r >= ' ' || r == '\t' {
+						m.insertRune(r)
+					}
+				}
 			}
 		}
 	}
 	return m, nil
+}
+
+func (m *apiKeyInput) runeLen() int {
+	return len([]rune(m.value))
+}
+
+func (m *apiKeyInput) cursorRuneOffset() int {
+	runes := []rune(m.value)
+	if m.cursor > len(runes) {
+		return len(m.value)
+	}
+	offset := 0
+	for i := 0; i < m.cursor && i < len(runes); i++ {
+		offset += len(string(runes[i]))
+	}
+	return offset
+}
+
+func (m *apiKeyInput) insertRune(r rune) {
+	offset := m.cursorRuneOffset()
+	m.value = m.value[:offset] + string(r) + m.value[offset:]
+	m.cursor++
+}
+
+func (m *apiKeyInput) moveLeft() {
+	if m.cursor > 0 {
+		m.cursor--
+	}
+}
+
+func (m *apiKeyInput) moveRight() {
+	if m.cursor < m.runeLen() {
+		m.cursor++
+	}
+}
+
+func (m *apiKeyInput) deleteBackward() {
+	if m.cursor == 0 {
+		return
+	}
+	m.moveLeft()
+	m.deleteForward()
+}
+
+func (m *apiKeyInput) deleteForward() {
+	if m.cursor >= m.runeLen() {
+		return
+	}
+	runes := []rune(m.value)
+	if m.cursor < len(runes) {
+		runes = append(runes[:m.cursor], runes[m.cursor+1:]...)
+		m.value = string(runes)
+	}
+}
+
+func (m *apiKeyInput) deleteWordBackward() {
+	runes := []rune(m.value)
+	if m.cursor == 0 {
+		return
+	}
+	// Skip trailing spaces
+	start := m.cursor
+	for start > 0 && isWordSep(runes[start-1]) {
+		start--
+	}
+	// Skip word characters
+	for start > 0 && !isWordSep(runes[start-1]) {
+		start--
+	}
+	// Remove the word
+	newRunes := append(runes[:start], runes[m.cursor:]...)
+	m.value = string(newRunes)
+	m.cursor = start
+}
+
+func isWordSep(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '/' || r == '-' || r == '_'
 }
 
 func (m apiKeyInput) View() string {
@@ -102,12 +214,12 @@ func (m apiKeyInput) View() string {
 	b.WriteString(flTitleStyle.Render(m.prompt))
 	b.WriteString("\n")
 	if m.value != "" {
-		b.WriteString(flPromptStyle.Render("> ") + flFilterStyle.Render(strings.Repeat("•", len(m.value))))
+		b.WriteString(flPromptStyle.Render("> ") + flFilterStyle.Render(strings.Repeat("•", m.runeLen())))
 	} else {
 		b.WriteString(flPromptStyle.Render("> ") + flDimStyle.Render("paste API key or leave blank to skip…"))
 	}
 	b.WriteString("\n")
-	b.WriteString(flDimStyle.Render("enter confirm · esc cancel"))
+	b.WriteString(flDimStyle.Render("enter confirm · esc cancel · ←/→ move · ctrl+w delete word · ctrl+u clear"))
 	return b.String()
 }
 
@@ -195,6 +307,7 @@ func promptAPIKey(providerName, prefill string) (string, bool) {
 	m := apiKeyInput{
 		prompt: fmt.Sprintf("API KEY FOR %s", strings.ToUpper(providerName)),
 		value:  prefill,
+		cursor: len([]rune(prefill)),
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
