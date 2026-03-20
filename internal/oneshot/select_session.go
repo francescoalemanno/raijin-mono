@@ -29,7 +29,7 @@ func runSessionSelector(summaries []persist.SessionSummary, sess *session.Sessio
 			}
 			fzfItems = append(fzfItems, fzfPickerItem{key: summary.ID, label: label})
 		}
-		chosenID, action, err := pickWithEmbeddedFZF(fzfItems, "", true, false)
+		chosenID, action, err := pickWithEmbeddedFZFInitial(fzfItems, "", true, false, activeID)
 		if errors.Is(err, errFZFPickerUnavailable) {
 			return fmt.Errorf("interactive picker requires a TTY")
 		}

@@ -33,7 +33,7 @@ func runModelSelector(store *modelconfig.ModelStore) error {
 			}
 			fzfItems = append(fzfItems, fzfPickerItem{key: item.name, label: label})
 		}
-		chosen, action, err := pickWithEmbeddedFZF(fzfItems, "", true, false)
+		chosen, action, err := pickWithEmbeddedFZFInitial(fzfItems, "", true, false, defaultName)
 		if errors.Is(err, errFZFPickerUnavailable) {
 			return fmt.Errorf("interactive picker requires a TTY")
 		}

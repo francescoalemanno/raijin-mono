@@ -114,8 +114,12 @@ func runTreeSelector(entries []persist.TreeEntry, sess *session.Session) error {
 	}
 
 	fzfItems := make([]fzfPickerItem, 0, len(items))
+	activeID := ""
 	for _, item := range items {
 		e := item.entry
+		if e.IsLeaf {
+			activeID = e.ID
+		}
 		bullet := "+ "
 		if e.IsOnActivePath {
 			bullet = "• "
@@ -126,7 +130,7 @@ func runTreeSelector(entries []persist.TreeEntry, sess *session.Session) error {
 			label: label,
 		})
 	}
-	chosenID, action, err := pickWithEmbeddedFZF(fzfItems, "", false, true)
+	chosenID, action, err := pickWithEmbeddedFZFInitial(fzfItems, "", false, true, activeID)
 	if errors.Is(err, errFZFPickerUnavailable) {
 		return fmt.Errorf("interactive picker requires a TTY")
 	}
