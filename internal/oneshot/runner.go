@@ -444,6 +444,9 @@ func replaySessionEvents(r *renderer, msgs []libagent.Message) int {
 				replayed++
 			}
 
+			// Emit turn start/end around each assistant message for proper state reset.
+			r.handleEvent(libagent.AgentEvent{Type: libagent.AgentEventTypeTurnStart})
+
 			r.handleEvent(libagent.AgentEvent{
 				Type:    libagent.AgentEventTypeMessageStart,
 				Message: m,
@@ -517,6 +520,8 @@ func replaySessionEvents(r *renderer, msgs []libagent.Message) int {
 				Type:    libagent.AgentEventTypeMessageEnd,
 				Message: m,
 			})
+
+			r.handleEvent(libagent.AgentEvent{Type: libagent.AgentEventTypeTurnEnd})
 
 		case *libagent.ToolResultMessage:
 			replayed++

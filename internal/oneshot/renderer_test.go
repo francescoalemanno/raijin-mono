@@ -474,7 +474,7 @@ func TestRendererThinkingOutputIsMutedAndLineBuffered(t *testing.T) {
 	}
 }
 
-func TestRendererThinkingOutputPreservesSpacing(t *testing.T) {
+func TestRendererThinkingOutputTrimsFirstDeltaLeftWhitespace(t *testing.T) {
 	var stderr bytes.Buffer
 	var stdout bytes.Buffer
 	r := newRenderer(&stderr, &stdout, nil, false)
@@ -492,10 +492,11 @@ func TestRendererThinkingOutputPreservesSpacing(t *testing.T) {
 		Delta: &libagent.StreamDelta{Type: "reasoning_end", ID: "r2"},
 	})
 
-	expected := thinkingMutedStyle.Render("   first line   ") + "\n" +
+	// First delta's leading whitespace is trimmed, but internal and trailing spacing is preserved.
+	expected := thinkingMutedStyle.Render("first line   ") + "\n" +
 		thinkingMutedStyle.Render("    second line   ") + "\n"
 	if got := stdout.String(); got != expected {
-		t.Fatalf("expected preserved muted thinking output %q, got %q", expected, got)
+		t.Fatalf("expected trimmed first delta output %q, got %q", expected, got)
 	}
 }
 

@@ -62,11 +62,12 @@ type renderer struct {
 	pendingWidth  int
 	thinking      bool
 	thinkingStart time.Time
-	thinkingSeen  bool
 	thinkingLine  strings.Builder
+	reasoningStarted bool // tracks if reasoning has started in current block (for first-delta trimming)
 	replyMD       *lineMarkdownRenderer
 	replyLine     strings.Builder
 	replyText     strings.Builder
+	replyStarted  bool // tracks if any reply content has been printed in current turn
 
 	spinnerEnabled    bool
 	spinnerVisible    bool
@@ -128,6 +129,7 @@ func (r *renderer) handleEvent(event libagent.AgentEvent) {
 	case libagent.AgentEventTypeTurnStart:
 		r.turnActive = true
 		r.replyStreaming = false
+		r.replyStarted = false
 		r.redrawSpinnerLocked()
 
 	case libagent.AgentEventTypeMessageStart:
@@ -341,7 +343,7 @@ func (r *renderer) startThinking() {
 	}
 	r.thinking = true
 	r.thinkingStart = r.now()
-	r.thinkingSeen = false
+	r.reasoningStarted = false
 	r.thinkingLine.Reset()
 	r.emitPending(renderStatusInfo("⟳"), "Thinking: ")
 }
@@ -352,7 +354,6 @@ func (r *renderer) flushThinking() {
 		return
 	}
 	r.thinking = false
-	r.thinkingSeen = false
 	dur := r.now().Sub(r.thinkingStart)
 	r.emitStatus(renderStatusSuccess("✓"), fmt.Sprintf("Thinking (%s)", formatDuration(dur)))
 }
@@ -389,6 +390,11 @@ func (r *renderer) appendReplyDelta(delta string) {
 	if delta == "" {
 		return
 	}
+	// Trim leading whitespace from the first response delta in each turn.
+	if !r.replyStarted {
+		delta = strings.TrimLeft(delta, " \t\n\r")
+	}
+	r.replyStarted = true
 	r.replyText.WriteString(delta)
 	r.replyLine.WriteString(delta)
 	r.flushBufferedLines(&r.replyLine, func(s string) string { return r.replyMD.RenderLine(s) })
@@ -398,7 +404,11 @@ func (r *renderer) appendThinkingDelta(delta string) {
 	if delta == "" {
 		return
 	}
-	r.thinkingSeen = true
+	// Trim leading whitespace from the first reasoning delta in each block.
+	if !r.reasoningStarted {
+		delta = strings.TrimLeft(delta, " \t\n\r")
+	}
+	r.reasoningStarted = true
 	r.thinkingLine.WriteString(delta)
 	r.flushThinkingBufferedLines()
 }
