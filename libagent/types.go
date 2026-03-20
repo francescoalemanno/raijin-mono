@@ -249,15 +249,6 @@ type ConvertToLLMFn func(ctx context.Context, messages []Message) ([]fantasy.Mes
 // Use it for context-window pruning or injecting external context.
 type TransformContextFn func(ctx context.Context, messages []Message) ([]Message, error)
 
-// GetSteeringMessagesFn returns steering messages to inject mid-run.
-// Called after each tool execution; a non-empty result causes the agent to
-// skip remaining tool calls and inject these messages before the next LLM call.
-type GetSteeringMessagesFn func(ctx context.Context) ([]Message, error)
-
-// GetFollowUpMessagesFn returns follow-up messages to process after the agent stops.
-// If it returns messages the agent continues with another turn.
-type GetFollowUpMessagesFn func(ctx context.Context) ([]Message, error)
-
 // AgentLoopConfig is the configuration for agentLoop / agentLoopContinue.
 type AgentLoopConfig struct {
 	Model fantasy.LanguageModel
@@ -268,12 +259,6 @@ type AgentLoopConfig struct {
 
 	// TransformContext is an optional pre-pass over messages before ConvertToLLM.
 	TransformContext TransformContextFn
-
-	// GetSteeringMessages is called after each tool execution (optional).
-	GetSteeringMessages GetSteeringMessagesFn
-
-	// GetFollowUpMessages is called when the agent would otherwise stop (optional).
-	GetFollowUpMessages GetFollowUpMessagesFn
 
 	// SystemPromptOverride replaces context.SystemPrompt if set (used internally by Agent).
 	SystemPromptOverride *string
@@ -305,13 +290,3 @@ type MediaSupport struct {
 	// Enabled reports whether media inputs are supported by the active runtime model.
 	Enabled bool
 }
-
-// QueueMode controls how steering / follow-up queues drain.
-type QueueMode string
-
-const (
-	// QueueModeOneAtATime sends one queued message per turn.
-	QueueModeOneAtATime QueueMode = "one-at-a-time"
-	// QueueModeAll sends all queued messages at once.
-	QueueModeAll QueueMode = "all"
-)

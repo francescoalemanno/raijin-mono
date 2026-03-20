@@ -248,39 +248,6 @@ func TestAgent_Mutators(t *testing.T) {
 	assert.Equal(t, "sess-1", a.SessionID())
 }
 
-func TestAgent_QueueModes(t *testing.T) {
-	model := newMockModel()
-	a := libagent.NewAgent(libagent.AgentOptions{RuntimeModel: libagent.RuntimeModel{Model: model}})
-
-	a.SetSteeringMode(libagent.QueueModeAll)
-	assert.Equal(t, libagent.QueueModeAll, a.GetSteeringMode())
-
-	a.SetFollowUpMode(libagent.QueueModeAll)
-	assert.Equal(t, libagent.QueueModeAll, a.GetFollowUpMode())
-}
-
-func TestAgent_Queues(t *testing.T) {
-	model := newMockModel()
-	a := libagent.NewAgent(libagent.AgentOptions{RuntimeModel: libagent.RuntimeModel{Model: model}})
-
-	assert.False(t, a.HasQueuedMessages())
-
-	a.Steer(&libagent.UserMessage{Role: "user", Content: "steer", Timestamp: time.Now()})
-	assert.True(t, a.HasQueuedMessages())
-	assert.Empty(t, a.State().Messages) // not added to state yet
-
-	a.FollowUp(&libagent.UserMessage{Role: "user", Content: "follow", Timestamp: time.Now()})
-
-	a.ClearSteeringQueue()
-	a.ClearFollowUpQueue()
-	assert.False(t, a.HasQueuedMessages())
-
-	a.Steer(&libagent.UserMessage{Role: "user", Content: "s", Timestamp: time.Now()})
-	a.FollowUp(&libagent.UserMessage{Role: "user", Content: "f", Timestamp: time.Now()})
-	a.ClearAllQueues()
-	assert.False(t, a.HasQueuedMessages())
-}
-
 func TestAgent_Abort_NoOp(t *testing.T) {
 	model := newMockModel()
 	a := libagent.NewAgent(libagent.AgentOptions{RuntimeModel: libagent.RuntimeModel{Model: model}})
@@ -535,52 +502,6 @@ func TestAgent_ToolExecution_WithPartialJSONArgs_ReturnsActionableError(t *testi
 	assert.Equal(t, "{}", firstToolCalls[0].Input)
 }
 
-func TestAgent_ToolExecution_DoesNotSkipWhenSteeringCallbackReturnsEmptySlice(t *testing.T) {
-	executed := make([]string, 0)
-	echoTool := libagent.NewTypedTool(
-		"echo",
-		"Echo the value back",
-		func(_ context.Context, input struct {
-			Value string `json:"value"`
-		}, _ libagent.ToolCall,
-		) (libagent.ToolResponse, error) {
-			executed = append(executed, input.Value)
-			return libagent.NewTextResponse("echoed: " + input.Value), nil
-		},
-	)
-
-	model := newMockModel(
-		toolCallResponse("tc1", "echo", `{"value":"hello"}`),
-		textResponse("Done!"),
-	)
-
-	agentCtx := &libagent.AgentContext{
-		Tools: libagent.AdaptTools([]libagent.Tool{echoTool}),
-	}
-	cfg := libagent.AgentLoopConfig{
-		Model: model,
-		GetSteeringMessages: func(_ context.Context) ([]libagent.Message, error) {
-			return []libagent.Message{}, nil
-		},
-	}
-
-	eventCh := make(chan libagent.AgentEvent, 128)
-	prompt := &libagent.UserMessage{Role: "user", Content: "Echo hello", Timestamp: time.Now()}
-	_, err := libagent.AgentLoop(context.Background(), []libagent.Message{prompt}, agentCtx, cfg, eventCh)
-	close(eventCh)
-
-	require.NoError(t, err)
-	assert.Equal(t, []string{"hello"}, executed)
-
-	var events []libagent.AgentEvent
-	for e := range eventCh {
-		events = append(events, e)
-	}
-	toolEndEvents := filterByType(events, libagent.AgentEventTypeToolExecutionEnd)
-	require.Len(t, toolEndEvents, 1)
-	assert.False(t, toolEndEvents[0].ToolIsError)
-}
-
 func TestAgent_ToolExecution_PrefersFinalToolCallInputWhenDeltasArePartial(t *testing.T) {
 	executed := make([]string, 0)
 	echoTool := libagent.NewTypedTool(
@@ -764,83 +685,6 @@ func TestAgent_ToolNotFound(t *testing.T) {
 	assert.Contains(t, toolEndEvents[0].ToolResult, "nonexistent")
 }
 
-func TestAgentLoop_SteeringSkipsRemainingToolCalls(t *testing.T) {
-	executedTools := make([]string, 0)
-	echoTool := libagent.NewTypedTool(
-		"echo",
-		"Echo",
-		func(_ context.Context, input struct {
-			Value string `json:"value"`
-		}, _ libagent.ToolCall,
-		) (libagent.ToolResponse, error) {
-			executedTools = append(executedTools, input.Value)
-			return libagent.NewTextResponse("ok:" + input.Value), nil
-		},
-	)
-
-	callIdx := 0
-	model := newMockModel(
-		func(call int) fantasy.StreamResponse {
-			callIdx++
-			if call == 0 {
-				return twoToolCallsResponse("tc1", "echo", `{"value":"first"}`, "tc2", "echo", `{"value":"second"}`)(call)
-			}
-			return textResponse("Interrupted!")(call)
-		},
-	)
-
-	steeringDelivered := false
-	steerMsg := &libagent.UserMessage{Role: "user", Content: "interrupt!", Timestamp: time.Now()}
-
-	agentCtx := &libagent.AgentContext{
-		Tools: libagent.AdaptTools([]libagent.Tool{echoTool}),
-	}
-	cfg := libagent.AgentLoopConfig{
-		Model: model,
-		// Return steering message after first tool executes.
-		GetSteeringMessages: func(_ context.Context) ([]libagent.Message, error) {
-			if len(executedTools) == 1 && !steeringDelivered {
-				steeringDelivered = true
-				return []libagent.Message{steerMsg}, nil
-			}
-			return nil, nil
-		},
-	}
-
-	eventCh := make(chan libagent.AgentEvent, 128)
-	prompt := &libagent.UserMessage{Role: "user", Content: "run two tools", Timestamp: time.Now()}
-	msgs, err := libagent.AgentLoop(context.Background(), []libagent.Message{prompt}, agentCtx, cfg, eventCh)
-	close(eventCh)
-
-	require.NoError(t, err)
-
-	var events []libagent.AgentEvent
-	for e := range eventCh {
-		events = append(events, e)
-	}
-
-	// Only the first tool should have run.
-	assert.Equal(t, []string{"first"}, executedTools)
-
-	// Second tool should be skipped (isError=true).
-	toolEnds := filterByType(events, libagent.AgentEventTypeToolExecutionEnd)
-	require.Len(t, toolEnds, 2)
-	assert.False(t, toolEnds[0].ToolIsError)
-	assert.True(t, toolEnds[1].ToolIsError)
-	assert.Contains(t, toolEnds[1].ToolResult, "Skipped")
-
-	// Interrupt message should appear in events.
-	messageStarts := filterByType(events, libagent.AgentEventTypeMessageStart)
-	found := false
-	for _, e := range messageStarts {
-		if um, ok := e.Message.(*libagent.UserMessage); ok && um.Content == "interrupt!" {
-			found = true
-		}
-	}
-	assert.True(t, found, "interrupt message should be in events")
-	assert.True(t, len(msgs) > 0)
-}
-
 func TestAgent_ToolExecution_DuplicateToolCallIDsAreCanonicalized(t *testing.T) {
 	executed := make([]string, 0, 2)
 	echoTool := libagent.NewTypedTool(
@@ -894,37 +738,6 @@ func TestAgent_ToolExecution_DuplicateToolCallIDsAreCanonicalized(t *testing.T) 
 	assert.Equal(t, starts[1].ToolCallID, calls[1].ToolCallID)
 	assert.Equal(t, ends[0].ToolCallID, calls[0].ToolCallID)
 	assert.Equal(t, ends[1].ToolCallID, calls[1].ToolCallID)
-}
-
-func TestAgent_FollowUpMessages(t *testing.T) {
-	callCount := 0
-	model := newMockModel(func(call int) fantasy.StreamResponse {
-		callCount++
-		return textResponse("response")(call)
-	})
-
-	a := libagent.NewAgent(libagent.AgentOptions{
-		RuntimeModel: libagent.RuntimeModel{Model: model},
-		FollowUpMode: libagent.QueueModeOneAtATime,
-	})
-
-	// Queue one follow-up.
-	followUp := &libagent.UserMessage{Role: "user", Content: "follow", Timestamp: time.Now()}
-	a.FollowUp(followUp)
-
-	ch, unsub := a.Subscribe()
-	defer unsub()
-
-	err := a.Prompt(context.Background(), "first prompt")
-	require.NoError(t, err)
-	collectEvents(ch)
-
-	// Should have called the model twice (once for prompt, once for follow-up).
-	assert.Equal(t, 2, callCount)
-
-	s := a.State()
-	// user, asst, follow-up user, asst
-	assert.Len(t, s.Messages, 4)
 }
 
 func TestAgent_MultiTurnConversation(t *testing.T) {
@@ -1246,71 +1059,6 @@ func TestAgent_Abort_WithPendingToolCalls_ProducesBalancedSyntheticResults(t *te
 	assert.True(t, libagent.HasBijectiveToolCoupling(s.Messages))
 }
 
-func TestAgent_Continue_WithFollowUpFromAssistantTail(t *testing.T) {
-	callCount := 0
-	model := newMockModel(func(call int) fantasy.StreamResponse {
-		callCount++
-		return textResponse("processed")(call)
-	})
-
-	a := libagent.NewAgent(libagent.AgentOptions{RuntimeModel: libagent.RuntimeModel{Model: model}})
-
-	// Seed with user + assistant messages.
-	a.ReplaceMessages([]libagent.Message{
-		&libagent.UserMessage{Role: "user", Content: "initial", Timestamp: time.Now()},
-		&libagent.AssistantMessage{Role: "assistant", Timestamp: time.Now()},
-	})
-
-	// Queue follow-up.
-	a.FollowUp(&libagent.UserMessage{Role: "user", Content: "follow-up", Timestamp: time.Now()})
-
-	ch, unsub := a.Subscribe()
-	defer unsub()
-
-	err := a.Continue(context.Background())
-	require.NoError(t, err)
-	collectEvents(ch)
-
-	assert.Equal(t, 1, callCount) // follow-up drains in one call
-	s := a.State()
-	// initial user, initial asst, follow-up user, response asst
-	assert.Len(t, s.Messages, 4)
-	assert.Equal(t, "assistant", s.Messages[len(s.Messages)-1].GetRole())
-}
-
-func TestAgent_SteeringMode_OneAtATime(t *testing.T) {
-	callCount := 0
-	model := newMockModel(func(call int) fantasy.StreamResponse {
-		callCount++
-		return textResponse("ok")(call)
-	})
-
-	a := libagent.NewAgent(libagent.AgentOptions{
-		RuntimeModel: libagent.RuntimeModel{Model: model},
-		SteeringMode: libagent.QueueModeOneAtATime,
-	})
-
-	// Seed with assistant tail.
-	a.ReplaceMessages([]libagent.Message{
-		&libagent.UserMessage{Role: "user", Content: "u", Timestamp: time.Now()},
-		&libagent.AssistantMessage{Role: "assistant", Timestamp: time.Now()},
-	})
-
-	a.Steer(&libagent.UserMessage{Role: "user", Content: "s1", Timestamp: time.Now()})
-	a.Steer(&libagent.UserMessage{Role: "user", Content: "s2", Timestamp: time.Now()})
-
-	ch, unsub := a.Subscribe()
-	defer unsub()
-
-	err := a.Continue(context.Background())
-	require.NoError(t, err)
-	collectEvents(ch)
-
-	// Both steering messages are delivered (one at a time per turn) → 2 LLM calls.
-	assert.Equal(t, 2, callCount)
-	assert.False(t, a.HasQueuedMessages())
-}
-
 func TestAgentLoop_BasicEvents(t *testing.T) {
 	model := newMockModel(textResponse("hello"))
 
@@ -1344,14 +1092,13 @@ func TestAgentLoop_BasicEvents(t *testing.T) {
 }
 
 func TestAgentLoop_ErrorStillEmitsAgentEnd(t *testing.T) {
-	model := newMockModel()
+	model := newMockModel(func(_ int) fantasy.StreamResponse {
+		return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonError})
+		})
+	})
 	agentCtx := &libagent.AgentContext{}
-	cfg := libagent.AgentLoopConfig{
-		Model: model,
-		GetSteeringMessages: func(context.Context) ([]libagent.Message, error) {
-			return nil, assert.AnError
-		},
-	}
+	cfg := libagent.AgentLoopConfig{Model: model}
 
 	eventCh := make(chan libagent.AgentEvent, 64)
 	prompts := []libagent.Message{&libagent.UserMessage{Role: "user", Content: "hi", Timestamp: time.Now()}}
@@ -1429,18 +1176,17 @@ func TestAgentLoopContinue_FromUserMessage(t *testing.T) {
 }
 
 func TestAgentLoopContinue_ErrorStillEmitsAgentEnd(t *testing.T) {
-	model := newMockModel()
+	model := newMockModel(func(_ int) fantasy.StreamResponse {
+		return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonError})
+		})
+	})
 	agentCtx := &libagent.AgentContext{
 		Messages: []libagent.Message{
 			&libagent.UserMessage{Role: "user", Content: "continue from here", Timestamp: time.Now()},
 		},
 	}
-	cfg := libagent.AgentLoopConfig{
-		Model: model,
-		GetSteeringMessages: func(context.Context) ([]libagent.Message, error) {
-			return nil, assert.AnError
-		},
-	}
+	cfg := libagent.AgentLoopConfig{Model: model}
 	eventCh := make(chan libagent.AgentEvent, 64)
 
 	_, err := libagent.AgentLoopContinue(context.Background(), agentCtx, cfg, eventCh)
@@ -1540,14 +1286,9 @@ func TestAgent_Reset(t *testing.T) {
 	model := newMockModel(textResponse("hi"))
 	a := libagent.NewAgent(libagent.AgentOptions{RuntimeModel: libagent.RuntimeModel{Model: model}})
 
-	// Build up some state.
 	err := a.Prompt(context.Background(), "hello")
 	require.NoError(t, err)
 	require.Len(t, a.State().Messages, 2)
-
-	a.Steer(&libagent.UserMessage{Role: "user", Content: "s", Timestamp: time.Now()})
-	a.FollowUp(&libagent.UserMessage{Role: "user", Content: "f", Timestamp: time.Now()})
-	assert.True(t, a.HasQueuedMessages())
 
 	a.Reset()
 
@@ -1557,71 +1298,6 @@ func TestAgent_Reset(t *testing.T) {
 	assert.Nil(t, s.StreamMessage)
 	assert.Empty(t, s.PendingToolCalls)
 	assert.Nil(t, s.Error)
-	assert.False(t, a.HasQueuedMessages())
-}
-
-func TestAgent_FollowUpMode_All(t *testing.T) {
-	callCount := 0
-	model := newMockModel(func(call int) fantasy.StreamResponse {
-		callCount++
-		return textResponse("ok")(call)
-	})
-
-	a := libagent.NewAgent(libagent.AgentOptions{
-		RuntimeModel: libagent.RuntimeModel{Model: model},
-		FollowUpMode: libagent.QueueModeAll,
-	})
-
-	a.FollowUp(&libagent.UserMessage{Role: "user", Content: "f1", Timestamp: time.Now()})
-	a.FollowUp(&libagent.UserMessage{Role: "user", Content: "f2", Timestamp: time.Now()})
-
-	ch, unsub := a.Subscribe()
-	defer unsub()
-
-	err := a.Prompt(context.Background(), "initial")
-	require.NoError(t, err)
-	collectEvents(ch)
-
-	// QueueModeAll sends both follow-ups in a single turn → 2 LLM calls total
-	// (1 for initial prompt, 1 for the batch of follow-ups).
-	assert.Equal(t, 2, callCount)
-	assert.False(t, a.HasQueuedMessages())
-	// initial user, initial asst, f1, f2, follow-up asst
-	assert.Len(t, a.State().Messages, 5)
-}
-
-func TestAgent_SteeringMode_All(t *testing.T) {
-	callCount := 0
-	model := newMockModel(func(call int) fantasy.StreamResponse {
-		callCount++
-		return textResponse("ok")(call)
-	})
-
-	a := libagent.NewAgent(libagent.AgentOptions{
-		RuntimeModel: libagent.RuntimeModel{Model: model},
-		SteeringMode: libagent.QueueModeAll,
-	})
-
-	a.ReplaceMessages([]libagent.Message{
-		&libagent.UserMessage{Role: "user", Content: "u", Timestamp: time.Now()},
-		&libagent.AssistantMessage{Role: "assistant", Timestamp: time.Now()},
-	})
-
-	a.Steer(&libagent.UserMessage{Role: "user", Content: "s1", Timestamp: time.Now()})
-	a.Steer(&libagent.UserMessage{Role: "user", Content: "s2", Timestamp: time.Now()})
-
-	ch, unsub := a.Subscribe()
-	defer unsub()
-
-	err := a.Continue(context.Background())
-	require.NoError(t, err)
-	collectEvents(ch)
-
-	// QueueModeAll delivers both steering messages in one turn → 1 LLM call.
-	assert.Equal(t, 1, callCount)
-	assert.False(t, a.HasQueuedMessages())
-	// initial user, initial asst, s1, s2, response asst
-	assert.Len(t, a.State().Messages, 5)
 }
 
 func TestAgent_LLMError_FinishReasonError(t *testing.T) {

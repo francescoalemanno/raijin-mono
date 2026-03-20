@@ -41,7 +41,6 @@ type SessionAgent struct {
 	eventCallback func(libagent.AgentEvent)
 
 	activeRequests map[string]context.CancelFunc
-	activeAgents   map[string]*libagent.Agent
 
 	messages libagent.MessageService
 	store    *persist.Store
@@ -67,7 +66,6 @@ func NewSessionAgent(opts SessionAgentOptions) *SessionAgent {
 		messages:       opts.Messages,
 		store:          opts.Store,
 		activeRequests: make(map[string]context.CancelFunc),
-		activeAgents:   make(map[string]*libagent.Agent),
 	}
 }
 
@@ -127,7 +125,6 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 		cancel()
 		a.mu.Lock()
 		delete(a.activeRequests, call.SessionID)
-		delete(a.activeAgents, call.SessionID)
 		a.mu.Unlock()
 	}()
 
@@ -174,11 +171,6 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 		ProviderOptions: providerOpts,
 		MaxOutputTokens: maxOut,
 	})
-	ag.SetSteeringMode(libagent.QueueModeAll)
-	ag.SetFollowUpMode(libagent.QueueModeAll)
-	a.mu.Lock()
-	a.activeAgents[call.SessionID] = ag
-	a.mu.Unlock()
 
 	// Subscribe to events before starting.
 	evCh, unsub := ag.Subscribe()
@@ -419,26 +411,6 @@ func (a *SessionAgent) Cancel(sessionID string) {
 	if cancel != nil {
 		cancel()
 	}
-}
-
-// Steer queues a user message into the active run for this session.
-func (a *SessionAgent) Steer(_ context.Context, call SessionAgentCall) error {
-	if call.Prompt == "" && len(call.Attachments) == 0 {
-		return ErrEmptyPrompt
-	}
-	if call.SessionID == "" {
-		return ErrSessionMissing
-	}
-
-	a.mu.RLock()
-	ag := a.activeAgents[call.SessionID]
-	a.mu.RUnlock()
-	if ag == nil {
-		return errors.New("session is not running")
-	}
-
-	ag.Steer(toRuntimeUserMessage(call.Prompt, call.Attachments))
-	return nil
 }
 
 // CancelAll cancels all running sessions.

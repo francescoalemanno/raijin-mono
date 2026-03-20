@@ -29,15 +29,9 @@ type Agent struct {
 	// configuration
 	convertToLLM     ConvertToLLMFn
 	transformContext TransformContextFn
-	steeringMode     QueueMode
-	followUpMode     QueueMode
 	sessionID        string
 	providerOptions  fantasy.ProviderOptions
 	maxOutputTokens  int64
-
-	// queues
-	steeringQueue []Message
-	followUpQueue []Message
 
 	// event subscribers (subMu protects subscribers slice)
 	subMu       sync.RWMutex
@@ -65,11 +59,6 @@ type AgentOptions struct {
 	// TransformContext optionally transforms messages before ConvertToLLM.
 	TransformContext TransformContextFn
 
-	// SteeringMode controls how steering queue drains. Defaults to QueueModeOneAtATime.
-	SteeringMode QueueMode
-	// FollowUpMode controls how follow-up queue drains. Defaults to QueueModeOneAtATime.
-	FollowUpMode QueueMode
-
 	// SessionID is forwarded to providers that support session-based caching.
 	SessionID string
 
@@ -84,12 +73,6 @@ type AgentOptions struct {
 
 // NewAgent creates a new Agent with the given options.
 func NewAgent(opts AgentOptions) *Agent {
-	if opts.SteeringMode == "" {
-		opts.SteeringMode = QueueModeOneAtATime
-	}
-	if opts.FollowUpMode == "" {
-		opts.FollowUpMode = QueueModeOneAtATime
-	}
 	if opts.ConvertToLLM == nil {
 		opts.ConvertToLLM = defaultConvertToLLMForRuntime(opts.RuntimeModel.ProviderType, opts.ProviderOptions)
 	}
@@ -101,8 +84,6 @@ func NewAgent(opts AgentOptions) *Agent {
 		messages:         append([]Message{}, opts.Messages...),
 		convertToLLM:     opts.ConvertToLLM,
 		transformContext: opts.TransformContext,
-		steeringMode:     opts.SteeringMode,
-		followUpMode:     opts.FollowUpMode,
 		sessionID:        opts.SessionID,
 		providerOptions:  opts.ProviderOptions,
 		maxOutputTokens:  opts.MaxOutputTokens,
@@ -176,8 +157,6 @@ func (a *Agent) Reset() {
 	a.streamMsg = nil
 	a.pendingCalls = make(map[string]struct{})
 	a.lastErr = nil
-	a.steeringQueue = nil
-	a.followUpQueue = nil
 }
 
 // SetSessionID updates the session ID.
@@ -190,91 +169,9 @@ func (a *Agent) SessionID() string {
 	return a.sessionID
 }
 
-// SetSteeringMode sets how the steering queue drains.
-func (a *Agent) SetSteeringMode(m QueueMode) {
-	a.steeringMode = m
-}
-
-// GetSteeringMode returns the current steering mode.
-func (a *Agent) GetSteeringMode() QueueMode {
-	return a.steeringMode
-}
-
-// SetFollowUpMode sets how the follow-up queue drains.
-func (a *Agent) SetFollowUpMode(m QueueMode) {
-	a.followUpMode = m
-}
-
-// GetFollowUpMode returns the current follow-up mode.
-func (a *Agent) GetFollowUpMode() QueueMode {
-	return a.followUpMode
-}
-
 // RuntimeModel returns the current runtime model and metadata.
 func (a *Agent) RuntimeModel() RuntimeModel {
 	return a.runtimeModel
-}
-
-// ----- Queueing ----------------------------------------------------------------
-
-// Steer queues a steering message to interrupt the agent mid-run.
-// Steering messages are injected after the current tool execution.
-func (a *Agent) Steer(m Message) {
-	a.steeringQueue = append(a.steeringQueue, m)
-}
-
-// FollowUp queues a follow-up message for after the agent finishes its current work.
-func (a *Agent) FollowUp(m Message) {
-	a.followUpQueue = append(a.followUpQueue, m)
-}
-
-// ClearSteeringQueue empties the steering queue.
-func (a *Agent) ClearSteeringQueue() {
-	a.steeringQueue = nil
-}
-
-// ClearFollowUpQueue empties the follow-up queue.
-func (a *Agent) ClearFollowUpQueue() {
-	a.followUpQueue = nil
-}
-
-// ClearAllQueues empties both queues.
-func (a *Agent) ClearAllQueues() {
-	a.steeringQueue = nil
-	a.followUpQueue = nil
-}
-
-// HasQueuedMessages reports whether either queue is non-empty.
-func (a *Agent) HasQueuedMessages() bool {
-	return len(a.steeringQueue) > 0 || len(a.followUpQueue) > 0
-}
-
-func (a *Agent) dequeueSteeringMessages() []Message {
-	if a.steeringMode == QueueModeOneAtATime {
-		if len(a.steeringQueue) > 0 {
-			first := a.steeringQueue[0]
-			a.steeringQueue = a.steeringQueue[1:]
-			return []Message{first}
-		}
-		return nil
-	}
-	all := a.steeringQueue
-	a.steeringQueue = nil
-	return all
-}
-
-func (a *Agent) dequeueFollowUpMessages() []Message {
-	if a.followUpMode == QueueModeOneAtATime {
-		if len(a.followUpQueue) > 0 {
-			first := a.followUpQueue[0]
-			a.followUpQueue = a.followUpQueue[1:]
-			return []Message{first}
-		}
-		return nil
-	}
-	all := a.followUpQueue
-	a.followUpQueue = nil
-	return all
 }
 
 // ----- Event subscription ------------------------------------------------------
@@ -448,15 +345,13 @@ func (a *Agent) Prompt(ctx context.Context, text string, files ...FilePart) erro
 // PromptMessages sends one or more pre-built messages as the next prompt.
 func (a *Agent) PromptMessages(ctx context.Context, msgs ...Message) error {
 	if a.isStreaming {
-		return fmt.Errorf("agent is already processing a prompt. Use Steer() or FollowUp() to queue messages, or wait for completion")
+		return fmt.Errorf("agent is already processing a prompt. Wait for completion")
 	}
-	return a.runLoop(ctx, msgs, false)
+	return a.runLoop(ctx, msgs)
 }
 
 // Continue resumes from the existing context without adding a new message.
 // The last message must not be an assistant message (it must be user or toolResult).
-// If the last message is assistant and the steering or follow-up queues are non-empty,
-// those are drained first.
 func (a *Agent) Continue(ctx context.Context) error {
 	if a.isStreaming {
 		return fmt.Errorf("agent is already processing. Wait for completion before continuing")
@@ -466,21 +361,11 @@ func (a *Agent) Continue(ctx context.Context) error {
 		return fmt.Errorf("no messages to continue from")
 	}
 	last := msgs[len(msgs)-1]
-
 	if last.GetRole() == "assistant" {
-		// Try to drain steering/follow-up queues before giving up.
-		steering := a.dequeueSteeringMessages()
-		if len(steering) > 0 {
-			return a.runLoop(ctx, steering, true)
-		}
-		followUp := a.dequeueFollowUpMessages()
-		if len(followUp) > 0 {
-			return a.runLoop(ctx, followUp, false)
-		}
 		return fmt.Errorf("cannot continue from message role: assistant")
 	}
 
-	return a.runLoop(ctx, nil, false)
+	return a.runLoop(ctx, nil)
 }
 
 // Abort cancels the current streaming operation.
@@ -506,9 +391,7 @@ func (a *Agent) WaitForIdle() {
 // ----- Internal run loop -------------------------------------------------------
 
 // runLoop is the internal driver. When prompts is nil/empty, it continues from context.
-// skipInitialSteeringPoll skips the very first GetSteeringMessages call (used when
-// steering messages are already provided as prompts).
-func (a *Agent) runLoop(ctx context.Context, prompts []Message, skipInitialSteeringPoll bool) error {
+func (a *Agent) runLoop(ctx context.Context, prompts []Message) error {
 	runtimeModel := a.runtimeModel
 	model := runtimeModel.Model
 	if model == nil {
@@ -555,7 +438,6 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message, skipInitialSteer
 		a.stopAllSubscribers()
 	}()
 
-	skipFirst := skipInitialSteeringPoll
 	agentCtx := &AgentContext{
 		SystemPrompt: systemPrompt,
 		Messages:     msgs,
@@ -572,16 +454,6 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message, skipInitialSteer
 		TransformContext: transformContext,
 		ProviderOptions:  a.providerOptions,
 		MaxOutputTokens:  maxOut,
-		GetSteeringMessages: func(ctx context.Context) ([]Message, error) {
-			if skipFirst {
-				skipFirst = false
-				return nil, nil
-			}
-			return a.dequeueSteeringMessages(), nil
-		},
-		GetFollowUpMessages: func(ctx context.Context) ([]Message, error) {
-			return a.dequeueFollowUpMessages(), nil
-		},
 	}
 
 	// Event channel: we read events from it and update state + emit to subscribers.

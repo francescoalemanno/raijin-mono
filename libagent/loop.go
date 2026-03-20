@@ -91,8 +91,8 @@ func AgentLoopContinue(
 	return newMessages, nil
 }
 
-// runLoop is the shared inner loop: it performs LLM calls, tool executions,
-// steering injection, and follow-up message handling until the agent is done.
+// runLoop is the shared inner loop: it performs LLM calls and tool executions
+// until the agent reaches a terminal assistant response.
 // firstTurn indicates that a turn_start was already emitted by the caller.
 func runLoop(
 	ctx context.Context,
@@ -102,140 +102,83 @@ func runLoop(
 	firstTurn bool,
 ) ([]Message, error) {
 	newMessages := make([]Message, 0, 8)
+	hasMoreToolCalls := true
 
-	// Poll for steering messages at the very start (user may have typed while we were queued).
-	var pendingMessages []Message
-	if cfg.GetSteeringMessages != nil {
-		sm, err := cfg.GetSteeringMessages(ctx)
-		if err != nil {
-			return newMessages, fmt.Errorf("get steering messages: %w", err)
+	for hasMoreToolCalls {
+		if !firstTurn {
+			sendEvent(eventCh, AgentEvent{Type: AgentEventTypeTurnStart})
+		} else {
+			firstTurn = false
 		}
-		pendingMessages = sm
-	}
 
-	for {
-		hasMoreToolCalls := true
-		var steeringAfterTools []Message
-
-		// Inner loop: process tool calls and steering messages.
-		for hasMoreToolCalls || len(pendingMessages) > 0 {
-			if !firstTurn {
-				sendEvent(eventCh, AgentEvent{Type: AgentEventTypeTurnStart})
-			} else {
-				firstTurn = false
+		var (
+			assistantMsg *AssistantMessage
+			plannedCalls []plannedToolCall
+			err          error
+		)
+		for attempt := 0; ; attempt++ {
+			assistantMsg, plannedCalls, err = streamAssistantResponse(ctx, currentCtx, cfg, eventCh)
+			if err == nil {
+				break
 			}
-
-			// Inject pending (steering) messages.
-			if len(pendingMessages) > 0 {
-				for _, m := range pendingMessages {
-					sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageStart, Message: m})
-					sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageEnd, Message: m})
-					currentCtx.Messages = append(currentCtx.Messages, m)
-					newMessages = append(newMessages, m)
-				}
-				pendingMessages = nil
-			}
-
-			// Stream the assistant response.
-			var (
-				assistantMsg *AssistantMessage
-				plannedCalls []plannedToolCall
-				err          error
-			)
-			for attempt := 0; ; attempt++ {
-				assistantMsg, plannedCalls, err = streamAssistantResponse(ctx, currentCtx, cfg, eventCh)
-				if err == nil {
-					break
-				}
-				var retryErr *retryableStreamError
-				if errors.As(err, &retryErr) {
-					if attempt < maxRetries {
-						if waitErr := emitRetryAndWait(ctx, attempt+1, maxRetries, eventCh, retryErr); waitErr != nil {
-							return newMessages, waitErr
-						}
-						continue
+			var retryErr *retryableStreamError
+			if errors.As(err, &retryErr) {
+				if attempt < maxRetries {
+					if waitErr := emitRetryAndWait(ctx, attempt+1, maxRetries, eventCh, retryErr); waitErr != nil {
+						return newMessages, waitErr
 					}
-					finalErr := fmt.Errorf("failed after %d retries: %w", maxRetries, retryErr)
-					assistantMsg = errorAssistantMessage(finalErr)
-					currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
-					sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageStart, Message: assistantMsg})
-					sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageEnd, Message: assistantMsg})
-					plannedCalls = nil
-					break
+					continue
 				}
+				finalErr := fmt.Errorf("failed after %d retries: %w", maxRetries, retryErr)
+				assistantMsg = errorAssistantMessage(finalErr)
+				currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
+				sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageStart, Message: assistantMsg})
+				sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageEnd, Message: assistantMsg})
+				plannedCalls = nil
+				break
+			}
+			return newMessages, err
+		}
+		newMessages = append(newMessages, assistantMsg)
+
+		var turnErr error
+		if assistantMsg.FinishReason == fantasy.FinishReasonError {
+			if assistantMsg.Error != nil {
+				turnErr = assistantMsg.Error
+			} else {
+				turnErr = fmt.Errorf("language model finished with error")
+			}
+			for i := range plannedCalls {
+				if strings.TrimSpace(plannedCalls[i].SkipReason) != "" {
+					continue
+				}
+				plannedCalls[i].SkipReason = fmt.Sprintf("tool execution skipped: assistant failed: %v", turnErr)
+			}
+		}
+
+		hasMoreToolCalls = len(plannedCalls) > 0
+
+		var toolResults []*ToolResultMessage
+		if hasMoreToolCalls {
+			produced, results, err := executeToolCalls(ctx, currentCtx.Tools, plannedCalls, eventCh)
+			if err != nil {
 				return newMessages, err
 			}
-			newMessages = append(newMessages, assistantMsg)
-
-			var turnErr error
-			if assistantMsg.FinishReason == fantasy.FinishReasonError {
-				if assistantMsg.Error != nil {
-					turnErr = assistantMsg.Error
-				} else {
-					turnErr = fmt.Errorf("language model finished with error")
-				}
-				// Keep assistant/tool coupling valid even on provider/cancel errors.
-				// We do this by skipping all planned calls with synthetic tool results.
-				for i := range plannedCalls {
-					if strings.TrimSpace(plannedCalls[i].SkipReason) != "" {
-						continue
-					}
-					plannedCalls[i].SkipReason = fmt.Sprintf("tool execution skipped: assistant failed: %v", turnErr)
-				}
-			}
-
-			// Collect tool calls from the response.
-			hasMoreToolCalls = len(plannedCalls) > 0
-
-			var toolResults []*ToolResultMessage
-			if hasMoreToolCalls {
-				produced, results, steering, err := executeToolCalls(ctx, currentCtx.Tools, plannedCalls, cfg.GetSteeringMessages, eventCh)
-				if err != nil {
-					return newMessages, err
-				}
-				toolResults = results
-				steeringAfterTools = steering
-				for _, m := range produced {
-					currentCtx.Messages = append(currentCtx.Messages, m)
-					newMessages = append(newMessages, m)
-				}
-			}
-
-			sendEvent(eventCh, AgentEvent{
-				Type:        AgentEventTypeTurnEnd,
-				TurnMessage: assistantMsg,
-				ToolResults: toolResults,
-			})
-			if turnErr != nil {
-				return newMessages, turnErr
-			}
-
-			// Resolve next steering messages.
-			if len(steeringAfterTools) > 0 {
-				pendingMessages = steeringAfterTools
-				steeringAfterTools = nil
-			} else if cfg.GetSteeringMessages != nil {
-				sm, err := cfg.GetSteeringMessages(ctx)
-				if err != nil {
-					return newMessages, fmt.Errorf("get steering messages: %w", err)
-				}
-				pendingMessages = sm
+			toolResults = results
+			for _, m := range produced {
+				currentCtx.Messages = append(currentCtx.Messages, m)
+				newMessages = append(newMessages, m)
 			}
 		}
 
-		// Agent would stop. Check for follow-up messages.
-		if cfg.GetFollowUpMessages != nil {
-			fm, err := cfg.GetFollowUpMessages(ctx)
-			if err != nil {
-				return newMessages, fmt.Errorf("get follow-up messages: %w", err)
-			}
-			if len(fm) > 0 {
-				pendingMessages = fm
-				continue
-			}
+		sendEvent(eventCh, AgentEvent{
+			Type:        AgentEventTypeTurnEnd,
+			TurnMessage: assistantMsg,
+			ToolResults: toolResults,
+		})
+		if turnErr != nil {
+			return newMessages, turnErr
 		}
-
-		break
 	}
 
 	return newMessages, nil
@@ -593,18 +536,16 @@ func streamAssistantResponse(
 }
 
 // executeToolCalls runs the tool calls from an assistant message, emitting events.
-// It returns all produced messages in order (tool results and injected user attachments),
-// completed ToolResultMessages, and any steering messages detected mid-run.
+// It returns all produced messages in order (tool results and injected user attachments)
+// and the completed ToolResultMessages.
 func executeToolCalls(
 	ctx context.Context,
 	tools []fantasy.AgentTool,
 	plannedCalls []plannedToolCall,
-	getSteeringMessages GetSteeringMessagesFn,
 	eventCh chan<- AgentEvent,
-) ([]Message, []*ToolResultMessage, []Message, error) {
+) ([]Message, []*ToolResultMessage, error) {
 	var produced []Message
 	var results []*ToolResultMessage
-	var steeringMessages []Message
 
 	// Build a name→tool map for fast lookup.
 	toolMap := make(map[string]fantasy.AgentTool, len(tools))
@@ -622,22 +563,6 @@ func executeToolCalls(
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			skippedResult := skipToolCall(tc, fmt.Sprintf("tool execution canceled: %v", ctxErr), eventCh)
-			results = append(results, skippedResult)
-			produced = append(produced, skippedResult)
-			continue
-		}
-		// Check for steering messages before each tool (only if not already steering).
-		if getSteeringMessages != nil && len(steeringMessages) == 0 {
-			sm, err := getSteeringMessages(ctx)
-			if err != nil {
-				return produced, results, nil, fmt.Errorf("get steering messages: %w", err)
-			}
-			if len(sm) > 0 {
-				steeringMessages = sm
-			}
-		}
-		if len(steeringMessages) > 0 {
-			skippedResult := skipToolCall(tc, "Skipped due to queued user message.", eventCh)
 			results = append(results, skippedResult)
 			produced = append(produced, skippedResult)
 			continue
@@ -754,7 +679,7 @@ func executeToolCalls(
 		}
 	}
 
-	return produced, results, steeringMessages, nil
+	return produced, results, nil
 }
 
 type plannedToolCall struct {

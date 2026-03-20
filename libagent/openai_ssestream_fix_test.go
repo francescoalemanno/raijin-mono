@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
-	openai "github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/packages/ssestream"
+	openai "github.com/charmbracelet/openai-go"
+	"github.com/charmbracelet/openai-go/packages/ssestream"
 	"github.com/tidwall/gjson"
 )
 
@@ -109,5 +109,29 @@ func TestNormalizeOpenAICompatibleReasoningFields_SupportsReasoningText(t *testi
 
 	if reasoning := gjson.GetBytes(got, "choices.0.delta.reasoning_content").String(); reasoning != "Alternative field" {
 		t.Fatalf("reasoning_content=%q want %q", reasoning, "Alternative field")
+	}
+}
+
+func TestOpenAICompatibleSSEDecoder_NormalizesReasoningToReasoningContent(t *testing.T) {
+	t.Parallel()
+
+	res := &http.Response{
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+		},
+		Body: io.NopCloser(bytes.NewBufferString(
+			`data: {"id":"chunk-3","object":"chat.completion.chunk","created":1,"model":"kimi-k2.5","choices":[{"index":0,"delta":{"role":"assistant","reasoning":"The user is asking"}}]}` + "\n\n",
+		)),
+	}
+
+	stream := ssestream.NewStream[openai.ChatCompletionChunk](ssestream.NewDecoder(res), nil)
+
+	if !stream.Next() {
+		t.Fatalf("expected first chunk, got err=%v", stream.Err())
+	}
+
+	got := stream.Current().Choices[0].Delta.RawJSON()
+	if reasoning := gjson.Get(got, "reasoning_content").String(); reasoning != "The user is asking" {
+		t.Fatalf("reasoning_content=%q want %q (raw=%s)", reasoning, "The user is asking", got)
 	}
 }

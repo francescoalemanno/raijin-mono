@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/openai/openai-go/v3/packages/ssestream"
+	"github.com/charmbracelet/openai-go/packages/ssestream"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
