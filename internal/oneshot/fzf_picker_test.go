@@ -44,3 +44,18 @@ func TestBuildFZFPickerLinesPreservesLeadingWhitespace(t *testing.T) {
 		t.Fatalf("line = %q, want %q", got, want)
 	}
 }
+
+func TestPickerLinePositionUsesResolvedLines(t *testing.T) {
+	t.Parallel()
+
+	items := []fzfPickerItem{
+		{key: "a", label: "same"},
+		{key: "b", label: "same"},
+		{key: "c", label: "other"},
+	}
+	lines, lineToKey := buildFZFPickerLines(items)
+
+	if got, want := pickerLinePosition(lines, lineToKey, "b"), 2; got != want {
+		t.Fatalf("pickerLinePosition(...) = %d, want %d", got, want)
+	}
+}

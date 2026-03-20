@@ -28,6 +28,10 @@ const (
 var errFZFPickerUnavailable = errors.New("fzf picker unavailable")
 
 func pickWithEmbeddedFZF(items []fzfPickerItem, query string, allowDelete bool, preserveOrder bool) (string, fzfPickerAction, error) {
+	return pickWithEmbeddedFZFInitial(items, query, allowDelete, preserveOrder, "")
+}
+
+func pickWithEmbeddedFZFInitial(items []fzfPickerItem, query string, allowDelete bool, preserveOrder bool, initialKey string) (string, fzfPickerAction, error) {
 	if !canUseEmbeddedFZF() {
 		return "", fzfPickerActionCancel, errFZFPickerUnavailable
 	}
@@ -45,6 +49,7 @@ func pickWithEmbeddedFZF(items []fzfPickerItem, query string, allowDelete bool, 
 
 	cfg := shellinit.RunFZFOptions{}
 	cfg.DisableSort = preserveOrder
+	cfg.InitialPosition = pickerLinePosition(lines, lineToKey, initialKey)
 	if allowDelete {
 		cfg.ExpectKeys = []string{"ctrl-x"}
 		cfg.Bindings = []string{"ctrl-x:accept"}
@@ -75,6 +80,18 @@ func pickWithEmbeddedFZF(items []fzfPickerItem, query string, allowDelete bool, 
 		return key, fzfPickerActionDelete, nil
 	}
 	return key, fzfPickerActionSelect, nil
+}
+
+func pickerLinePosition(lines []string, lineToKey map[string]string, initialKey string) int {
+	if strings.TrimSpace(initialKey) == "" {
+		return 0
+	}
+	for i, line := range lines {
+		if lineToKey[line] == initialKey {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 func canUseEmbeddedFZF() bool {
