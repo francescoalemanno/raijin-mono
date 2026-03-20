@@ -191,7 +191,7 @@ func TestReplCompleteLineFormatsMentionWithSpaces(t *testing.T) {
 	if formatted != `@"reports/my file.txt"` {
 		t.Fatalf("MentionEscape = %q, want %q", formatted, `@"reports/my file.txt"`)
 	}
-	
+
 	// Test without spaces
 	formatted = completion.MentionEscape("reports/file.txt")
 	if formatted != "@reports/file.txt" {

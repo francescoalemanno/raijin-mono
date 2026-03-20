@@ -18,6 +18,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/francescoalemanno/raijin-mono/internal/completion"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
+	"github.com/francescoalemanno/raijin-mono/internal/version"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/google/uuid"
 	"golang.org/x/term"
@@ -121,7 +122,7 @@ func RunSubprocessREPL(baseArgs []string) error {
 		return err
 	}
 	initialStatus := replStatusQuery(baseArgs, binding)
-	fmt.Fprintln(os.Stdout, RenderThemedAccent("Raijin REPL")+" "+RenderThemedDim("subprocess mode"))
+	fmt.Fprintln(os.Stdout, RenderThemedAccent("Raijin")+" "+RenderThemedDim("v"+version.Version+" · subprocess mode"))
 	fmt.Fprintln(os.Stdout, RenderThemedDim("ctrl+d or /exit to quit · tab autocomplete · up/down history"))
 	fmt.Fprintln(os.Stdout, renderPrintedStatusLine(initialStatus))
 

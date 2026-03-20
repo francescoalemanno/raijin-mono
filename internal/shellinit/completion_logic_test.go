@@ -12,10 +12,10 @@ func TestCandidatesUniversal(t *testing.T) {
 		input    string
 		expected bool // true if we expect candidates
 	}{
-		{"ls", true},      // bare tokens now have universal completion
-		{"ls ", false},    // trailing space = no active token
-		{":", true},       // : is now treated as universal (combined with bare tokens)
-		{":h", true},      // :h gets universal completion
+		{"ls", true},   // bare tokens now have universal completion
+		{"ls ", false}, // trailing space = no active token
+		{":", true},    // : is now treated as universal (combined with bare tokens)
+		{":h", true},   // :h gets universal completion
 		{"/", true},
 		{"/s", true},
 		{"cat @", true},
@@ -23,7 +23,7 @@ func TestCandidatesUniversal(t *testing.T) {
 		{"cat +", true},
 		{"cat +s", true},
 		{"git commit", true}, // last token "commit" has universal completion
-		{":status ", false}, // trailing space = no active token
+		{":status ", false},  // trailing space = no active token
 	}
 
 	for _, tc := range tests {

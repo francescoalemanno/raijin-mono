@@ -155,7 +155,6 @@ func TestCompleteMidSentenceSlashToken(t *testing.T) {
 	}
 }
 
-
 func TestCompleteMidSentenceSkillWithPrefixStillCompletes(t *testing.T) {
 	out := Complete(":please use +tm")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
