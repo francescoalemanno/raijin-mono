@@ -52,6 +52,11 @@ type replPickerDoneMsg struct {
 	err    error
 }
 
+type replEditorDoneMsg struct {
+	content string
+	err     error
+}
+
 type replStatus struct {
 	mu    sync.Mutex
 	label string
@@ -123,7 +128,7 @@ func RunSubprocessREPL(baseArgs []string) error {
 	}
 	initialStatus := replStatusQuery(baseArgs, binding)
 	fmt.Fprintln(os.Stdout, RenderThemedAccent("Raijin")+" "+RenderThemedDim("v"+version.Version+" · subprocess mode"))
-	fmt.Fprintln(os.Stdout, RenderThemedDim("ctrl+d or /exit to quit · tab autocomplete · up/down history"))
+	fmt.Fprintln(os.Stdout, RenderThemedDim("ctrl+d or /exit to quit · tab autocomplete · up/down history · ctrl+e edit"))
 	fmt.Fprintln(os.Stdout, renderPrintedStatusLine(initialStatus))
 
 	model := replModel{
@@ -158,6 +163,13 @@ func (m replModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Println(renderPrintedStatusLine(m.status))
 	case replRunDoneMsg:
 		return m, tea.Batch(replFeedbackCmd(msg.stats, msg.err), replStatusCmd(m.baseArgs, m.binding))
+	case replEditorDoneMsg:
+		if msg.err != nil {
+			return m, tea.Println(RenderThemedErr(libagent.FormatErrorForCLI(msg.err)))
+		}
+		m.resetHistoryNav()
+		m.setEditorState(msg.content, utf8.RuneCountInString(msg.content))
+		return m.submit()
 	case replPickerDoneMsg:
 		if msg.err != nil {
 			return m, tea.Println(RenderThemedErr(libagent.FormatErrorForCLI(msg.err)))
@@ -202,6 +214,8 @@ func (m replModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, m.updateEditor(msg)
+		case "ctrl+e":
+			return m.handleEdit()
 		case "tab":
 			return m.handleTab()
 		case "enter":
@@ -328,6 +342,14 @@ func (m *replModel) handleTab() (tea.Model, tea.Cmd) {
 			result: replPickerResult{token: token, selected: picker.selected},
 			err:    err,
 		}
+	})
+}
+
+func (m *replModel) handleEdit() (tea.Model, tea.Cmd) {
+	m.ensureEditor()
+	editor := &replEditorExec{content: m.editor.Value()}
+	return *m, tea.Exec(editor, func(err error) tea.Msg {
+		return replEditorDoneMsg{content: editor.result, err: err}
 	})
 }
 
@@ -597,6 +619,56 @@ func runFZFWithPrompt(mode, query, prompt string, stdin io.Reader, stdout io.Wri
 func (c *replPickerExec) SetStdin(io.Reader)  {}
 func (c *replPickerExec) SetStdout(io.Writer) {}
 func (c *replPickerExec) SetStderr(io.Writer) {}
+
+type replEditorExec struct {
+	content string
+	result  string
+}
+
+func (c *replEditorExec) Run() error {
+	tempFile, err := os.CreateTemp("", "raijin-repl-edit-*.md")
+	if err != nil {
+		return fmt.Errorf("create temp file for editor: %w", err)
+	}
+	tempPath := tempFile.Name()
+	defer func() { _ = os.Remove(tempPath) }()
+
+	if c.content != "" {
+		if _, err := tempFile.WriteString(c.content); err != nil {
+			_ = tempFile.Close()
+			return fmt.Errorf("write initial content: %w", err)
+		}
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	editor, err := resolveEditorCommand(os.Getenv, exec.LookPath)
+	if err != nil {
+		return err
+	}
+
+	args := append(append([]string{}, editor.args...), tempPath)
+	cmd := exec.Command(editor.path, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run editor: %w", err)
+	}
+
+	result, err := os.ReadFile(tempPath)
+	if err != nil {
+		return fmt.Errorf("read temp file: %w", err)
+	}
+	c.result = string(result)
+	return nil
+}
+
+func (c *replEditorExec) SetStdin(io.Reader)  {}
+func (c *replEditorExec) SetStdout(io.Writer) {}
+func (c *replEditorExec) SetStderr(io.Writer) {}
 
 func replStatusCmd(baseArgs []string, binding replBinding) tea.Cmd {
 	args := append([]string(nil), baseArgs...)
