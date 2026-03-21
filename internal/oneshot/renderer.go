@@ -345,7 +345,6 @@ func (r *renderer) startThinking() {
 	r.thinkingStart = r.now()
 	r.reasoningStarted = false
 	r.thinkingLine.Reset()
-	r.emitPending(renderStatusInfo("⟳"), "Thinking: ")
 }
 
 func (r *renderer) flushThinking() {
