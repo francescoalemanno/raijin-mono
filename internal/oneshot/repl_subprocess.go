@@ -128,7 +128,7 @@ func RunSubprocessREPL(baseArgs []string) error {
 	}
 	initialStatus := replStatusQuery(baseArgs, binding)
 	fmt.Fprintln(os.Stdout, RenderThemedAccent("Raijin")+" "+RenderThemedDim("v"+version.Version+" · subprocess mode"))
-	fmt.Fprintln(os.Stdout, RenderThemedDim("ctrl+d or /exit to quit · tab autocomplete · up/down history · ctrl+e edit"))
+	fmt.Fprintln(os.Stdout, RenderThemedDim("ctrl+d or /exit to quit · tab autocomplete · up/down history · ctrl+x edit"))
 	fmt.Fprintln(os.Stdout, renderPrintedStatusLine(initialStatus))
 
 	model := replModel{
@@ -214,7 +214,7 @@ func (m replModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, m.updateEditor(msg)
-		case "ctrl+e":
+		case "ctrl+x":
 			return m.handleEdit()
 		case "tab":
 			return m.handleTab()
