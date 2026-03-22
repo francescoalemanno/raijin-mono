@@ -18,7 +18,7 @@ import (
 )
 
 var readDescription = fmt.Sprintf(
-	"Read the contents of a file or list files in a directory. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to %d lines or %dKB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. When called on a directory, returns a list of files and subdirectories.",
+	"Read the contents of a file or list files in a directory. Supports text files and images (jpg, png, gif, webp). Images are converted to JPEG and sent as attachments. For text files, output is truncated to %d lines or %dKB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. When called on a directory, returns a list of files and subdirectories.",
 	DefaultMaxLines,
 	DefaultMaxBytes/1024,
 )
@@ -97,8 +97,12 @@ func NewReadTool() libagent.Tool {
 			if err != nil {
 				return readToolNudge(fmt.Sprintf("reading image: %s", err)), nil
 			}
+			data, err = input.NormalizeImageToJPEG(data)
+			if err != nil {
+				return readToolNudge(fmt.Sprintf("converting image to JPEG: %s", err)), nil
+			}
 			encoded := base64.StdEncoding.EncodeToString(data)
-			return libagent.NewMediaResponse([]byte(encoded), mediaType), nil
+			return libagent.NewMediaResponse([]byte(encoded), "image/jpeg"), nil
 		}
 
 		result, details, err := readText(ctx, v, queryPath, params)
