@@ -89,6 +89,21 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	if call.Prompt == "" && len(call.Attachments) == 0 {
 		return ErrEmptyPrompt
 	}
+	return a.run(ctx, call, false)
+}
+
+// Continue resumes the agent from the existing persisted context without
+// appending a new user message.
+func (a *SessionAgent) Continue(ctx context.Context, call SessionAgentCall) error {
+	return a.run(ctx, call, true)
+}
+
+func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueFromHistory bool) error {
+	if call.Prompt == "" && len(call.Attachments) == 0 {
+		if !continueFromHistory {
+			return ErrEmptyPrompt
+		}
+	}
 	if call.SessionID == "" {
 		return ErrSessionMissing
 	}
@@ -150,9 +165,6 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 		effectiveMaxOut = max(contextWindow/2, 1)
 	}
 
-	// Prepare the user prompt message for the agent.
-	promptMsg := toRuntimeUserMessage(call.Prompt, call.Attachments)
-
 	// Build provider options (thinking level, reasoning config, Codex instructions, etc.).
 	providerOpts := model.BuildCallProviderOptions(systemPrompt)
 
@@ -190,6 +202,11 @@ func (a *SessionAgent) Run(ctx context.Context, call SessionAgentCall) error {
 	// so the range loop exits naturally without any special-casing.
 	promptErrCh := make(chan error, 1)
 	go func() {
+		if continueFromHistory {
+			promptErrCh <- ag.Continue(genCtx)
+			return
+		}
+		promptMsg := toRuntimeUserMessage(call.Prompt, call.Attachments)
 		promptErrCh <- ag.Prompt(genCtx, promptMsg.Content, promptMsg.Files...)
 	}()
 

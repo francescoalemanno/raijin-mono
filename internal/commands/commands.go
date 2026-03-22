@@ -22,6 +22,7 @@ var BuiltinCommands = []Command{
 	{Command: "/sessions", Desc: "Browse and resume a previous session"},
 	{Command: "/tree", Desc: "Navigate the session tree and branch from any previous message"},
 	{Command: "/history", Desc: "Replay all assistant output from the active session"},
+	{Command: "/retry", Desc: "Resume the active session from the last valid state"},
 	{Command: "/compact", Desc: "Summarize old context and keep recent messages (optional instructions)"},
 	{Command: "/status", Desc: "Show current model, reasoning, and context fill percentage"},
 	{Command: "/reasoning", Desc: "Select reasoning level for the default model"},

@@ -173,6 +173,9 @@ func handleBuiltin(opts Options, resolved resolvedPrompt, forceNew bool) error {
 	case cmd.name == "history":
 		return handleHistory(opts, forceNew)
 
+	case cmd.name == "retry":
+		return handleRetry(opts)
+
 	case cmd.name == "models" && len(cmd.fields) == 1:
 		return handleModels(opts)
 
@@ -401,6 +404,56 @@ func handleHistory(opts Options, forceNew bool) error {
 		fmt.Println("No session output yet")
 	}
 	return nil
+}
+
+func handleRetry(opts Options) error {
+	sess, err := openSession(opts, false, false)
+	if err != nil {
+		return err
+	}
+	if sess.Agent() == nil {
+		return errors.New("no model configured; use /add-model to set up")
+	}
+	if sess.ID() == "" {
+		return errors.New("no active session to retry")
+	}
+
+	msgs, err := sess.ListMessages(context.Background())
+	if err != nil {
+		return err
+	}
+	if len(msgs) == 0 {
+		return errors.New("no session state to retry")
+	}
+
+	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
+	r := newRendererWithOptions(os.Stderr, os.Stdout, sess.Tools(), isTTY, rendererOptions{
+		persistentSpinner: true,
+		modelLabel:        statusModelLabel(opts),
+		contextWindow:     opts.RuntimeModel.EffectiveContextWindow(),
+		initialMessages:   msgs,
+	})
+	if r.contextWindow <= 0 {
+		r.contextWindow = opts.ModelCfg.ContextWindow
+	}
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	maxTokens := opts.ModelCfg.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = libagent.DefaultMaxTokens
+	}
+
+	sess.SetEventCallback(func(event libagent.AgentEvent) {
+		r.handleEvent(event)
+	})
+
+	runErr := sess.Agent().Continue(context.Background(), agent.SessionAgentCall{
+		SessionID:       sess.ID(),
+		MaxOutputTokens: maxTokens,
+	})
+	_ = sess.EnsurePersisted()
+	return runErr
 }
 
 func replaySessionEvents(r *renderer, msgs []libagent.Message) int {
