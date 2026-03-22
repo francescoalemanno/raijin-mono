@@ -24,11 +24,11 @@ func UserShellCommand(command string) (string, []string) {
 	if runtime.GOOS == "windows" {
 		return "cmd", []string{"/C", command}
 	}
-	shell := strings.TrimSpace(os.Getenv("SHELL"))
-	if shell == "" {
-		shell = "/bin/bash"
+
+	if bashPath, err := exec.LookPath("bash"); err == nil {
+		return bashPath, []string{"-lc", command}
 	}
-	return shell, []string{"-lc", command}
+	return "/bin/bash", []string{"-lc", command}
 }
 
 // Run executes a command and cancels it robustly across platforms.

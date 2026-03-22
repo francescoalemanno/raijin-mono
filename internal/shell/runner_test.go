@@ -3,8 +3,9 @@ package shell
 import (
 	"context"
 	"errors"
+	"os/exec"
+	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 )
@@ -58,12 +59,31 @@ func pathListSeparator() rune {
 }
 
 func TestUserShellCommand(t *testing.T) {
-	t.Parallel()
+	t.Setenv("SHELL", "/bin/zsh")
+
 	path, args := UserShellCommand("echo hi")
-	if strings.TrimSpace(path) == "" {
-		t.Fatalf("expected shell path")
+
+	if runtime.GOOS == "windows" {
+		if path != "cmd" {
+			t.Fatalf("path = %q, want cmd", path)
+		}
+		if len(args) != 2 || args[0] != "/C" || args[1] != "echo hi" {
+			t.Fatalf("args = %#v, want [/C echo hi]", args)
+		}
+		return
 	}
-	if len(args) == 0 {
-		t.Fatalf("expected shell args")
+
+	wantPath := "/bin/bash"
+	if bashPath, err := exec.LookPath("bash"); err == nil {
+		wantPath = bashPath
+	}
+	if path != wantPath {
+		t.Fatalf("path = %q, want %q", path, wantPath)
+	}
+	if base := filepath.Base(path); base != "bash" && base != "bash.exe" {
+		t.Fatalf("expected bash executable, got %q", path)
+	}
+	if len(args) != 2 || args[0] != "-lc" || args[1] != "echo hi" {
+		t.Fatalf("args = %#v, want [-lc echo hi]", args)
 	}
 }
