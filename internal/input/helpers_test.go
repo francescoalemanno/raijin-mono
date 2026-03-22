@@ -1,6 +1,10 @@
 package input
 
 import (
+	"bytes"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,17 +16,7 @@ func TestParseAndLoadResourcesAttachments(t *testing.T) {
 
 	// Create a temporary test image
 	testImg := filepath.Join(tmpDir, "test.png")
-	pngData := []byte{
-		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-		0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
-		0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
-		0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
-		0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
-		0x42, 0x60, 0x82,
-	}
+	pngData := newTestPNG(t, color.NRGBA{R: 32, G: 96, B: 224, A: 128})
 	if err := os.WriteFile(testImg, pngData, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -53,21 +47,21 @@ func TestParseAndLoadResourcesAttachments(t *testing.T) {
 			input:              "check this @" + testImg,
 			wantText:           "check this @" + testImg,
 			wantAttachCount:    1,
-			wantFirstMediaType: "image/png",
+			wantFirstMediaType: "image/jpeg",
 		},
 		{
 			name:               "quoted path with spaces",
 			input:              `look at @"` + testImg + `"`,
 			wantText:           `look at @"` + testImg + `"`,
 			wantAttachCount:    1,
-			wantFirstMediaType: "image/png",
+			wantFirstMediaType: "image/jpeg",
 		},
 		{
 			name:               "single quoted path",
 			input:              `see @'` + testImg + `'`,
 			wantText:           `see @'` + testImg + `'`,
 			wantAttachCount:    1,
-			wantFirstMediaType: "image/png",
+			wantFirstMediaType: "image/jpeg",
 		},
 
 		// Text file attachments
@@ -172,6 +166,9 @@ func TestParseAndLoadResourcesAttachments(t *testing.T) {
 				if gotAttach[0].MediaType != tt.wantFirstMediaType {
 					t.Errorf("ParseAndLoadResources() first media type = %q, want %q", gotAttach[0].MediaType, tt.wantFirstMediaType)
 				}
+				if strings.HasPrefix(tt.wantFirstMediaType, "image/") && !bytes.HasPrefix(gotAttach[0].Data, []byte{0xff, 0xd8, 0xff}) {
+					t.Errorf("ParseAndLoadResources() first attachment is not JPEG data")
+				}
 			}
 		})
 	}
@@ -254,4 +251,21 @@ func TestResolveAttachmentFileTildeExpansion(t *testing.T) {
 	if string(data) != "test content" {
 		t.Errorf("File content mismatch: got %q, want %q", string(data), "test content")
 	}
+}
+
+func newTestPNG(t *testing.T, c color.NRGBA) []byte {
+	t.Helper()
+
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			img.SetNRGBA(x, y, c)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
 }

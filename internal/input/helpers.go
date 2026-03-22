@@ -83,6 +83,14 @@ func ParseAndLoadResources(input string) (string, []Attachment, error) {
 			errs = append(errs, fmt.Sprintf("failed to read %s: %s", path, err))
 			continue
 		}
+		if strings.HasPrefix(mediaType, "image/") {
+			data, err = NormalizeImageToJPEG(data)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("failed to convert %s to JPEG: %s", path, err))
+				continue
+			}
+			mediaType = "image/jpeg"
+		}
 		attachments = append(attachments, Attachment{Data: data, MediaType: mediaType, Path: pathStr})
 	}
 	if len(errs) > 0 {
