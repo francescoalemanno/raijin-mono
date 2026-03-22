@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"iter"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/fantasy"
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
@@ -155,6 +157,9 @@ func TestRunHelpIncludesPromptTemplates(t *testing.T) {
 
 	if !strings.Contains(out, "Commands:\n") {
 		t.Fatalf("expected commands section in /help output, got %q", out)
+	}
+	if !strings.Contains(out, "/retry") {
+		t.Fatalf("expected /retry in /help output, got %q", out)
 	}
 	if !strings.Contains(out, "Prompt templates:\n") {
 		t.Fatalf("expected templates section in /help output, got %q", out)
@@ -521,6 +526,143 @@ func TestHandleEditWithRunnerRejectsEmptyBuffer(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "editor buffer is empty") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+type retryTestModel struct {
+	response string
+}
+
+func retryTestAssistant(calls []libagent.ToolCallItem) *libagent.AssistantMessage {
+	am := libagent.NewAssistantMessage("", "", calls, time.UnixMilli(1))
+	am.Completed = true
+	return am
+}
+
+func (m *retryTestModel) Stream(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+	return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
+		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "txt-1"}) {
+			return
+		}
+		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "txt-1", Delta: m.response}) {
+			return
+		}
+		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "txt-1"}) {
+			return
+		}
+		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+	}), nil
+}
+
+func (m *retryTestModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
+	return nil, nil
+}
+
+func (m *retryTestModel) GenerateObject(context.Context, fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
+	return nil, nil
+}
+
+func (m *retryTestModel) StreamObject(context.Context, fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
+	return nil, nil
+}
+
+func (m *retryTestModel) Provider() string { return "mock" }
+func (m *retryTestModel) Model() string    { return "mock" }
+
+func TestRunRetryContinuesFromSanitizedSessionState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	key := bindTestContext(t)
+
+	store, err := persist.OpenStore()
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	sess, err := store.CreateEphemeral()
+	if err != nil {
+		t.Fatalf("CreateEphemeral: %v", err)
+	}
+
+	ctx := context.Background()
+	msgs := store.Messages()
+	if _, err := msgs.Create(ctx, sess.ID, &libagent.UserMessage{
+		Role:    "user",
+		Content: "start",
+	}); err != nil {
+		t.Fatalf("create user message: %v", err)
+	}
+	if _, err := msgs.Create(ctx, sess.ID, retryTestAssistant([]libagent.ToolCallItem{{
+		ID:    "call-1",
+		Name:  "read",
+		Input: `{"path":"a.txt"}`,
+	}})); err != nil {
+		t.Fatalf("create assistant tool call: %v", err)
+	}
+	if _, err := msgs.Create(ctx, sess.ID, &libagent.ToolResultMessage{
+		Role:       "toolResult",
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		Content:    "file contents",
+	}); err != nil {
+		t.Fatalf("create tool result: %v", err)
+	}
+	dangling, err := msgs.Create(ctx, sess.ID, retryTestAssistant([]libagent.ToolCallItem{{
+		ID:    "call-2",
+		Name:  "bash",
+		Input: `{"command":"pwd"}`,
+	}}))
+	if err != nil {
+		t.Fatalf("create dangling assistant tool call: %v", err)
+	}
+	bindSession(t, key, store, sess)
+
+	opts := Options{
+		RuntimeModel: libagent.RuntimeModel{
+			Model: &retryTestModel{response: "done"},
+			ModelCfg: libagent.ModelConfig{
+				Provider: "mock",
+				Model:    "mock",
+			},
+		},
+		ModelCfg: libagent.ModelConfig{
+			Provider: "mock",
+			Model:    "mock",
+		},
+	}
+
+	out := captureStdout(t, func() {
+		if err := Run(opts, "/retry"); err != nil {
+			t.Fatalf("Run(/retry): %v", err)
+		}
+	})
+	if !strings.Contains(out, "done") {
+		t.Fatalf("expected retry output, got %q", out)
+	}
+
+	reloaded, err := persist.OpenStore()
+	if err != nil {
+		t.Fatalf("OpenStore reload: %v", err)
+	}
+	if err := reloaded.OpenSession(sess.ID); err != nil {
+		t.Fatalf("OpenSession reload: %v", err)
+	}
+	got, err := reloaded.Messages().List(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("List reload: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("messages after retry = %d, want 4", len(got))
+	}
+	if got[0].GetRole() != "user" || got[1].GetRole() != "assistant" || got[2].GetRole() != "toolResult" || got[3].GetRole() != "assistant" {
+		t.Fatalf("unexpected role sequence after retry: %q, %q, %q, %q", got[0].GetRole(), got[1].GetRole(), got[2].GetRole(), got[3].GetRole())
+	}
+	if text := libagent.AssistantText(got[3].(*libagent.AssistantMessage)); text != "done" {
+		t.Fatalf("final assistant text = %q, want %q", text, "done")
+	}
+	for _, msg := range got {
+		if libagent.MessageID(msg) == libagent.MessageID(dangling) {
+			t.Fatalf("dangling assistant tool-call should have been sanitized before retry")
+		}
 	}
 }
 
