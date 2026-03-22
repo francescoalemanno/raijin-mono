@@ -57,17 +57,17 @@ type renderer struct {
 	started bool
 
 	// state
-	pending       map[string]*pendingLine // tool call ID -> pending
-	pendingInline bool
-	pendingWidth  int
-	thinking      bool
-	thinkingStart time.Time
-	thinkingLine  strings.Builder
+	pending          map[string]*pendingLine // tool call ID -> pending
+	pendingInline    bool
+	pendingWidth     int
+	thinking         bool
+	thinkingStart    time.Time
+	thinkingLine     strings.Builder
 	reasoningStarted bool // tracks if reasoning has started in current block (for first-delta trimming)
-	replyMD       *lineMarkdownRenderer
-	replyLine     strings.Builder
-	replyText     strings.Builder
-	replyStarted  bool // tracks if any reply content has been printed in current turn
+	replyMD          *lineMarkdownRenderer
+	replyLine        strings.Builder
+	replyText        strings.Builder
+	replyStarted     bool // tracks if any reply content has been printed in current turn
 
 	spinnerEnabled    bool
 	spinnerVisible    bool
