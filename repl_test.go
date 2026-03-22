@@ -300,18 +300,18 @@ func TestReplCompleterDo(t *testing.T) {
 	}
 
 	// Test with colon prefix (should return universal candidates)
-	out, prefixLen = c.Do([]rune(":help"), len(":help"))
+	out, _ = c.Do([]rune(":help"), len(":help"))
 	if len(out) == 0 {
 		t.Fatalf("expected suggestions for :help, got none")
 	}
 
 	// Test with bare token that matches universal candidates
 	// Use empty query to get all candidates
-	out, prefixLen = c.Do([]rune(""), 0)
+	_, _ = c.Do([]rune(""), 0)
 	// Empty line returns unknown token, so no suggestions
 
 	// Test with partial match to commands
-	out, prefixLen = c.Do([]rune("stat"), len("stat"))
+	out, _ = c.Do([]rune("stat"), len("stat"))
 	if len(out) == 0 {
 		t.Fatalf("expected suggestions for 'stat', got none")
 	}
