@@ -572,18 +572,6 @@ func (c *replPickerExec) Run() error {
 }
 
 func runFZFWithPrompt(mode, query, prompt string, stdin io.Reader, stdout io.Writer) (int, error) {
-	// Import from shellinit but use custom prompt
-	args := []string{"--reverse", "--border", "--no-scrollbar", "--exit-0", "--select-1", "--prompt=" + prompt}
-	if mode != "paths" {
-		// repl-complete doesn't use height for fullscreen
-	} else {
-		args = append(args, "--scheme=path")
-	}
-	if query != "" {
-		args = append(args, "--query="+query)
-	}
-	args = append(args, "--bind=tab:accept")
-
 	// We need to access shellinit.RunFZF, but it's not exported
 	// Use the completion package's FZFPicker instead
 	picker := &completion.FZFPicker{UseFullscreen: mode == "paths", Prompt: prompt}
