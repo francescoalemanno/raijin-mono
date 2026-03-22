@@ -53,3 +53,23 @@ func TestBashToolCancelStopsBackgroundChildrenQuickly(t *testing.T) {
 		t.Fatalf("tool did not return promptly after cancellation")
 	}
 }
+
+func TestBashToolIgnoresUserShellEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash tool uses cmd on windows")
+	}
+
+	t.Setenv("SHELL", "/bin/zsh")
+
+	tool := NewBashTool(nil)
+	resp, err := tool.Run(context.Background(), libagent.ToolCall{Input: `{"command":"printf '%s' \"$BASH_VERSION\""}`})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.IsError {
+		t.Fatalf("expected success response, got error: %s", resp.Content)
+	}
+	if strings.TrimSpace(resp.Content) == "" {
+		t.Fatalf("expected BASH_VERSION output, got %q", resp.Content)
+	}
+}
