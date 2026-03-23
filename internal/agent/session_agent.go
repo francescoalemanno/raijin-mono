@@ -186,7 +186,11 @@ func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueF
 	})
 
 	// Subscribe to events before starting.
-	evCh, unsub := ag.Subscribe()
+	evCh, rawUnsub := ag.Subscribe()
+	var unsubOnce sync.Once
+	unsub := func() {
+		unsubOnce.Do(rawUnsub)
+	}
 	defer unsub()
 
 	// Track per-run state.
@@ -211,23 +215,38 @@ func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueF
 		promptErrCh <- ag.Prompt(genCtx, promptMsg.Content, promptMsg.Files...)
 	}()
 
-	for event := range evCh {
-		if err := rs.handleEvent(ctx, event); err != nil {
-			// Fatal persistence error: cancel the run and drain evCh so the
-			// subscriber goroutine and libagent can unwind cleanly.
-			cancel()
-			for range evCh {
+	var promptErr error
+	for evCh != nil || promptErrCh != nil {
+		select {
+		case event, ok := <-evCh:
+			if !ok {
+				evCh = nil
+				continue
 			}
-			<-promptErrCh
-			return err
-		}
-		if cb := a.EventCallback(); cb != nil {
-			cb(event)
+			if err := rs.handleEvent(ctx, event); err != nil {
+				// Fatal persistence error: cancel the run and drain evCh so the
+				// subscriber goroutine and libagent can unwind cleanly.
+				cancel()
+				for range evCh {
+				}
+				<-promptErrCh
+				return err
+			}
+			if cb := a.EventCallback(); cb != nil {
+				cb(event)
+			}
+		case err := <-promptErrCh:
+			promptErr = err
+			promptErrCh = nil
+			// Prompt/Continue can fail before libagent starts streaming. In that
+			// case no agent loop runs, so the subscription channel will never be
+			// closed unless we unsubscribe explicitly.
+			if promptErr != nil && !ag.State().IsStreaming {
+				unsub()
+				evCh = nil
+			}
 		}
 	}
-
-	// evCh closed: libagent finished. Collect Prompt()'s return value.
-	promptErr := <-promptErrCh
 
 	if promptErr != nil {
 		if errors.Is(promptErr, context.Canceled) {
