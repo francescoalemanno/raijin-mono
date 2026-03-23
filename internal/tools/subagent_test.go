@@ -2,14 +2,11 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
-	"iter"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"charm.land/fantasy"
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -22,42 +19,6 @@ type subagentTestRuntime struct {
 
 func (r *subagentTestRuntime) Model() libagent.RuntimeModel { return r.model }
 func (r *subagentTestRuntime) Tools() []libagent.Tool       { return r.tools }
-
-type captureModel struct {
-	response string
-	call     fantasy.Call
-}
-
-func (m *captureModel) Stream(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
-	m.call = call
-	return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "txt-1"}) {
-			return
-		}
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "txt-1", Delta: m.response}) {
-			return
-		}
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "txt-1"}) {
-			return
-		}
-		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
-	}), nil
-}
-
-func (m *captureModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
-	return nil, nil
-}
-
-func (m *captureModel) GenerateObject(context.Context, fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
-	return nil, nil
-}
-
-func (m *captureModel) StreamObject(context.Context, fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
-	return nil, nil
-}
-
-func (m *captureModel) Provider() string { return "mock" }
-func (m *captureModel) Model() string    { return "mock" }
 
 func withSubagentToolCwd(t *testing.T, dir string) {
 	t.Helper()
@@ -97,7 +58,7 @@ You are isolated.`)
 		t.Fatalf("artifacts.Reload: %v", err)
 	}
 
-	model := &captureModel{response: "nested output"}
+	model := &libagent.StaticTextModel{Response: "nested output"}
 	runtime := &subagentTestRuntime{
 		model: libagent.RuntimeModel{
 			Model: model,
@@ -116,19 +77,14 @@ You are isolated.`)
 		t.Fatalf("output = %q, want %q", got, "nested output")
 	}
 
-	if len(model.call.Prompt) != 2 {
-		t.Fatalf("prompt len = %d, want 2", len(model.call.Prompt))
+	if model.PromptLen != 2 {
+		t.Fatalf("prompt len = %d, want 2", model.PromptLen)
 	}
-	raw, err := json.Marshal(model.call.Prompt)
-	if err != nil {
-		t.Fatalf("marshal prompt: %v", err)
+	if !strings.Contains(model.PromptJSON, "You are isolated.") {
+		t.Fatalf("prompt JSON missing system prompt: %s", model.PromptJSON)
 	}
-	promptJSON := string(raw)
-	if !strings.Contains(promptJSON, "You are isolated.") {
-		t.Fatalf("prompt JSON missing system prompt: %s", promptJSON)
-	}
-	if !strings.Contains(promptJSON, "hello world") {
-		t.Fatalf("prompt JSON missing user message: %s", promptJSON)
+	if !strings.Contains(model.PromptJSON, "hello world") {
+		t.Fatalf("prompt JSON missing user message: %s", model.PromptJSON)
 	}
 }
 
@@ -148,7 +104,7 @@ You are isolated.`)
 	}
 
 	runtime := &subagentTestRuntime{
-		model: libagent.RuntimeModel{Model: &captureModel{response: "unused"}},
+		model: libagent.RuntimeModel{Model: &libagent.StaticTextModel{Response: "unused"}},
 	}
 	_, err := ExecuteSubagent(context.Background(), runtime, "delegate", "hello world", nil)
 	if err == nil || !strings.Contains(err.Error(), "unknown tools: missing") {
@@ -172,7 +128,7 @@ You are isolated.`)
 	}
 
 	runtime := &subagentTestRuntime{
-		model: libagent.RuntimeModel{Model: &captureModel{response: "unused"}},
+		model: libagent.RuntimeModel{Model: &libagent.StaticTextModel{Response: "unused"}},
 	}
 	_, err := ExecuteSubagent(context.Background(), runtime, "delegate", "hello world", nil)
 	if err == nil || !strings.Contains(err.Error(), "cannot whitelist the subagent tool") {

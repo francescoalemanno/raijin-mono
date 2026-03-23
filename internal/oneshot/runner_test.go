@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"iter"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/fantasy"
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
@@ -104,6 +102,50 @@ func TestRunStatusPrintsModelAndContextFill(t *testing.T) {
 	}
 	if !strings.Contains(out, "Context: 24.0%") {
 		t.Fatalf("expected context percentage in output, got %q", out)
+	}
+}
+
+func TestRunStatusIgnoresAssistantUsageMetadata(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	key := bindTestContext(t)
+
+	store, err := persist.OpenStore()
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	sess, err := store.CreateEphemeral()
+	if err != nil {
+		t.Fatalf("CreateEphemeral: %v", err)
+	}
+	bindSession(t, key, store, sess)
+
+	msg := &libagent.AssistantMessage{
+		Role:      "assistant",
+		Timestamp: time.Now(),
+	}
+	libagent.SetAssistantUsage(msg, 95_000, 15_000, 10_000)
+	if _, err := store.Messages().Create(context.Background(), sess.ID, msg); err != nil {
+		t.Fatalf("Create assistant: %v", err)
+	}
+
+	opts := Options{
+		ModelCfg: libagent.ModelConfig{
+			Provider:      "openai",
+			Model:         "gpt-test",
+			ThinkingLevel: libagent.ThinkingLevelHigh,
+			ContextWindow: 10000,
+		},
+	}
+
+	out := captureStdout(t, func() {
+		if err := Run(opts, "/status"); err != nil {
+			t.Fatalf("Run(/status): %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "Context: 24.0%") {
+		t.Fatalf("expected approximate context percentage to ignore usage metadata, got %q", out)
 	}
 }
 
@@ -539,45 +581,11 @@ func TestHandleEditWithRunnerRejectsEmptyBuffer(t *testing.T) {
 	}
 }
 
-type retryTestModel struct {
-	response string
-}
-
 func retryTestAssistant(calls []libagent.ToolCallItem) *libagent.AssistantMessage {
 	am := libagent.NewAssistantMessage("", "", calls, time.UnixMilli(1))
 	am.Completed = true
 	return am
 }
-
-func (m *retryTestModel) Stream(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
-	return iter.Seq[fantasy.StreamPart](func(yield func(fantasy.StreamPart) bool) {
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "txt-1"}) {
-			return
-		}
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "txt-1", Delta: m.response}) {
-			return
-		}
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "txt-1"}) {
-			return
-		}
-		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
-	}), nil
-}
-
-func (m *retryTestModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
-	return nil, nil
-}
-
-func (m *retryTestModel) GenerateObject(context.Context, fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
-	return nil, nil
-}
-
-func (m *retryTestModel) StreamObject(context.Context, fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
-	return nil, nil
-}
-
-func (m *retryTestModel) Provider() string { return "mock" }
-func (m *retryTestModel) Model() string    { return "mock" }
 
 func TestRunRetryContinuesFromSanitizedSessionState(t *testing.T) {
 	home := t.TempDir()
@@ -628,7 +636,7 @@ func TestRunRetryContinuesFromSanitizedSessionState(t *testing.T) {
 
 	opts := Options{
 		RuntimeModel: libagent.RuntimeModel{
-			Model: &retryTestModel{response: "done"},
+			Model: &libagent.StaticTextModel{Response: "done"},
 			ModelCfg: libagent.ModelConfig{
 				Provider: "mock",
 				Model:    "mock",
