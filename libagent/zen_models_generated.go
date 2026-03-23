@@ -434,6 +434,6 @@ var zenGoGeneratedModels = []ModelInfo{
 // zenGoAnthropicModels lists Go models that use Anthropic API format.
 // All other Go models use OpenAI-compatible format.
 var zenGoAnthropicModels = map[string]bool{
-	"minimax-m2.7": true,
 	"minimax-m2.5": true,
+	"minimax-m2.7": true,
 }
