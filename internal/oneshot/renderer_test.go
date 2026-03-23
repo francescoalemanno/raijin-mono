@@ -98,6 +98,34 @@ func TestRendererPrintsThinkingOnReasoningStartWithoutDelta(t *testing.T) {
 	_ = stderr.String()
 }
 
+func TestRendererReasoningCompletionLabelIsExplicit(t *testing.T) {
+	var stderr bytes.Buffer
+	current := time.Unix(100, 0)
+	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, false, rendererOptions{
+		now: func() time.Time { return current },
+	})
+
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{
+			Type: "reasoning_start",
+			ID:   "reason-2",
+		},
+	})
+	current = current.Add(3 * time.Second)
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{
+			Type: "reasoning_end",
+			ID:   "reason-2",
+		},
+	})
+
+	if got := lastNonEmptyLine(stderr.String()); !strings.Contains(got, "Reasoning (3.0s)") {
+		t.Fatalf("expected explicit reasoning duration label, got %q", got)
+	}
+}
+
 func TestRendererReplyOutputFlushesOnlyOnNewlineUntilMessageEnd(t *testing.T) {
 	var stderr bytes.Buffer
 	var stdout bytes.Buffer

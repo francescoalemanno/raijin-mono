@@ -362,7 +362,7 @@ func (r *renderer) flushThinking() {
 	}
 	r.thinking = false
 	dur := r.now().Sub(r.thinkingStart)
-	r.emitStatus(renderStatusSuccess("✓"), fmt.Sprintf("Thinking (%s)", formatDuration(dur)))
+	r.emitStatus(renderStatusSuccess("✓"), fmt.Sprintf("Reasoning (%s)", formatDuration(dur)))
 }
 
 func (r *renderer) finalize() {
