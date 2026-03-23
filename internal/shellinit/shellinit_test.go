@@ -45,6 +45,20 @@ func TestCompletionsIncludeSkills(t *testing.T) {
 	}
 }
 
+func TestCompletionsIncludeSubagents(t *testing.T) {
+	lines := strings.Split(Completions(), "\n")
+	foundSubagent := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "%") {
+			foundSubagent = true
+			break
+		}
+	}
+	if !foundSubagent {
+		t.Fatalf("expected --completions output to include %%subagent entries, got %q", lines)
+	}
+}
+
 func TestCompleteSlashCommand(t *testing.T) {
 	out := Complete("/add")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
