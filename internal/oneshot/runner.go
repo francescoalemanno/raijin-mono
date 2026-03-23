@@ -23,6 +23,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/session"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
+	"github.com/francescoalemanno/raijin-mono/internal/subagents"
 	"github.com/francescoalemanno/raijin-mono/internal/substitution"
 )
 
@@ -299,6 +300,7 @@ func handleHelp() error {
 	var b strings.Builder
 	b.WriteString(commands.HelpText())
 	b.WriteString(renderTemplates())
+	b.WriteString(renderSubagents())
 	b.WriteString(renderSkills())
 	fmt.Print(b.String())
 	return nil
@@ -334,6 +336,24 @@ func renderSkills() string {
 			desc = "(no description)"
 		}
 		fmt.Fprintf(&b, "  +%-18s %s [%s]\n", skill.Name, desc, skill.Source)
+	}
+	return b.String()
+}
+
+func renderSubagents() string {
+	all := subagents.GetSubagents()
+	if len(all) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nSubagents:\n")
+	b.WriteString("  Use %name followed by a query to ask the main agent to invoke a subagent on your behalf.\n")
+	for _, subagent := range all {
+		desc := strings.TrimSpace(subagent.Description)
+		if desc == "" {
+			desc = "(no description)"
+		}
+		fmt.Fprintf(&b, "  %%%-17s %s [%s]\n", subagent.Name, desc, subagent.Source)
 	}
 	return b.String()
 }
@@ -754,6 +774,10 @@ func runPrompt(opts Options, promptText string, forceNew bool) error {
 	if err != nil {
 		return err
 	}
+	return runPromptWithSession(opts, sess, promptText)
+}
+
+func runPromptWithSession(opts Options, sess *session.Session, promptText string) error {
 	if sess.Agent() == nil || sess.ID() == "" {
 		return errors.New("no model configured; use /add-model to set up")
 	}

@@ -15,6 +15,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/francescoalemanno/raijin-mono/internal/artifacts"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
+	"github.com/francescoalemanno/raijin-mono/internal/paths"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
@@ -172,6 +173,15 @@ func TestRunHelpIncludesPromptTemplates(t *testing.T) {
 	}
 	if !strings.Contains(out, "+commit") {
 		t.Fatalf("expected embedded +commit skill in /help output, got %q", out)
+	}
+	if !strings.Contains(out, "Subagents:\n") {
+		t.Fatalf("expected subagents section in /help output, got %q", out)
+	}
+	if !strings.Contains(out, "%explorer") {
+		t.Fatalf("expected embedded %%explorer subagent in /help output, got %q", out)
+	}
+	if !strings.Contains(out, "%oracle") {
+		t.Fatalf("expected embedded %%oracle subagent in /help output, got %q", out)
 	}
 }
 
@@ -663,6 +673,65 @@ func TestRunRetryContinuesFromSanitizedSessionState(t *testing.T) {
 		if libagent.MessageID(msg) == libagent.MessageID(dangling) {
 			t.Fatalf("dangling assistant tool-call should have been sanitized before retry")
 		}
+	}
+}
+
+func TestResolvePrompt_TemplateBeatsSubagentSlashName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(project); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(prev)
+	})
+
+	if err := os.MkdirAll(filepath.Join(project, paths.ProjectPromptsDirRel), 0o755); err != nil {
+		t.Fatalf("mkdir prompts: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, paths.ProjectSubagentsDirRel), 0o755); err != nil {
+		t.Fatalf("mkdir subagents: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, paths.ProjectPromptsDirRel, "delegate.md"), []byte("template body"), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, paths.ProjectSubagentsDirRel, "delegate.md"), []byte("---\ndescription: Delegate\n---\nsubagent body"), 0o644); err != nil {
+		t.Fatalf("write subagent: %v", err)
+	}
+	if err := artifacts.Reload(); err != nil {
+		t.Fatalf("artifacts.Reload: %v", err)
+	}
+
+	resolved, err := resolvePrompt("/delegate hello")
+	if err != nil {
+		t.Fatalf("resolvePrompt: %v", err)
+	}
+	if resolved.template != "delegate" {
+		t.Fatalf("expected template resolution, got %#v", resolved)
+	}
+	if !strings.Contains(resolved.promptText, "template body") {
+		t.Fatalf("expected template expansion, got %#v", resolved)
+	}
+}
+
+func TestResolvePrompt_SubagentSyntaxPassesThroughAsPromptText(t *testing.T) {
+	resolved, err := resolvePrompt("%explorer study read.go")
+	if err != nil {
+		t.Fatalf("resolvePrompt: %v", err)
+	}
+	if resolved.builtin != nil {
+		t.Fatalf("did not expect builtin resolution, got %#v", resolved.builtin)
+	}
+	if resolved.template != "" {
+		t.Fatalf("did not expect template resolution, got %q", resolved.template)
+	}
+	if resolved.promptText != "%explorer study read.go" {
+		t.Fatalf("promptText = %q, want %%explorer syntax preserved", resolved.promptText)
 	}
 }
 
