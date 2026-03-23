@@ -48,3 +48,21 @@ func TestBuildSystemPrompt_IncludesToolParameterDetails(t *testing.T) {
 		t.Fatalf("system prompt missing optional offset parameter details")
 	}
 }
+
+func TestBuildSystemPrompt_IncludesSubagentsSection(t *testing.T) {
+	t.Parallel()
+
+	got := BuildSystemPrompt()
+	if !strings.Contains(got, "<subagents>") {
+		t.Fatalf("system prompt missing subagents section")
+	}
+	if !strings.Contains(got, `name="explorer"`) {
+		t.Fatalf("system prompt missing embedded explorer subagent")
+	}
+	if !strings.Contains(got, `name="oracle"`) {
+		t.Fatalf("system prompt missing embedded oracle subagent")
+	}
+	if !strings.Contains(got, "%subagent-name") {
+		t.Fatalf("system prompt missing subagent invocation syntax guidance")
+	}
+}

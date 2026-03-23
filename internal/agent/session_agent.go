@@ -17,6 +17,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/core"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
+	"github.com/francescoalemanno/raijin-mono/internal/subagents"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 )
 
@@ -546,7 +547,12 @@ You are an expert coding agent, operating inside Raijin a coding-agent harness.
 	}
 
 	// Append available tools.
-	allTools := tools.RegisterDefaultTools(tools.NewPathRegistry())
+	allSubagents := subagents.GetSubagents()
+	if len(allSubagents) > 0 {
+		sp.WriteString(buildSubagentsSection(allSubagents))
+	}
+
+	allTools := tools.RegisterDefaultTools(tools.NewPathRegistry(), nil)
 	if len(allTools) > 0 {
 		sp.WriteString("\n\n<tools>\nThe following tools are at your disposal\n")
 		for _, t := range allTools {
@@ -582,6 +588,26 @@ You are an expert coding agent, operating inside Raijin a coding-agent harness.
 		"\nIs git repo: " + gitStatus +
 		"\n</env>")
 
+	return sp.String()
+}
+
+func buildSubagentsSection(allSubagents []subagents.Subagent) string {
+	if len(allSubagents) == 0 {
+		return ""
+	}
+	var sp strings.Builder
+	sp.WriteString("\n\n<subagents>\n")
+	sp.WriteString("- Invoke a subagent via the \"subagent\" tool when isolated delegated work would help.\n")
+	sp.WriteString("- The user is explicitly requesting a subagent invocation when they write %subagent-name followed by a query.\n")
+	sp.WriteString("- When that syntax appears, call the named subagent on the user's behalf instead of asking the user to run it separately.\n")
+	for _, subagent := range allSubagents {
+		desc := strings.TrimSpace(subagent.Description)
+		if desc == "" {
+			desc = "(no description)"
+		}
+		sp.WriteString("  <subagent name=\"" + subagent.Name + "\">" + desc + "</subagent>\n")
+	}
+	sp.WriteString("</subagents>")
 	return sp.String()
 }
 
