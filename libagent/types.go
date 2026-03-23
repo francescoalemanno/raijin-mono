@@ -137,6 +137,17 @@ func NewAssistantMessage(text, reasoning string, toolCalls []ToolCallItem, ts ti
 	}
 }
 
+// SetAssistantUsage updates provider-reported token accounting without
+// exposing fantasy types to callers outside libagent.
+func SetAssistantUsage(m *AssistantMessage, inputTokens, cacheReadTokens, outputTokens int64) {
+	if m == nil {
+		return
+	}
+	m.Usage.InputTokens = inputTokens
+	m.Usage.CacheReadTokens = cacheReadTokens
+	m.Usage.OutputTokens = outputTokens
+}
+
 // NewToolResultMessage builds a ToolResultMessage from plain-Go data.
 func NewToolResultMessage(tr ToolResult, ts time.Time) *ToolResultMessage {
 	return &ToolResultMessage{

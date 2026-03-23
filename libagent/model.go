@@ -12,6 +12,10 @@ const (
 	DefaultContextWindow = 200000
 )
 
+// LanguageModel re-exports the runtime model interface so packages outside
+// libagent don't need to import fantasy directly.
+type LanguageModel = fantasy.LanguageModel
+
 // ModelConfig stores a selected model configuration for serialization and runtime use.
 // It uses only stdlib types so packages that don't import charm can hold it.
 type ModelConfig struct {
