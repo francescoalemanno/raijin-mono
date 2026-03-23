@@ -445,6 +445,31 @@ func handleRetry(opts Options) error {
 	if len(msgs) == 0 {
 		return errors.New("no session state to retry")
 	}
+	if last := msgs[len(msgs)-1]; last.GetRole() == "assistant" {
+		retryFromID := ""
+		for i := len(msgs) - 2; i >= 0; i-- {
+			if msgs[i].GetRole() == "assistant" {
+				continue
+			}
+			retryFromID = strings.TrimSpace(libagent.MessageID(msgs[i]))
+			if retryFromID != "" {
+				break
+			}
+		}
+		if retryFromID == "" {
+			return errors.New("no retryable state before the final assistant response")
+		}
+		if err := sess.SetLeaf(retryFromID); err != nil {
+			return err
+		}
+		msgs, err = sess.ListMessages(context.Background())
+		if err != nil {
+			return err
+		}
+		if len(msgs) == 0 {
+			return errors.New("no session state to retry")
+		}
+	}
 
 	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
 	r := newRendererWithOptions(os.Stderr, os.Stdout, sess.Tools(), isTTY, rendererOptions{

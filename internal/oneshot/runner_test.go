@@ -684,6 +684,84 @@ func TestRunRetryContinuesFromSanitizedSessionState(t *testing.T) {
 	}
 }
 
+func TestRunRetryRewindsCompletedAssistantTurn(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	key := bindTestContext(t)
+
+	store, err := persist.OpenStore()
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	sess, err := store.CreateEphemeral()
+	if err != nil {
+		t.Fatalf("CreateEphemeral: %v", err)
+	}
+
+	ctx := context.Background()
+	msgs := store.Messages()
+	user, err := msgs.Create(ctx, sess.ID, &libagent.UserMessage{
+		Role:    "user",
+		Content: "start",
+	})
+	if err != nil {
+		t.Fatalf("create user message: %v", err)
+	}
+	finalAssistant := libagent.NewAssistantMessage("done", "", nil, time.UnixMilli(1))
+	finalAssistant.Completed = true
+	if _, err := msgs.Create(ctx, sess.ID, finalAssistant); err != nil {
+		t.Fatalf("create final assistant: %v", err)
+	}
+	bindSession(t, key, store, sess)
+
+	opts := Options{
+		RuntimeModel: libagent.RuntimeModel{
+			Model: &libagent.StaticTextModel{Response: "again"},
+			ModelCfg: libagent.ModelConfig{
+				Provider: "mock",
+				Model:    "mock",
+			},
+		},
+		ModelCfg: libagent.ModelConfig{
+			Provider: "mock",
+			Model:    "mock",
+		},
+	}
+
+	out := captureStdout(t, func() {
+		if err := Run(opts, "/retry"); err != nil {
+			t.Fatalf("Run(/retry): %v", err)
+		}
+	})
+	if !strings.Contains(out, "again") {
+		t.Fatalf("expected retried output, got %q", out)
+	}
+
+	reloaded, err := persist.OpenStore()
+	if err != nil {
+		t.Fatalf("OpenStore reload: %v", err)
+	}
+	if err := reloaded.OpenSession(sess.ID); err != nil {
+		t.Fatalf("OpenSession reload: %v", err)
+	}
+	got, err := reloaded.Messages().List(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("List reload: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("messages after retry = %d, want 2", len(got))
+	}
+	if libagent.MessageID(got[0]) != libagent.MessageID(user) {
+		t.Fatalf("current branch user = %q, want %q", libagent.MessageID(got[0]), libagent.MessageID(user))
+	}
+	if got[1].GetRole() != "assistant" {
+		t.Fatalf("final role = %q, want assistant", got[1].GetRole())
+	}
+	if text := libagent.AssistantText(got[1].(*libagent.AssistantMessage)); text != "again" {
+		t.Fatalf("final assistant text = %q, want %q", text, "again")
+	}
+}
+
 func TestResolvePrompt_TemplateBeatsSubagentSlashName(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
