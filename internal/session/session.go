@@ -243,7 +243,7 @@ func (s *Session) HasHistory(ctx context.Context) (bool, error) {
 }
 
 func (s *Session) registerTools() {
-	s.agentTools = tools.RegisterDefaultTools(s.paths)
+	s.agentTools = tools.RegisterDefaultTools(s.paths, s.agent)
 	if s.agent != nil {
 		s.agent.SetTools(s.agentTools)
 	}

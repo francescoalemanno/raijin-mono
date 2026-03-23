@@ -155,7 +155,7 @@ func TestRegisterDefaultToolsPrecedence_ProjectUserBuiltin(t *testing.T) {
 		t.Fatalf("artifacts.Reload() error: %v", err)
 	}
 
-	registered := RegisterDefaultTools(NewPathRegistry())
+	registered := RegisterDefaultTools(NewPathRegistry(), nil)
 	readCount := 0
 	for _, tool := range registered {
 		if tool.Info().Name == "read" {
