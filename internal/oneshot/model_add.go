@@ -10,7 +10,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"charm.land/fantasy"
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"github.com/francescoalemanno/raijin-mono/libagent/oauth"
@@ -391,14 +390,14 @@ func applyModelAdd(opts Options, entry catalogEntry, apiKey string) error {
 	return nil
 }
 
-func verifyModelConnectivity(ctx context.Context, model fantasy.LanguageModel) error {
+func verifyModelConnectivity(ctx context.Context, model libagent.LanguageModel) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	return libagent.StreamText(ctx, model, "", "Reply with OK.", 16, func(_ string) {})
 }
 
-func forceCodexReauthentication(ctx context.Context, cat *libagent.Catalog, cb oauth.LoginCallbacks, modelID string) (fantasy.LanguageModel, error) {
+func forceCodexReauthentication(ctx context.Context, cat *libagent.Catalog, cb oauth.LoginCallbacks, modelID string) (libagent.LanguageModel, error) {
 	// Force the OAuth resolver down the refresh/login path. It will fall back
 	// to interactive login and persist fresh credentials through the catalog's
 	// onCredsUpdated hook.
