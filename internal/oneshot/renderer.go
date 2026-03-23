@@ -69,20 +69,22 @@ type renderer struct {
 	replyText        strings.Builder
 	replyStarted     bool // tracks if any reply content has been printed in current turn
 
-	spinnerEnabled    bool
-	spinnerVisible    bool
-	spinnerWidth      int
-	spinnerFrameIndex int
-	spinnerLabel      string
-	spinnerStateStart time.Time
-	turnActive        bool
-	replyStreaming    bool
-	spinnerInterval   time.Duration
-	spinnerStopCh     chan struct{}
-	spinnerDoneCh     chan struct{}
-	modelLabel        string
-	contextWindow     int64
-	contextMessages   []libagent.Message
+	spinnerEnabled      bool
+	spinnerVisible      bool
+	spinnerWidth        int
+	spinnerFrameIndex   int
+	spinnerLabel        string
+	spinnerStateStart   time.Time
+	nestedPendingInline bool
+	nestedPendingWidth  int
+	turnActive          bool
+	replyStreaming      bool
+	spinnerInterval     time.Duration
+	spinnerStopCh       chan struct{}
+	spinnerDoneCh       chan struct{}
+	modelLabel          string
+	contextWindow       int64
+	contextMessages     []libagent.Message
 }
 
 func newRenderer(stderr, stdout io.Writer, agentTools []libagent.Tool, isTTY bool) *renderer {
@@ -142,7 +144,7 @@ func (r *renderer) handleEvent(event libagent.AgentEvent) {
 		r.onToolStart(event.ToolCallID, event.ToolName, event.ToolArgs)
 
 	case libagent.AgentEventTypeToolExecutionUpdate:
-		r.onToolUpdate(event.ToolCallID, event.ToolName, event.ToolArgs)
+		r.onToolUpdate(event.ToolCallID, event.ToolName, event.ToolArgs, event.ToolResult)
 
 	case libagent.AgentEventTypeToolExecutionEnd:
 		r.onToolEnd(event.ToolCallID, event.ToolName, event.ToolArgs, event.ToolResult, event.ToolIsError)
@@ -222,10 +224,13 @@ func (r *renderer) onToolStart(id, name, input string) {
 	r.emitPending(renderStatusInfo("●"), p.label)
 }
 
-func (r *renderer) onToolUpdate(id, name, input string) {
+func (r *renderer) onToolUpdate(id, name, input, update string) {
 	if p, ok := r.pending[id]; ok {
 		if strings.TrimSpace(input) != "" {
 			p.args = input
+		}
+		if strings.TrimSpace(update) != "" {
+			r.emitNestedToolUpdate(update)
 		}
 		r.updatePendingLabel(p)
 		return
@@ -234,6 +239,9 @@ func (r *renderer) onToolUpdate(id, name, input string) {
 		return
 	}
 	r.onToolStart(id, name, input)
+	if strings.TrimSpace(update) != "" {
+		r.emitNestedToolUpdate(update)
+	}
 }
 
 func (r *renderer) onToolInputDelta(id, delta string) {
@@ -528,6 +536,7 @@ func (r *renderer) FinalText() string {
 
 // emitPending writes a pending (overwritable if TTY) status line.
 func (r *renderer) emitPending(icon, text string) {
+	r.closeNestedPendingInlineLocked()
 	if r.spinnerEnabled {
 		r.redrawSpinnerLocked()
 		return
@@ -556,6 +565,7 @@ func (r *renderer) emitPending(icon, text string) {
 
 // emitStatus writes a finalized status line (always ends with newline).
 func (r *renderer) emitStatus(icon, text string) {
+	r.closeNestedPendingInlineLocked()
 	ts := time.Now().Format("15:04:05")
 	line := fmt.Sprintf("%s %s %s", icon, renderStatusTimestamp("["+ts+"]"), text)
 	lineWidth := lipgloss.Width(line)
@@ -578,13 +588,45 @@ func (r *renderer) emitStatus(icon, text string) {
 	r.resumeSpinnerLocked(suspendedSpinner)
 }
 
+func (r *renderer) emitNestedToolUpdate(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	suspendedSpinner := r.suspendSpinnerLocked()
+	if r.isTTY && r.pendingInline {
+		fmt.Fprint(r.stderr, "\n")
+	}
+	r.pendingInline = false
+	r.pendingWidth = 0
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		rendered := oneshotMutedStyle.Render(line)
+		switch classifyNestedRendererLine(line) {
+		case nestedRendererPending:
+			r.emitNestedPendingLocked(rendered)
+		case nestedRendererFinal:
+			r.emitNestedFinalLocked(rendered)
+		default:
+			r.closeNestedPendingInlineLocked()
+			fmt.Fprintln(r.stderr, rendered)
+		}
+	}
+	r.resumeSpinnerLocked(suspendedSpinner)
+}
+
 func (r *renderer) closePendingInlineForStdout() {
 	if !r.isTTY || !r.pendingInline {
+		r.closeNestedPendingInlineLocked()
 		return
 	}
 	fmt.Fprint(r.stderr, "\n")
 	r.pendingInline = false
 	r.pendingWidth = 0
+	r.closeNestedPendingInlineLocked()
 }
 
 func (r *renderer) renderToolLabel(name, params string) string {
@@ -783,7 +825,7 @@ func (r *renderer) spinnerLineLocked() string {
 }
 
 func (r *renderer) redrawSpinnerLocked() {
-	if !r.spinnerEnabled || r.spinnerStateStart.IsZero() {
+	if !r.spinnerEnabled || r.spinnerStateStart.IsZero() || r.nestedPendingInline {
 		return
 	}
 	line := r.spinnerLineLocked()
@@ -832,6 +874,62 @@ func (r *renderer) prepareForStdoutLocked() {
 
 func (r *renderer) restoreAfterStdoutLocked() {
 	r.redrawSpinnerLocked()
+}
+
+type nestedRendererLineKind int
+
+const (
+	nestedRendererOther nestedRendererLineKind = iota
+	nestedRendererPending
+	nestedRendererFinal
+)
+
+func classifyNestedRendererLine(line string) nestedRendererLineKind {
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(trimmed, "│ ● "):
+		return nestedRendererPending
+	case strings.HasPrefix(trimmed, "│ ✓ "), strings.HasPrefix(trimmed, "│ ✗ "):
+		return nestedRendererFinal
+	default:
+		return nestedRendererOther
+	}
+}
+
+func (r *renderer) emitNestedPendingLocked(line string) {
+	r.closeNestedPendingInlineLocked()
+	width := lipgloss.Width(line)
+	if r.isTTY {
+		fmt.Fprint(r.stderr, line)
+		r.nestedPendingInline = true
+		r.nestedPendingWidth = width
+		return
+	}
+	fmt.Fprintln(r.stderr, line)
+}
+
+func (r *renderer) emitNestedFinalLocked(line string) {
+	width := lipgloss.Width(line)
+	if r.isTTY && r.nestedPendingInline {
+		pad := ""
+		if r.nestedPendingWidth > width {
+			pad = strings.Repeat(" ", r.nestedPendingWidth-width)
+		}
+		fmt.Fprintf(r.stderr, "\r%s%s\n", line, pad)
+		r.nestedPendingInline = false
+		r.nestedPendingWidth = 0
+		return
+	}
+	fmt.Fprintln(r.stderr, line)
+}
+
+func (r *renderer) closeNestedPendingInlineLocked() {
+	if !r.isTTY || !r.nestedPendingInline {
+		return
+	}
+	fmt.Fprint(r.stderr, "\n")
+	r.nestedPendingInline = false
+	r.nestedPendingWidth = 0
 }
 
 func (r *renderer) updateSpinnerPhaseLocked() {

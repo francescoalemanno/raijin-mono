@@ -691,6 +691,9 @@ func TestRendererHandlesAllAgentEventTypesAndKnownDeltaTypes(t *testing.T) {
 	if got := stderr.String(); !strings.Contains(got, "read") {
 		t.Fatalf("expected tool status in stderr, got %q", got)
 	}
+	if got := stderr.String(); !strings.Contains(got, "partial") {
+		t.Fatalf("expected tool update payload in stderr, got %q", got)
+	}
 }
 
 func lastNonEmptyLine(s string) string {
