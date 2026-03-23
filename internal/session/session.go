@@ -172,6 +172,15 @@ func (s *Session) Navigate(targetID string) (editorText string, err error) {
 	return editorText, s.syncBinding()
 }
 
+// SetLeaf moves the active session leaf to a specific stored message without
+// applying /tree navigation rewrites for user messages.
+func (s *Session) SetLeaf(targetID string) error {
+	if err := s.persistStore.SetLeaf(targetID); err != nil {
+		return err
+	}
+	return s.syncBinding()
+}
+
 // GetTree returns the flat tree entry list for the current session.
 func (s *Session) GetTree() []persist.TreeEntry {
 	return s.persistStore.GetTree()

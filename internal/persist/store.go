@@ -393,6 +393,45 @@ func (st *Store) Navigate(targetID string) (editorText string, err error) {
 	return editorText, nil
 }
 
+// SetLeaf moves the leaf pointer to targetID within the loaded session without
+// applying user-message special handling. This is used internally for retrying
+// completed turns from the last non-assistant message.
+func (st *Store) SetLeaf(targetID string) error {
+	st.mu.Lock()
+	if _, ok := st.nodes[targetID]; !ok {
+		st.mu.Unlock()
+		return errors.New("persist: set leaf: node not found")
+	}
+
+	sessionID := st.loaded
+	if sessionID == "" {
+		st.mu.Unlock()
+		return ErrSessionNotFound
+	}
+	if err := st.flushHeaderLocked(sessionID); err != nil {
+		st.mu.Unlock()
+		return err
+	}
+	entry := jEntry{
+		Typ:    jTypeNavigate,
+		LeafID: &targetID,
+	}
+	st.mu.Unlock()
+
+	if err := st.appendEntry(sessionID, entry); err != nil {
+		return err
+	}
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.leafID = targetID
+	if sess, ok := st.sessions[sessionID]; ok {
+		sess.UpdatedAt = time.Now().Unix()
+		st.sessions[sessionID] = sess
+	}
+	return nil
+}
+
 // GetTree returns all tree entries for the loaded session using Pi's
 // flattenTree algorithm: active branch first at every branch point, depth
 // increases only at branch points, connector/gutter metadata is recomputed
