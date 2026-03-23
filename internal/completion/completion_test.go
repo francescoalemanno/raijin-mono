@@ -58,6 +58,15 @@ func TestParse(t *testing.T) {
 			wantHasPrefix: true,
 		},
 		{
+			name:          "percent subagent",
+			line:          "%explorer",
+			pos:           9,
+			wantType:      TokenSubagents,
+			wantRaw:       "%explorer",
+			wantQuery:     "explorer",
+			wantHasPrefix: true,
+		},
+		{
 			name:          "mid token - no prefix returns universal",
 			line:          "hello world",
 			pos:           8,
@@ -91,6 +100,15 @@ func TestParse(t *testing.T) {
 			wantType:      TokenSkills,
 			wantRaw:       ":+skill",
 			wantQuery:     "skill",
+			wantHasPrefix: true,
+		},
+		{
+			name:          "colon + percent prefix returns subagents",
+			line:          ":%explorer",
+			pos:           10,
+			wantType:      TokenSubagents,
+			wantRaw:       ":%explorer",
+			wantQuery:     "explorer",
 			wantHasPrefix: true,
 		},
 		{
@@ -165,6 +183,12 @@ func TestParseLastToken(t *testing.T) {
 			line:     "+myskill",
 			wantType: TokenSkills,
 			wantRaw:  "+myskill",
+		},
+		{
+			name:     "last token is subagent",
+			line:     "%explorer",
+			wantType: TokenSubagents,
+			wantRaw:  "%explorer",
 		},
 	}
 
@@ -270,6 +294,12 @@ func TestGetCandidates(t *testing.T) {
 			checkNonEmpty: true,
 		},
 		{
+			name:          "subagents have percent prefix",
+			tokenType:     TokenSubagents,
+			checkPrefix:   "%",
+			checkNonEmpty: true,
+		},
+		{
 			name:          "files have at prefix",
 			tokenType:     TokenFiles,
 			checkPrefix:   "@",
@@ -349,17 +379,20 @@ func TestFilterCandidates(t *testing.T) {
 }
 
 func TestUniversalCandidates(t *testing.T) {
-	// Universal mode should include both commands and skills
+	// Universal mode should include commands, skills, and subagents.
 	token := Token{Type: TokenUniversal}
 	candidates := GetCandidates(token)
 
-	var hasCommand, hasSkill bool
+	var hasCommand, hasSkill, hasSubagent bool
 	for _, c := range candidates {
 		if strings.HasPrefix(c.Value, "/") {
 			hasCommand = true
 		}
 		if strings.HasPrefix(c.Value, "+") {
 			hasSkill = true
+		}
+		if strings.HasPrefix(c.Value, "%") {
+			hasSubagent = true
 		}
 	}
 
@@ -368,6 +401,9 @@ func TestUniversalCandidates(t *testing.T) {
 	}
 	if !hasSkill {
 		t.Error("universal candidates should include skills")
+	}
+	if !hasSubagent {
+		t.Error("universal candidates should include subagents")
 	}
 }
 
@@ -439,4 +475,31 @@ func TestPrefixNotStripped(t *testing.T) {
 			t.Errorf("skill candidate %q should have + prefix", c.Value)
 		}
 	}
+
+	subagentCandidates := subagentCandidates()
+	for _, c := range subagentCandidates {
+		if !strings.HasPrefix(c.Value, "%") {
+			t.Errorf("subagent candidate %q should have %% prefix", c.Value)
+		}
+	}
+}
+
+func TestSubagentCandidatesIncludeExplorer(t *testing.T) {
+	candidates := subagentCandidates()
+	for _, candidate := range candidates {
+		if candidate.Value == "%explorer" {
+			return
+		}
+	}
+	t.Fatalf("expected %%explorer in subagent candidates")
+}
+
+func TestSubagentCandidatesIncludeOracle(t *testing.T) {
+	candidates := subagentCandidates()
+	for _, candidate := range candidates {
+		if candidate.Value == "%oracle" {
+			return
+		}
+	}
+	t.Fatalf("expected %%oracle in subagent candidates")
 }
