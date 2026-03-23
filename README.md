@@ -102,7 +102,9 @@ Install the latest release with a single command:
 curl -fsSL https://raw.githubusercontent.com/francescoalemanno/raijin-mono/main/scripts/install.sh | sh
 ```
 
-This installs `raijin` to `~/.local/bin` and adds it to your `PATH` automatically.
+This downloads the latest matching prebuilt release archive, installs `raijin` to `~/.local/bin`, and adds it to your `PATH` automatically.
+
+Prebuilt archives are published for macOS, Linux, and Windows on `amd64` and `arm64`.
 
 Or build from source:
 

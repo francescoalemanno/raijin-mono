@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Release workflow for Raijin
+# Local tag creation helper for the GitHub Actions release workflow.
 # Usage: ./scripts/release.sh [patch|minor|major] [--dry-run]
 # Default: patch
 
@@ -51,26 +51,13 @@ if ! command -v git &> /dev/null; then
     exit 1
 fi
 
-if ! command -v gh &> /dev/null; then
-    echo -e "${RED}Error: GitHub CLI (gh) is not installed${NC}"
-    echo "Install from: https://cli.github.com/"
-    exit 1
-fi
-
-if ! gh auth status &> /dev/null; then
-    echo -e "${RED}Error: Not authenticated with GitHub CLI${NC}"
-    echo "Run: gh auth login"
-    exit 1
-fi
-
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+REPO=$(git remote get-url origin 2>/dev/null || echo "")
 if [ -z "$REPO" ]; then
-    echo -e "${RED}Error: Could not determine repository. Ensure you're in a git repository with GitHub remote.${NC}"
+    echo -e "${RED}Error: Could not determine repository. Ensure origin is configured.${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}Repository: $REPO${NC}"
-echo -e "${GREEN}GitHub CLI: authenticated${NC}"
+echo -e "${GREEN}Repository remote: $REPO${NC}"
 
 # Get current version
 print_header "Version Bump"
@@ -127,9 +114,8 @@ if [ "$DRY_RUN" = true ]; then
     echo "  1. Update $VERSION_FILE to $NEW_VERSION"
     echo "  2. Commit: 'chore(release): bump version to $NEW_VERSION'"
     echo "  3. Create tag: $TAG"
-    echo "  4. Generate improved categorized release notes"
-    echo "  5. Push commit and tag to origin"
-    echo "  6. Create GitHub release (no binary assets uploaded)"
+    echo "  4. Push commit and tag to origin"
+    echo "  5. Let .github/workflows/release.yml build binaries and publish the release"
     exit 0
 fi
 
@@ -155,107 +141,6 @@ echo -e "${GREEN}Created commit: $(git rev-parse --short HEAD)${NC}"
 git tag -a "$TAG" -m "Release $TAG"
 echo -e "${GREEN}Created annotated tag: $TAG${NC}"
 
-# Generate release notes
-print_header "Generating Release Notes"
-
-PREVIOUS_TAG=$(git describe --tags --abbrev=0 "$TAG"^ 2>/dev/null || echo "")
-
-if [ -z "$PREVIOUS_TAG" ]; then
-    RANGE="$TAG"
-    COMPARE_URL=""
-else
-    RANGE="$PREVIOUS_TAG..$TAG"
-    COMPARE_URL="https://github.com/$REPO/compare/$PREVIOUS_TAG...$TAG"
-fi
-
-COMMITS_FILE=$(mktemp)
-RELEASE_NOTES_FILE=$(mktemp)
-
-cleanup() {
-    rm -f "$COMMITS_FILE" "$RELEASE_NOTES_FILE"
-}
-trap cleanup EXIT
-
-git log --pretty=format:'%s' --no-merges $RANGE > "$COMMITS_FILE"
-TOTAL_COMMITS=$(grep -c '.' "$COMMITS_FILE" || true)
-
-# Category filters (conventional commits + aliases)
-BREAKING=$(grep -E '^[[:space:]]*(feat|fix|perf|refactor|build|docs|test|ci|chore|style)(\([^)]+\))?!:' "$COMMITS_FILE" || true)
-FEATURES=$(grep -E '^[[:space:]]*feat(\([^)]+\))?:' "$COMMITS_FILE" || true)
-FIXES=$(grep -E '^[[:space:]]*fix(\([^)]+\))?:' "$COMMITS_FILE" || true)
-PERF=$(grep -E '^[[:space:]]*perf(\([^)]+\))?:' "$COMMITS_FILE" || true)
-REFACTOR=$(grep -E '^[[:space:]]*refactor(\([^)]+\))?:' "$COMMITS_FILE" || true)
-BUILD=$(grep -E '^[[:space:]]*build(\([^)]+\))?:' "$COMMITS_FILE" || true)
-DOCS=$(grep -E '^[[:space:]]*docs(\([^)]+\))?:' "$COMMITS_FILE" || true)
-TESTS=$(grep -E '^[[:space:]]*test(\([^)]+\))?:' "$COMMITS_FILE" || true)
-CI=$(grep -E '^[[:space:]]*ci(\([^)]+\))?:' "$COMMITS_FILE" || true)
-CHORE=$(grep -E '^[[:space:]]*chore(\([^)]+\))?:' "$COMMITS_FILE" || true)
-STYLE=$(grep -E '^[[:space:]]*style(\([^)]+\))?:' "$COMMITS_FILE" || true)
-OTHER=$(grep -Ev '^[[:space:]]*(feat|fix|perf|refactor|build|docs|test|ci|chore|style)(\([^)]+\))?!?:' "$COMMITS_FILE" || true)
-
-format_section() {
-    section_title="$1"
-    section_content="$2"
-
-    if [ -n "$section_content" ]; then
-        echo "### $section_title" >> "$RELEASE_NOTES_FILE"
-        echo "$section_content" | sed -E 's/^[[:space:]]*/- /' >> "$RELEASE_NOTES_FILE"
-        echo "" >> "$RELEASE_NOTES_FILE"
-    fi
-}
-
-{
-    echo "## Release $TAG"
-    echo ""
-    echo "- **Version**: $NEW_VERSION"
-    echo "- **Total commits**: $TOTAL_COMMITS"
-    if [ -n "$PREVIOUS_TAG" ]; then
-        echo "- **From**: $PREVIOUS_TAG"
-    else
-        echo "- **From**: initial release"
-    fi
-    echo ""
-    echo "## What's Changed"
-    echo ""
-} > "$RELEASE_NOTES_FILE"
-
-format_section "⚠️ Breaking Changes" "$BREAKING"
-format_section "🚀 Features" "$FEATURES"
-format_section "🐛 Bug Fixes" "$FIXES"
-format_section "⚡ Performance" "$PERF"
-format_section "♻️ Refactoring" "$REFACTOR"
-format_section "🏗️ Build System" "$BUILD"
-format_section "📝 Documentation" "$DOCS"
-format_section "✅ Tests" "$TESTS"
-format_section "🔁 CI/CD" "$CI"
-format_section "🧹 Chores" "$CHORE"
-format_section "🎨 Style" "$STYLE"
-format_section "📦 Other" "$OTHER"
-
-if [ "$TOTAL_COMMITS" -eq 0 ]; then
-    {
-        echo "No changes since previous release."
-        echo ""
-    } >> "$RELEASE_NOTES_FILE"
-fi
-
-{
-    echo "## Installation"
-    echo ""
-    echo "Install using the official installer (builds from source of this release tag):"
-    echo ""
-    echo '```sh'
-    echo 'curl -fsSL https://raw.githubusercontent.com/francescoalemanno/raijin-mono/main/scripts/install.sh | sh'
-    echo '```'
-    echo ""
-    if [ -n "$COMPARE_URL" ]; then
-        echo "---"
-        echo "**Full Changelog**: $COMPARE_URL"
-    fi
-} >> "$RELEASE_NOTES_FILE"
-
-echo -e "${GREEN}Release notes generated${NC}"
-
 # Push commit and tag
 print_header "Pushing to Remote"
 
@@ -265,25 +150,9 @@ git push origin "$TAG"
 
 echo -e "${GREEN}Pushed to origin${NC}"
 
-# Create GitHub release (without binary upload)
-print_header "Creating GitHub Release"
-
-echo -e "${BLUE}Creating release $TAG...${NC}"
-
-if ! gh release create "$TAG" \
-    --repo "$REPO" \
-    --title "$TAG" \
-    --notes-file "$RELEASE_NOTES_FILE"; then
-    echo -e "${RED}Failed to create GitHub release${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}Created GitHub release: https://github.com/$REPO/releases/tag/$TAG${NC}"
-
 # Summary
 print_header "Release Complete"
 
 echo -e "${GREEN}Version: $NEW_VERSION${NC}"
 echo -e "${GREEN}Tag: $TAG${NC}"
-echo -e "${GREEN}Release: https://github.com/$REPO/releases/tag/$TAG${NC}"
-echo -e "${GREEN}Assets uploaded: none${NC}"
+echo -e "${GREEN}GitHub Actions will now build assets and publish the release for $TAG${NC}"

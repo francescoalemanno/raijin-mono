@@ -1,0 +1,75 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate tag matches embedded version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          file_version="$(tr -d '[:space:]' < internal/version/VERSION)"
+          if [ "$version" != "$file_version" ]; then
+            echo "tag/version mismatch: tag=$version file=$file_version" >&2
+            exit 1
+          fi
+
+      - name: Run release smoke tests
+        run: |
+          go test ./...
+          go build ./...
+
+      - name: Build release archives
+        run: ./scripts/build-release-assets.sh "${GITHUB_REF_NAME}" dist
+
+      - name: Generate release notes
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./scripts/release-notes.sh --tag "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --output dist/RELEASE_NOTES.md
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          title="$tag"
+
+          if gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "${GITHUB_REPOSITORY}" --title "$title" --notes-file dist/RELEASE_NOTES.md
+          else
+            gh release create "$tag" --repo "${GITHUB_REPOSITORY}" --title "$title" --notes-file dist/RELEASE_NOTES.md
+          fi
+
+          shopt -s nullglob
+          files=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no release assets were produced" >&2
+            exit 1
+          fi
+
+          gh release upload "$tag" "${files[@]}" --repo "${GITHUB_REPOSITORY}" --clobber

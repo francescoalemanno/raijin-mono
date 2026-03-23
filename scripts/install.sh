@@ -1,5 +1,5 @@
 #!/bin/sh
-# Raijin installer (build from latest release source)
+# Raijin installer (download the latest prebuilt release binary)
 # Usage: curl -fsSL https://raw.githubusercontent.com/francescoalemanno/raijin-mono/main/scripts/install.sh | sh
 
 set -e
@@ -19,12 +19,6 @@ if ! command -v tar >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! command -v go >/dev/null 2>&1; then
-    echo "Error: Go is required to build raijin from source"
-    echo "Install Go from: https://go.dev/dl/"
-    exit 1
-fi
-
 # Resolve latest release tag
 echo "Fetching latest release..."
 TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
@@ -36,13 +30,36 @@ if [ -z "$TAG" ]; then
     exit 1
 fi
 
-# IMPORTANT: source is fetched from the latest release tag
-SOURCE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
+OS=$(uname -s)
+ARCH=$(uname -m)
+
+case "$OS" in
+    Linux) GOOS="linux" ;;
+    Darwin) GOOS="darwin" ;;
+    *)
+        echo "Unsupported operating system: ${OS}"
+        echo "Download a matching archive manually from https://github.com/${REPO}/releases/latest"
+        exit 1
+        ;;
+esac
+
+case "$ARCH" in
+    x86_64|amd64) GOARCH="amd64" ;;
+    arm64|aarch64) GOARCH="arm64" ;;
+    *)
+        echo "Unsupported architecture: ${ARCH}"
+        echo "Download a matching archive manually from https://github.com/${REPO}/releases/latest"
+        exit 1
+        ;;
+esac
+
+ASSET_NAME="raijin_${TAG#v}_${GOOS}_${GOARCH}.tar.gz"
+ASSET_URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET_NAME}"
 
 # Create install dir if needed
 mkdir -p "$INSTALL_DIR"
 
-echo "Installing raijin ${TAG} from source to ${INSTALL_DIR}..."
+echo "Installing raijin ${TAG} (${GOOS}/${GOARCH}) to ${INSTALL_DIR}..."
 
 # Prepare temp build workspace
 TMP_DIR=$(mktemp -d)
@@ -51,31 +68,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ARCHIVE_PATH="$TMP_DIR/source.tar.gz"
+ARCHIVE_PATH="$TMP_DIR/${ASSET_NAME}"
 
-# Download source archive for latest release
-curl -fsSL "$SOURCE_URL" -o "$ARCHIVE_PATH"
-
-# Extract source
-tar -xzf "$ARCHIVE_PATH" -C "$TMP_DIR"
-
-# The extracted folder is usually raijin-mono-${TAG#v}
-SRC_DIR="$TMP_DIR/raijin-mono-${TAG#v}"
-if [ ! -d "$SRC_DIR" ]; then
-    # Fallback in case tag naming has a different format
-    SRC_DIR=$(find "$TMP_DIR" -maxdepth 1 -type d -name 'raijin-mono-*' | head -n 1)
-fi
-
-if [ -z "$SRC_DIR" ] || [ ! -d "$SRC_DIR" ]; then
-    echo "Could not locate extracted source directory."
+if ! curl -fsSL "$ASSET_URL" -o "$ARCHIVE_PATH"; then
+    echo "Could not download release asset: ${ASSET_NAME}"
+    echo "Check https://github.com/${REPO}/releases/tag/${TAG} for available assets."
     exit 1
 fi
 
-# Build binary
-(
-    cd "$SRC_DIR"
-    CGO_ENABLED=0 go build -o "$TMP_DIR/$BINARY_NAME" .
-)
+tar -xzf "$ARCHIVE_PATH" -C "$TMP_DIR"
+
+if [ ! -f "$TMP_DIR/$BINARY_NAME" ]; then
+    echo "Could not locate extracted binary."
+    exit 1
+fi
 
 chmod +x "$TMP_DIR/$BINARY_NAME"
 mv "$TMP_DIR/$BINARY_NAME" "${INSTALL_DIR}/${BINARY_NAME}"

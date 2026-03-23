@@ -2,19 +2,18 @@
 
 ## release.sh
 
-A complete local release workflow that:
+A local tag creation helper that:
 1. Bumps the version number (patch/minor/major)
 2. Commits the version change
 3. Creates an annotated git tag
-4. Generates improved categorized release notes from commits
-5. Creates a GitHub release (without binary assets)
-6. Pushes commit and tag to origin
+4. Pushes the commit and tag to origin
+5. Lets the tag-triggered GitHub Actions workflow build binaries, write release notes, and publish the GitHub release
 
 ### Prerequisites
 
 - Git configured with access to push to the repository
-- GitHub CLI (`gh`) installed and authenticated
 - Run from repository root: `./scripts/release.sh`
+- GitHub Actions enabled for the repository so pushed tags can publish releases
 
 ### Usage
 
@@ -32,9 +31,18 @@ A complete local release workflow that:
 ./scripts/release.sh patch --dry-run
 ```
 
+### GitHub Actions Release Workflow
+
+The workflow in `.github/workflows/release.yml` runs when a `v*` tag is pushed. It:
+- Runs `go test ./...`
+- Builds archives for `darwin/amd64`, `darwin/arm64`, `linux/amd64`, `linux/arm64`, `windows/amd64`, and `windows/arm64`
+- Publishes a `SHA256SUMS` manifest
+- Generates categorized release notes from conventional commit subjects
+- Creates or updates the GitHub release for that tag
+
 ### Release Notes Format
 
-The script categorizes commits by conventional commit prefix, with a release summary and install instructions:
+Release notes are generated from commit subjects and grouped into:
 - **Breaking Changes** (`type!:`)
 - **Features** (`feat:`)
 - **Bug Fixes** (`fix:`)
@@ -50,14 +58,13 @@ The script categorizes commits by conventional commit prefix, with a release sum
 
 ### Assets
 
-No binary assets are uploaded to the GitHub release.
+Binary archives and `SHA256SUMS` are uploaded to each GitHub release.
 
-Users install via `scripts/install.sh`, which downloads the source for the latest release tag and builds locally with Go.
+Users install via `scripts/install.sh`, which downloads the latest matching prebuilt archive.
 
 ### Safety Checks
 
 The script validates:
 - No uncommitted changes exist
 - The new tag does not already exist
-- GitHub CLI is installed and authenticated
 - All prerequisites are met before making any changes
