@@ -262,6 +262,7 @@ func streamAssistantResponse(
 	}
 
 	messageStarted := false
+	sawFinish := false
 
 	type textState struct {
 		text     string
@@ -426,6 +427,7 @@ func streamAssistantResponse(
 			assistantMsg.Content = append(assistantMsg.Content, tc)
 
 		case fantasy.StreamPartTypeFinish:
+			sawFinish = true
 			assistantMsg.FinishReason = part.FinishReason
 			assistantMsg.Usage = part.Usage
 
@@ -490,6 +492,9 @@ func streamAssistantResponse(
 	}
 
 	if assistantMsg.FinishReason == "" {
+		if ctx.Err() == nil && !sawFinish {
+			return nil, nil, &retryableStreamError{cause: errors.New("language model stream ended before finish")}
+		}
 		switch {
 		case ctx.Err() != nil:
 			assistantMsg.FinishReason = fantasy.FinishReasonError

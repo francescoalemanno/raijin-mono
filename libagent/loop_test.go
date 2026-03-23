@@ -227,3 +227,65 @@ func TestAgentLoop_RetriesTextStartThenError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, model.currentCalls)
 }
+
+type mockTextWithoutFinishThenSuccessModel struct {
+	currentCalls int
+}
+
+func (m *mockTextWithoutFinishThenSuccessModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+	m.currentCalls++
+	if m.currentCalls == 1 {
+		return func(yield func(fantasy.StreamPart) bool) {
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "0"})
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "0", Delta: "partial"})
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "0"})
+		}, nil
+	}
+	return func(yield func(fantasy.StreamPart) bool) {
+		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "0"})
+		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "0", Delta: "complete"})
+		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "0"})
+		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+	}, nil
+}
+
+func (m *mockTextWithoutFinishThenSuccessModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockTextWithoutFinishThenSuccessModel) GenerateObject(ctx context.Context, call fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockTextWithoutFinishThenSuccessModel) StreamObject(ctx context.Context, call fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockTextWithoutFinishThenSuccessModel) Provider() string { return "mock" }
+func (m *mockTextWithoutFinishThenSuccessModel) Model() string    { return "mock-model" }
+
+func TestAgentLoop_RetriesTextWithoutFinish(t *testing.T) {
+	model := &mockTextWithoutFinishThenSuccessModel{}
+	eventCh := make(chan AgentEvent, 64)
+	cfg := AgentLoopConfig{Model: model}
+	agentCtx := &AgentContext{}
+	prompts := []Message{&UserMessage{Role: "user", Content: "hi", Timestamp: time.Now()}}
+
+	msgs, err := AgentLoop(context.Background(), prompts, agentCtx, cfg, eventCh)
+	close(eventCh)
+	require.NoError(t, err)
+	assert.Equal(t, 2, model.currentCalls)
+
+	require.Len(t, msgs, 2)
+	assistant, ok := msgs[1].(*AssistantMessage)
+	require.True(t, ok)
+	assert.Equal(t, "complete", assistant.Content.Text())
+
+	retryEvents := 0
+	for ev := range eventCh {
+		if ev.Type == AgentEventTypeRetry {
+			retryEvents++
+		}
+	}
+	assert.Equal(t, 1, retryEvents)
+}
