@@ -45,6 +45,14 @@ type pendingLine struct {
 	endError  bool
 }
 
+type spinnerPhase int
+
+const (
+	spinnerPhaseReasoning spinnerPhase = iota
+	spinnerPhaseResponding
+	spinnerPhaseTools
+)
+
 // renderer writes streaming status lines to stderr and the final
 // assistant response to stdout.
 type renderer struct {
@@ -73,6 +81,7 @@ type renderer struct {
 	spinnerVisible      bool
 	spinnerWidth        int
 	spinnerFrameIndex   int
+	spinnerPhase        spinnerPhase
 	spinnerLabel        string
 	spinnerStateStart   time.Time
 	nestedPendingInline bool
@@ -670,6 +679,7 @@ func (r *renderer) startPersistentSpinner() {
 	}
 
 	r.spinnerStateStart = r.now()
+	r.spinnerPhase = r.spinnerPhaseLocked()
 	r.spinnerLabel = r.spinnerLabelLocked()
 	r.redrawSpinnerLocked()
 
@@ -736,6 +746,16 @@ func (r *renderer) spinnerLabelLocked() string {
 		return "Reasoning"
 	}
 	return "Reasoning"
+}
+
+func (r *renderer) spinnerPhaseLocked() spinnerPhase {
+	if len(r.pending) > 0 {
+		return spinnerPhaseTools
+	}
+	if r.replyStreaming {
+		return spinnerPhaseResponding
+	}
+	return spinnerPhaseReasoning
 }
 
 // pendingToolsLabelLocked generates a compact label for pending tools.
@@ -933,12 +953,13 @@ func (r *renderer) closeNestedPendingInlineLocked() {
 }
 
 func (r *renderer) updateSpinnerPhaseLocked() {
+	phase := r.spinnerPhaseLocked()
 	label := r.spinnerLabelLocked()
-	if label == r.spinnerLabel {
-		return
+	if phase != r.spinnerPhase {
+		r.spinnerPhase = phase
+		r.spinnerStateStart = r.now()
 	}
 	r.spinnerLabel = label
-	r.spinnerStateStart = r.now()
 }
 
 func (r *renderer) spinnerContextLabelLocked() string {

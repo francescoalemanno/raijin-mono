@@ -286,7 +286,7 @@ func TestRendererLiveSpinnerLabelPriority(t *testing.T) {
 	}
 }
 
-func TestRendererLiveSpinnerTimerResetsWhenPhaseChanges(t *testing.T) {
+func TestRendererLiveSpinnerTimerDoesNotResetDuringToolPhaseLabelChanges(t *testing.T) {
 	var stderr bytes.Buffer
 	current := time.Unix(250, 0)
 	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, true, rendererOptions{
@@ -299,34 +299,90 @@ func TestRendererLiveSpinnerTimerResetsWhenPhaseChanges(t *testing.T) {
 	r.startPersistentSpinner()
 	defer r.stopPersistentSpinner()
 
-	current = current.Add(5 * time.Second)
-	if got := spinnerElapsedForTest(r); got != "5.00s" {
-		t.Fatalf("spinner elapsed before phase change = %q, want %q", got, "5.00s")
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "tool_input_start", ID: "call-1", ToolName: "read"},
+	})
+	if got := spinnerLabelForTest(r); got != "read (0 bytes)" {
+		t.Fatalf("spinner label after tool input start = %q, want %q", got, "read (0 bytes)")
+	}
+	if got := spinnerElapsedForTest(r); got != "0.00s" {
+		t.Fatalf("spinner elapsed after entering tool phase = %q, want %q", got, "0.00s")
 	}
 
 	r.handleEvent(libagent.AgentEvent{
 		Type:  libagent.AgentEventTypeMessageUpdate,
-		Delta: &libagent.StreamDelta{Type: "text_delta", Delta: "hello"},
+		Delta: &libagent.StreamDelta{Type: "tool_input_delta", ID: "call-1", Delta: `{"path":"README.md"}`},
 	})
-	if got := spinnerLabelForTest(r); got != "Responding" {
-		t.Fatalf("spinner label after text delta = %q, want %q", got, "Responding")
+	current = current.Add(2 * time.Second)
+	if got := spinnerLabelForTest(r); got != "read (20 bytes)" {
+		t.Fatalf("spinner label after tool input delta = %q, want %q", got, "read (20 bytes)")
 	}
-	if got := spinnerElapsedForTest(r); got != "0.00s" {
-		t.Fatalf("spinner elapsed after switch to responding = %q, want %q", got, "0.00s")
+	if got := spinnerElapsedForTest(r); got != "2.00s" {
+		t.Fatalf("spinner elapsed after tool input delta = %q, want %q", got, "2.00s")
 	}
+}
 
-	current = current.Add(3 * time.Second)
+func TestRendererLiveSpinnerToolPhaseLastsUntilAllToolResultsFinish(t *testing.T) {
+	var stderr bytes.Buffer
+	current := time.Unix(260, 0)
+	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, true, rendererOptions{
+		persistentSpinner: true,
+		now:               func() time.Time { return current },
+		spinnerInterval:   time.Hour,
+		modelLabel:        "openai/gpt-test",
+		contextWindow:     10000,
+	})
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
 	r.handleEvent(libagent.AgentEvent{
 		Type:       libagent.AgentEventTypeToolExecutionStart,
-		ToolCallID: "call-read",
+		ToolCallID: "call-1",
 		ToolName:   "read",
 		ToolArgs:   `{"path":"README.md"}`,
 	})
-	if got := spinnerLabelForTest(r); got != "read (20 bytes)" {
-		t.Fatalf("spinner label after tool start = %q, want %q", got, "read (20 bytes)")
+	current = current.Add(1 * time.Second)
+	r.handleEvent(libagent.AgentEvent{
+		Type:       libagent.AgentEventTypeToolExecutionStart,
+		ToolCallID: "call-2",
+		ToolName:   "bash",
+		ToolArgs:   `{"command":"pwd"}`,
+	})
+	if got := spinnerElapsedForTest(r); got != "1.00s" {
+		t.Fatalf("spinner elapsed after second tool starts = %q, want %q", got, "1.00s")
+	}
+
+	current = current.Add(2 * time.Second)
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: &libagent.ToolResultMessage{
+			ToolCallID: "call-1",
+			ToolName:   "read",
+			Content:    "ok",
+		},
+	})
+	if got := spinnerLabelForTest(r); got != "bash (17 bytes)" {
+		t.Fatalf("spinner label with one tool still pending = %q, want %q", got, "bash (17 bytes)")
+	}
+	if got := spinnerElapsedForTest(r); got != "3.00s" {
+		t.Fatalf("spinner elapsed with one tool still pending = %q, want %q", got, "3.00s")
+	}
+
+	current = current.Add(1 * time.Second)
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: &libagent.ToolResultMessage{
+			ToolCallID: "call-2",
+			ToolName:   "bash",
+			Content:    "ok",
+		},
+	})
+	if got := spinnerLabelForTest(r); got != "Reasoning" {
+		t.Fatalf("spinner label after all tool results finish = %q, want %q", got, "Reasoning")
 	}
 	if got := spinnerElapsedForTest(r); got != "0.00s" {
-		t.Fatalf("spinner elapsed after switch to tool calling = %q, want %q", got, "0.00s")
+		t.Fatalf("spinner elapsed after all tool results finish = %q, want %q", got, "0.00s")
 	}
 }
 
