@@ -727,15 +727,15 @@ func (r *renderer) spinnerLabelLocked() string {
 		return r.pendingToolsLabelLocked()
 	}
 	if r.thinking {
-		return "Thinking"
+		return "Reasoning"
 	}
 	if r.replyStreaming {
 		return "Responding"
 	}
 	if r.turnActive || r.spinnerEnabled {
-		return "Thinking"
+		return "Reasoning"
 	}
-	return "Thinking"
+	return "Reasoning"
 }
 
 // pendingToolsLabelLocked generates a compact label for pending tools.

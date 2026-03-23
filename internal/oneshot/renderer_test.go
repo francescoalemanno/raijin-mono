@@ -94,7 +94,7 @@ func TestRendererPrintsThinkingOnReasoningStartWithoutDelta(t *testing.T) {
 		},
 	})
 
-	// The spinner handles signaling pending thinking; no explicit "Thinking" line is printed.
+	// The spinner handles signaling pending reasoning; no explicit "Reasoning" line is printed.
 	_ = stderr.String()
 }
 
@@ -193,7 +193,7 @@ func TestRendererLiveSpinnerStartsImmediatelyAndClearsOnStop(t *testing.T) {
 
 	r.startPersistentSpinner()
 
-	if !strings.Contains(stderr.String(), "Thinking") || !strings.Contains(stderr.String(), "0.00s") {
+	if !strings.Contains(stderr.String(), "Reasoning") || !strings.Contains(stderr.String(), "0.00s") {
 		t.Fatalf("expected initial live spinner output, got %q", stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "openai/gpt-test") {
@@ -255,8 +255,8 @@ func TestRendererLiveSpinnerLabelPriority(t *testing.T) {
 	defer r.stopPersistentSpinner()
 
 	r.handleEvent(libagent.AgentEvent{Type: libagent.AgentEventTypeTurnStart})
-	if got := spinnerLabelForTest(r); got != "Thinking" {
-		t.Fatalf("spinner label after turn start = %q, want %q", got, "Thinking")
+	if got := spinnerLabelForTest(r); got != "Reasoning" {
+		t.Fatalf("spinner label after turn start = %q, want %q", got, "Reasoning")
 	}
 
 	r.handleEvent(libagent.AgentEvent{
@@ -271,8 +271,8 @@ func TestRendererLiveSpinnerLabelPriority(t *testing.T) {
 		Type:  libagent.AgentEventTypeMessageUpdate,
 		Delta: &libagent.StreamDelta{Type: "reasoning_start", ID: "r1"},
 	})
-	if got := spinnerLabelForTest(r); got != "Thinking" {
-		t.Fatalf("spinner label during reasoning = %q, want %q", got, "Thinking")
+	if got := spinnerLabelForTest(r); got != "Reasoning" {
+		t.Fatalf("spinner label during reasoning = %q, want %q", got, "Reasoning")
 	}
 
 	r.handleEvent(libagent.AgentEvent{
@@ -396,8 +396,8 @@ func TestRendererLiveSpinnerKeepsFooterAfterFinalizedToolStatus(t *testing.T) {
 	if !r.spinnerVisible {
 		t.Fatalf("expected footer to remain active after finalized tool status")
 	}
-	if got := spinnerLabelForTest(r); got != "Thinking" {
-		t.Fatalf("spinner label after tool completion = %q, want %q", got, "Thinking")
+	if got := spinnerLabelForTest(r); got != "Reasoning" {
+		t.Fatalf("spinner label after tool completion = %q, want %q", got, "Reasoning")
 	}
 }
 
