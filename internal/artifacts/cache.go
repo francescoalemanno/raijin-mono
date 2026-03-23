@@ -47,10 +47,11 @@ func Merge[T any](name func(T) string, layers ...[]T) []T {
 type Kind string
 
 const (
-	KindSkill   Kind = "skill"
-	KindPrompt  Kind = "prompt"
-	KindContext Kind = "context"
-	KindTools   Kind = "tools"
+	KindSkill    Kind = "skill"
+	KindPrompt   Kind = "prompt"
+	KindSubagent Kind = "subagent"
+	KindContext  Kind = "context"
+	KindTools    Kind = "tools"
 )
 
 // Item is a cached artifact entry.
