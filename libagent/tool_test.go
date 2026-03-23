@@ -38,3 +38,49 @@ func TestAdaptTools_PropagatesResponseMetadata(t *testing.T) {
 		t.Fatalf("response metadata = %q, want diff payload", resp.Metadata)
 	}
 }
+
+type streamingTestTool struct{}
+
+func (streamingTestTool) Info() ToolInfo {
+	return ToolInfo{Name: "stream", Description: "streaming test tool"}
+}
+
+func (streamingTestTool) Run(context.Context, ToolCall) (ToolResponse, error) {
+	return NewTextResponse("final"), nil
+}
+
+func (streamingTestTool) RunStreaming(_ context.Context, _ ToolCall, onUpdate func(ToolResponse)) (ToolResponse, error) {
+	onUpdate(NewTextResponse("step 1"))
+	onUpdate(NewTextResponse("step 2"))
+	return NewTextResponse("final"), nil
+}
+
+func TestAdaptTools_StreamingToolPropagatesUpdates(t *testing.T) {
+	adapted := AdaptTools([]Tool{streamingTestTool{}})
+	if len(adapted) != 1 {
+		t.Fatalf("AdaptTools() len = %d, want 1", len(adapted))
+	}
+
+	streaming, ok := adapted[0].(StreamingAgentTool)
+	if !ok {
+		t.Fatalf("adapted tool does not implement StreamingAgentTool")
+	}
+
+	var updates []string
+	resp, err := streaming.RunStreaming(context.Background(), fantasy.ToolCall{
+		ID:    "tc1",
+		Name:  "stream",
+		Input: "{}",
+	}, func(partial fantasy.ToolResponse) {
+		updates = append(updates, partial.Content)
+	})
+	if err != nil {
+		t.Fatalf("RunStreaming() error = %v", err)
+	}
+	if got, want := strings.Join(updates, ","), "step 1,step 2"; got != want {
+		t.Fatalf("updates = %q, want %q", got, want)
+	}
+	if resp.Content != "final" {
+		t.Fatalf("final content = %q, want %q", resp.Content, "final")
+	}
+}

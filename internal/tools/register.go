@@ -5,8 +5,14 @@ import (
 	"github.com/francescoalemanno/raijin-mono/libagent"
 )
 
+// RuntimeAccessor exposes the current runtime model and registered tools.
+type RuntimeAccessor interface {
+	Model() libagent.RuntimeModel
+	Tools() []libagent.Tool
+}
+
 // RegisterDefaultTools registers all default tools.
-func RegisterDefaultTools(paths *PathRegistry) []libagent.Tool {
+func RegisterDefaultTools(paths *PathRegistry, runtime RuntimeAccessor) []libagent.Tool {
 	builtin := []libagent.Tool{
 		NewReadTool(),
 		NewGlobTool(),
@@ -14,6 +20,7 @@ func RegisterDefaultTools(paths *PathRegistry) []libagent.Tool {
 		NewEditTool(),
 		NewWriteTool(),
 		NewBashTool(paths),
+		NewSubagentTool(runtime),
 	}
 
 	plugins := LoadPluginTools()

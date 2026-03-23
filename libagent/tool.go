@@ -78,6 +78,12 @@ type Tool interface {
 	Run(ctx context.Context, call ToolCall) (ToolResponse, error)
 }
 
+// StreamingTool optionally extends Tool with incremental update support.
+type StreamingTool interface {
+	Tool
+	RunStreaming(ctx context.Context, call ToolCall, onUpdate func(ToolResponse)) (ToolResponse, error)
+}
+
 // Schema is an alias for a JSON Schema property map, matching the fantasy/schema format.
 type Schema = map[string]any
 
@@ -188,6 +194,28 @@ func (a *adaptedTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy
 	if err != nil {
 		return fantasy.ToolResponse{}, err
 	}
+	return adaptToolResponse(resp), nil
+}
+
+func (a *adaptedTool) RunStreaming(ctx context.Context, params fantasy.ToolCall, onUpdate ToolUpdateFn) (fantasy.ToolResponse, error) {
+	st, ok := a.tool.(StreamingTool)
+	if !ok {
+		return a.Run(ctx, params)
+	}
+	resp, err := st.RunStreaming(ctx, ToolCall{
+		ID:    params.ID,
+		Name:  params.Name,
+		Input: params.Input,
+	}, func(partial ToolResponse) {
+		onUpdate(adaptToolResponse(partial))
+	})
+	if err != nil {
+		return fantasy.ToolResponse{}, err
+	}
+	return adaptToolResponse(resp), nil
+}
+
+func adaptToolResponse(resp ToolResponse) fantasy.ToolResponse {
 	fr := fantasy.ToolResponse{
 		Content:  resp.Content,
 		Metadata: resp.Metadata,
@@ -198,7 +226,7 @@ func (a *adaptedTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy
 		fr.Data = resp.Data
 		fr.MediaType = resp.MediaType
 	}
-	return fr, nil
+	return fr
 }
 
 func (a *adaptedTool) ProviderOptions() fantasy.ProviderOptions { return nil }
