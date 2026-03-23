@@ -530,6 +530,8 @@ func (c *replPickerExec) Run() error {
 		prompt = "/ "
 	case completion.TokenSkills:
 		prompt = "+ "
+	case completion.TokenSubagents:
+		prompt = "% "
 	}
 
 	// Build fzf input from candidate displays
@@ -972,6 +974,8 @@ func prefixForType(t completion.TokenType) string {
 		return "/"
 	case completion.TokenSkills:
 		return "+"
+	case completion.TokenSubagents:
+		return "%"
 	default:
 		return ""
 	}
