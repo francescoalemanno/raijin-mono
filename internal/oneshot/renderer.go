@@ -945,9 +945,7 @@ func (r *renderer) spinnerContextLabelLocked() string {
 	if r.contextWindow <= 0 {
 		return "ctx ?"
 	}
-	estimatedTokens := int64(2400) + estimateConversationTokens(r.contextMessages)
-	usageTokens := latestAssistantUsageTokens(r.contextMessages)
-	usedTokens := max(estimatedTokens, usageTokens)
+	usedTokens := approximateConversationUsageTokens(r.contextMessages)
 	pct := float64(usedTokens) / float64(r.contextWindow) * 100
 	return fmt.Sprintf("ctx %.1f%%", pct)
 }

@@ -663,9 +663,7 @@ func handleStatus(opts Options, forceNew bool) error {
 		return err
 	}
 
-	estimatedTokens := int64(2400) + estimateConversationTokens(msgs)
-	usageTokens := latestAssistantUsageTokens(msgs)
-	usedTokens := max(estimatedTokens, usageTokens)
+	usedTokens := approximateConversationUsageTokens(msgs)
 
 	contextWindow := opts.RuntimeModel.EffectiveContextWindow()
 	if contextWindow <= 0 {
@@ -731,20 +729,6 @@ func formatStatusTokenCount(tokens int64) string {
 		return fmt.Sprintf("%dk", tokens/1000)
 	}
 	return fmt.Sprintf("%d", tokens)
-}
-
-func latestAssistantUsageTokens(msgs []libagent.Message) int64 {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		assistant, ok := msgs[i].(*libagent.AssistantMessage)
-		if !ok {
-			continue
-		}
-		usage := assistant.Usage.InputTokens + assistant.Usage.CacheReadTokens + assistant.Usage.OutputTokens
-		if usage > 0 {
-			return usage
-		}
-	}
-	return 0
 }
 
 // ---------------------------------------------------------------------------

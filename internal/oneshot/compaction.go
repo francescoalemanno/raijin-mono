@@ -13,6 +13,7 @@ import (
 const (
 	defaultCompactionReserveTokens    int64 = 16_384
 	defaultCompactionKeepRecentTokens int64 = 20_000
+	approximateContextOverheadTokens  int64 = 2_400
 )
 
 func normalizeReserveTokens(contextWindow, reserveTokens int64) int64 {
@@ -233,6 +234,10 @@ func estimateConversationTokens(msgs []libagent.Message) int64 {
 		total += estimateMessageTokens(msg)
 	}
 	return total
+}
+
+func approximateConversationUsageTokens(msgs []libagent.Message) int64 {
+	return approximateContextOverheadTokens + estimateConversationTokens(msgs)
 }
 
 func firstPersistedMessageID(msgs []libagent.Message) string {
