@@ -146,9 +146,9 @@ func resolveAttachmentFile(pathStr string) (path string, mediaType string, info 
 		return path, mt, info, true
 	}
 
-	// Use the stdlib mime database for registered text/* types.
+	// Normalize all registered text/* types to text/plain for attachments.
 	if mt := mime.TypeByExtension("." + strings.ToLower(ext)); mt != "" && strings.HasPrefix(mt, "text/") {
-		return path, mt, info, true
+		return path, "text/plain", info, true
 	}
 
 	// Well-known extensionless text files.
