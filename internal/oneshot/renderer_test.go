@@ -188,6 +188,31 @@ func TestRendererLiveSpinnerStartsImmediatelyAndClearsOnStop(t *testing.T) {
 	}
 }
 
+func TestRendererLiveSpinnerIgnoresAssistantUsageMetadata(t *testing.T) {
+	var stderr bytes.Buffer
+	current := time.Unix(100, 0)
+	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, true, rendererOptions{
+		persistentSpinner: true,
+		now:               func() time.Time { return current },
+		spinnerInterval:   time.Hour,
+		modelLabel:        "openai/gpt-test",
+		contextWindow:     10000,
+		initialMessages: []libagent.Message{
+			&libagent.AssistantMessage{
+				Role: "assistant",
+			},
+		},
+	})
+	libagent.SetAssistantUsage(r.contextMessages[0].(*libagent.AssistantMessage), 120_000, 0, 0)
+
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	if !strings.Contains(stderr.String(), "ctx 24.0%") {
+		t.Fatalf("expected approximate context percentage to ignore usage metadata, got %q", stderr.String())
+	}
+}
+
 func TestRendererLiveSpinnerLabelPriority(t *testing.T) {
 	var stderr bytes.Buffer
 	current := time.Unix(200, 0)
