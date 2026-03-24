@@ -31,14 +31,22 @@ type Session struct {
 
 // New creates and initializes a chat session runtime.
 func New(runtimeModel libagent.RuntimeModel) (*Session, error) {
+	return NewWithStore(runtimeModel, nil)
+}
+
+// NewWithStore creates and initializes a chat session runtime backed by store.
+func NewWithStore(runtimeModel libagent.RuntimeModel, store *persist.Store) (*Session, error) {
 	paths := tools.NewPathRegistry()
 	s := &Session{
 		paths: paths,
 	}
 
-	store, err := persist.OpenStore()
-	if err != nil {
-		return nil, fmt.Errorf("open session store: %w", err)
+	if store == nil {
+		var err error
+		store, err = persist.OpenStore()
+		if err != nil {
+			return nil, fmt.Errorf("open session store: %w", err)
+		}
 	}
 	s.persistStore = store
 
@@ -52,6 +60,11 @@ func New(runtimeModel libagent.RuntimeModel) (*Session, error) {
 	}
 
 	return s, nil
+}
+
+// NewEphemeral creates a session runtime backed by an in-memory-only store.
+func NewEphemeral(runtimeModel libagent.RuntimeModel) (*Session, error) {
+	return NewWithStore(runtimeModel, persist.NewVolatileStore())
 }
 
 func (s *Session) Agent() *agent.SessionAgent { return s.agent }
@@ -265,8 +278,14 @@ func (s *Session) HasHistory(ctx context.Context) (bool, error) {
 	return len(msgs) > 0, nil
 }
 
+// StartEphemeral creates a new unbound backend session.
+func (s *Session) StartEphemeral(ctx context.Context) error {
+	s.binding = nil
+	return s.newBackendSession(ctx)
+}
+
 func (s *Session) registerTools() {
-	s.agentTools = tools.RegisterDefaultTools(s.paths, s.agent)
+	s.agentTools = tools.RegisterDefaultTools(s.paths)
 	if s.agent != nil {
 		s.agent.SetTools(s.agentTools)
 	}

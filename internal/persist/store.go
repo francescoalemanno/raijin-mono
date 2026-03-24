@@ -145,8 +145,9 @@ type Session struct {
 // Store is the entry point for persistence. It manages a directory of
 // session journal files and keeps one loaded session tree in memory.
 type Store struct {
-	dir string
-	mu  sync.Mutex
+	dir      string
+	mu       sync.Mutex
+	volatile bool
 
 	// session index (loaded at startup from file headers)
 	sessions map[string]Session
@@ -180,6 +181,15 @@ func OpenStore() (*Store, error) {
 		return nil, err
 	}
 	return st, nil
+}
+
+// NewVolatileStore creates an in-memory-only session store.
+func NewVolatileStore() *Store {
+	return &Store{
+		sessions: make(map[string]Session),
+		nodes:    make(map[string]*treeNode),
+		volatile: true,
+	}
 }
 
 // Messages returns a libagent.MessageService backed by this store.
@@ -761,6 +771,9 @@ func (st *Store) appendEntryLocked(sessionID string, entry jEntry) error {
 
 func (st *Store) appendEntriesLocked(sessionID string, entries ...jEntry) error {
 	if len(entries) == 0 {
+		return nil
+	}
+	if st.volatile {
 		return nil
 	}
 	var data []byte
@@ -1439,6 +1452,18 @@ func (ms *messageService) List(_ context.Context, sessionID string) ([]libagent.
 
 // ListReplayItems returns the active-path replay stream, including compaction events.
 func (st *Store) ListReplayItems(sessionID string) ([]ReplayItem, error) {
+	if st.volatile {
+		msgs, err := st.Messages().List(context.Background(), sessionID)
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ReplayItem, 0, len(msgs))
+		for _, msg := range msgs {
+			items = append(items, ReplayItem{Message: msg})
+		}
+		return items, nil
+	}
+
 	st.mu.Lock()
 	needLoad := st.loaded != sessionID || (len(st.nodes) == 0 && !st.pending)
 	st.mu.Unlock()

@@ -20,6 +20,7 @@ import (
 func main() {
 	versionFlag := flag.Bool("version", false, "show version")
 	newFlag := flag.Bool("new", false, "force a new session")
+	ephemeralFlag := flag.Bool("ephemeral", false, "run a one-shot prompt without loading or persisting session history")
 	initFlag := flag.String("init", "", "print shell integration script (zsh, bash, fish)")
 	completionsFlag := flag.Bool("completions", false, "print available commands, templates, and skills for shell completion")
 	completeFlag := flag.String("complete", "", "resolve completion for a token or input line (interactive fzf)")
@@ -113,6 +114,10 @@ func main() {
 
 	oneShotText := strings.TrimSpace(strings.Join(flag.Args(), " "))
 	if oneShotText == "" {
+		if *ephemeralFlag {
+			fmt.Fprintln(os.Stderr, "--ephemeral is only supported for one-shot prompts")
+			os.Exit(1)
+		}
 		if err := oneshot.RunSubprocessREPL(os.Args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
 			os.Exit(1)
@@ -125,6 +130,7 @@ func main() {
 		ModelCfg:     modelCfg,
 		Store:        store,
 		ForceNew:     *newFlag,
+		Ephemeral:    *ephemeralFlag,
 	}
 	if err := oneshot.Run(opts, oneShotText); err != nil {
 		fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
