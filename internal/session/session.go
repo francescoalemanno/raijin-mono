@@ -227,6 +227,20 @@ func (s *Session) AppendCompaction(summary, firstKeptID string, tokensBefore int
 	return s.syncBinding()
 }
 
+func (s *Session) AppendCompactionWithEvents(start libagent.ContextCompactionEvent, summary, firstKeptID string, tokensBefore int64, end libagent.ContextCompactionEvent) error {
+	if err := s.persistStore.AppendCompactionWithEvents(start, summary, firstKeptID, tokensBefore, end); err != nil {
+		return err
+	}
+	return s.syncBinding()
+}
+
+func (s *Session) ListReplayItems() ([]persist.ReplayItem, error) {
+	if s.id == "" {
+		return nil, nil
+	}
+	return s.persistStore.ListReplayItems(s.id)
+}
+
 // EnsurePersisted flushes the session header if the current session is still
 // ephemeral (i.e. has no messages yet).
 func (s *Session) EnsurePersisted() error {
