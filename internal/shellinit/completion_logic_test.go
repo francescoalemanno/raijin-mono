@@ -45,10 +45,10 @@ func TestCompleteSelectionEmptySignal(t *testing.T) {
 		return 0, nil
 	}
 
-	// ls should return original string as-is, allowing shell to fallback
-	got := CompleteSelection("ls")
-	if got != "ls" {
-		t.Errorf("CompleteSelection(\"ls\") = %q, want \"ls\"", got)
+	// Ambiguous input should return the original string as-is when the picker emits nothing.
+	got := CompleteSelection("s")
+	if got != "s" {
+		t.Errorf("CompleteSelection(\"s\") = %q, want \"s\"", got)
 	}
 
 	// :h should return something starting with :help or similar

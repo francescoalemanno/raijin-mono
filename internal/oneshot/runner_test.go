@@ -216,15 +216,6 @@ func TestRunHelpIncludesPromptTemplates(t *testing.T) {
 	if !strings.Contains(out, "+commit") {
 		t.Fatalf("expected embedded +commit skill in /help output, got %q", out)
 	}
-	if !strings.Contains(out, "Subagents:\n") {
-		t.Fatalf("expected subagents section in /help output, got %q", out)
-	}
-	if !strings.Contains(out, "%explorer") {
-		t.Fatalf("expected embedded %%explorer subagent in /help output, got %q", out)
-	}
-	if !strings.Contains(out, "%oracle") {
-		t.Fatalf("expected embedded %%oracle subagent in /help output, got %q", out)
-	}
 }
 
 func TestRunPromptRequiresBoundContext(t *testing.T) {
@@ -238,6 +229,61 @@ func TestRunPromptRequiresBoundContext(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bound context") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunPromptEphemeralDoesNotRequireBoundContextOrPersistState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(persist.SessionBindingKeyEnv, "")
+	t.Setenv(persist.SessionBindingOwnerPIDEnv, "")
+
+	opts := Options{
+		Ephemeral: true,
+		RuntimeModel: libagent.RuntimeModel{
+			Model: &libagent.StaticTextModel{Response: "done"},
+			ModelCfg: libagent.ModelConfig{
+				Provider: "mock",
+				Model:    "mock",
+			},
+		},
+		ModelCfg: libagent.ModelConfig{
+			Provider: "mock",
+			Model:    "mock",
+		},
+	}
+
+	stdout := captureStdout(t, func() {
+		stderr := captureStderr(t, func() {
+			if err := Run(opts, "hello"); err != nil {
+				t.Fatalf("Run(ephemeral prompt): %v", err)
+			}
+		})
+		if strings.Contains(stderr, "bound context") {
+			t.Fatalf("unexpected bound-context error on stderr: %q", stderr)
+		}
+	})
+
+	if !strings.Contains(stdout, "done") {
+		t.Fatalf("expected assistant output, got %q", stdout)
+	}
+
+	sessionsDir := filepath.Join(home, ".config", "raijin", "sessions")
+	sessionMatches, err := filepath.Glob(filepath.Join(sessionsDir, "*.jsonl"))
+	if err != nil {
+		t.Fatalf("Glob sessions: %v", err)
+	}
+	if len(sessionMatches) != 0 {
+		t.Fatalf("expected no persisted sessions, got %v", sessionMatches)
+	}
+
+	bindingsDir := filepath.Join(home, ".config", "raijin", "bindings")
+	bindingMatches, err := filepath.Glob(filepath.Join(bindingsDir, "*.json"))
+	if err != nil {
+		t.Fatalf("Glob bindings: %v", err)
+	}
+	if len(bindingMatches) != 0 {
+		t.Fatalf("expected no persisted bindings, got %v", bindingMatches)
 	}
 }
 
@@ -840,7 +886,7 @@ func TestRunRetryRewindsCompletedAssistantTurn(t *testing.T) {
 	}
 }
 
-func TestResolvePrompt_TemplateBeatsSubagentSlashName(t *testing.T) {
+func TestResolvePrompt_TemplateSlashName(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	project := t.TempDir()
@@ -858,14 +904,8 @@ func TestResolvePrompt_TemplateBeatsSubagentSlashName(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(project, paths.ProjectPromptsDirRel), 0o755); err != nil {
 		t.Fatalf("mkdir prompts: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(project, paths.ProjectSubagentsDirRel), 0o755); err != nil {
-		t.Fatalf("mkdir subagents: %v", err)
-	}
 	if err := os.WriteFile(filepath.Join(project, paths.ProjectPromptsDirRel, "delegate.md"), []byte("template body"), 0o644); err != nil {
 		t.Fatalf("write prompt: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(project, paths.ProjectSubagentsDirRel, "delegate.md"), []byte("---\ndescription: Delegate\n---\nsubagent body"), 0o644); err != nil {
-		t.Fatalf("write subagent: %v", err)
 	}
 	if err := artifacts.Reload(); err != nil {
 		t.Fatalf("artifacts.Reload: %v", err)
@@ -883,7 +923,7 @@ func TestResolvePrompt_TemplateBeatsSubagentSlashName(t *testing.T) {
 	}
 }
 
-func TestResolvePrompt_SubagentSyntaxPassesThroughAsPromptText(t *testing.T) {
+func TestResolvePrompt_PercentSyntaxPassesThroughAsPromptText(t *testing.T) {
 	resolved, err := resolvePrompt("%explorer study read.go")
 	if err != nil {
 		t.Fatalf("resolvePrompt: %v", err)
@@ -895,7 +935,7 @@ func TestResolvePrompt_SubagentSyntaxPassesThroughAsPromptText(t *testing.T) {
 		t.Fatalf("did not expect template resolution, got %q", resolved.template)
 	}
 	if resolved.promptText != "%explorer study read.go" {
-		t.Fatalf("promptText = %q, want %%explorer syntax preserved", resolved.promptText)
+		t.Fatalf("promptText = %q, want literal percent syntax preserved", resolved.promptText)
 	}
 }
 

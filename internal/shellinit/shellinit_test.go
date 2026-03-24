@@ -45,17 +45,12 @@ func TestCompletionsIncludeSkills(t *testing.T) {
 	}
 }
 
-func TestCompletionsIncludeSubagents(t *testing.T) {
+func TestCompletionsDoNotIncludeSubagents(t *testing.T) {
 	lines := strings.Split(Completions(), "\n")
-	foundSubagent := false
 	for _, line := range lines {
 		if strings.HasPrefix(line, "%") {
-			foundSubagent = true
-			break
+			t.Fatalf("did not expect --completions output to include %%subagent entries, got %q", lines)
 		}
-	}
-	if !foundSubagent {
-		t.Fatalf("expected --completions output to include %%subagent entries, got %q", lines)
 	}
 }
 
