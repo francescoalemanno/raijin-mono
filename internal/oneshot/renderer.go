@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/francescoalemanno/raijin-mono/internal/compaction"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 	"golang.org/x/term"
@@ -40,6 +41,7 @@ type pendingLine struct {
 	args      string
 	rawInput  strings.Builder
 	startTime time.Time
+	executing bool
 	ended     bool
 	endResult string
 	endError  bool
@@ -173,9 +175,27 @@ func (r *renderer) handleEvent(event libagent.AgentEvent) {
 		}
 		r.redrawSpinnerLocked()
 
+	case libagent.AgentEventTypeContextCompaction:
+		r.onContextCompaction(event)
+
 	case libagent.AgentEventTypeAgentEnd:
 		r.finalize()
 	}
+}
+
+func (r *renderer) onContextCompaction(event libagent.AgentEvent) {
+	if event.ContextCompaction == nil {
+		return
+	}
+	if event.ContextCompaction.Phase == libagent.ContextCompactionPhaseEnd {
+		r.applyContextCompactionLocked(*event.ContextCompaction)
+	}
+	icon, text, ok := contextCompactionStatusParts(*event.ContextCompaction)
+	if !ok {
+		return
+	}
+	r.emitStatus(icon, text)
+	r.redrawSpinnerLocked()
 }
 
 func (r *renderer) onMessageUpdate(event libagent.AgentEvent) {
@@ -202,7 +222,7 @@ func (r *renderer) onMessageUpdate(event libagent.AgentEvent) {
 	case "reasoning_end":
 		r.flushThinking()
 	case "tool_input_start":
-		r.onToolStart(delta.ID, delta.ToolName, "")
+		r.onToolPreviewStart(delta.ID, delta.ToolName, "")
 	case "tool_input_delta":
 		r.onToolInputDelta(delta.ID, delta.Delta)
 	case "tool_input_end":
@@ -212,6 +232,10 @@ func (r *renderer) onMessageUpdate(event libagent.AgentEvent) {
 
 func (r *renderer) onToolStart(id, name, input string) {
 	if p, ok := r.pending[id]; ok {
+		p.executing = true
+		if p.startTime.IsZero() {
+			p.startTime = r.now()
+		}
 		if strings.TrimSpace(input) != "" {
 			p.args = input
 		}
@@ -223,6 +247,29 @@ func (r *renderer) onToolStart(id, name, input string) {
 		id:        id,
 		toolName:  name,
 		startTime: r.now(),
+		executing: true,
+	}
+	if strings.TrimSpace(input) != "" {
+		p.args = input
+	}
+	p.label = r.renderToolLabel(name, r.bestParams(p))
+	r.pending[id] = p
+	r.replyStreaming = false
+	r.emitPending(renderStatusInfo("●"), p.label)
+}
+
+func (r *renderer) onToolPreviewStart(id, name, input string) {
+	if p, ok := r.pending[id]; ok {
+		if strings.TrimSpace(input) != "" {
+			p.args = input
+		}
+		r.updatePendingLabel(p)
+		return
+	}
+	r.flushThinking()
+	p := &pendingLine{
+		id:       id,
+		toolName: name,
 	}
 	if strings.TrimSpace(input) != "" {
 		p.args = input
@@ -307,6 +354,7 @@ func (r *renderer) onMessageEnd(event libagent.AgentEvent) {
 		r.replyStreaming = false
 		r.flushReplyTail()
 		r.flushThinking()
+		r.clearPreviewOnlyPendingTools()
 	}
 	r.redrawSpinnerLocked()
 }
@@ -316,9 +364,22 @@ func (r *renderer) renderUserMessage(m *libagent.UserMessage) {
 		return
 	}
 	prefix := renderUserPrefix()
+	separator := renderUserSeparator()
+	printedSeparator := false
+	printSeparator := func() {
+		if printedSeparator {
+			return
+		}
+		r.prepareForStdoutLocked()
+		fmt.Fprint(r.stdout, separator)
+		fmt.Fprint(r.stdout, "\n")
+		r.restoreAfterStdoutLocked()
+		printedSeparator = true
+	}
 
 	text := strings.TrimSpace(m.Content)
 	if text != "" {
+		printSeparator()
 		r.prepareForStdoutLocked()
 		for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
 			fmt.Fprint(r.stdout, prefix)
@@ -329,6 +390,7 @@ func (r *renderer) renderUserMessage(m *libagent.UserMessage) {
 	}
 
 	for _, f := range m.Files {
+		printSeparator()
 		name := strings.TrimSpace(f.Filename)
 		if name == "" {
 			name = "(unnamed)"
@@ -380,6 +442,10 @@ func (r *renderer) finalize() {
 	r.flushCompletedTools()
 	// Finalize any remaining pending tools.
 	for id, p := range r.pending {
+		if !p.executing {
+			delete(r.pending, id)
+			continue
+		}
 		r.emitStatus(renderStatusError("✗"), p.label+" (cancelled)")
 		delete(r.pending, id)
 	}
@@ -387,7 +453,7 @@ func (r *renderer) finalize() {
 
 func (r *renderer) flushCompletedTools() {
 	for id, p := range r.pending {
-		if !p.ended {
+		if !p.executing || !p.ended {
 			continue
 		}
 		label := r.renderToolLabelForResult(p.toolName, r.bestParams(p), p.endResult, "")
@@ -397,6 +463,15 @@ func (r *renderer) flushCompletedTools() {
 			r.emitStatus(renderStatusError("✗"), label+suffix)
 		} else {
 			r.emitStatus(renderStatusSuccess("✓"), label+suffix)
+		}
+		delete(r.pending, id)
+	}
+}
+
+func (r *renderer) clearPreviewOnlyPendingTools() {
+	for id, p := range r.pending {
+		if p.executing || p.ended {
+			continue
 		}
 		delete(r.pending, id)
 	}
@@ -575,8 +650,7 @@ func (r *renderer) emitPending(icon, text string) {
 // emitStatus writes a finalized status line (always ends with newline).
 func (r *renderer) emitStatus(icon, text string) {
 	r.closeNestedPendingInlineLocked()
-	ts := time.Now().Format("15:04:05")
-	line := fmt.Sprintf("%s %s %s", icon, renderStatusTimestamp("["+ts+"]"), text)
+	line := formatStatusLine(icon, text)
 	lineWidth := lipgloss.Width(line)
 	suspendedSpinner := r.suspendSpinnerLocked()
 	if r.isTTY {
@@ -595,6 +669,60 @@ func (r *renderer) emitStatus(icon, text string) {
 	r.pendingInline = false
 	r.pendingWidth = 0
 	r.resumeSpinnerLocked(suspendedSpinner)
+}
+
+func formatStatusLine(icon, text string) string {
+	ts := time.Now().Format("15:04:05")
+	return fmt.Sprintf("%s %s %s", icon, renderStatusTimestamp("["+ts+"]"), text)
+}
+
+func contextCompactionStatusParts(ev libagent.ContextCompactionEvent) (icon, text string, ok bool) {
+	switch ev.Phase {
+	case libagent.ContextCompactionPhaseStart:
+		icon = renderStatusInfo("●")
+		if ev.Mode == libagent.ContextCompactionModeAuto {
+			text = "Auto-compacting session"
+		} else {
+			text = "Compacting session"
+		}
+		if trigger := contextCompactionTriggerLabel(ev); trigger != "" {
+			text += " (" + trigger + ")"
+		}
+		text += "…"
+		return icon, text, true
+	case libagent.ContextCompactionPhaseEnd:
+		icon = renderStatusSuccess("✓")
+		if ev.Mode == libagent.ContextCompactionModeAuto {
+			text = fmt.Sprintf("Context auto-compacted: summarized %d messages, kept %d", ev.Summarized, ev.Kept)
+		} else {
+			text = fmt.Sprintf("Context compacted: summarized %d messages, kept %d", ev.Summarized, ev.Kept)
+		}
+		return icon, text, true
+	case libagent.ContextCompactionPhaseFailed:
+		icon = renderStatusWarning("●")
+		if ev.Mode == libagent.ContextCompactionModeAuto {
+			text = "Auto-compaction failed"
+		} else {
+			text = "Compaction failed"
+		}
+		if errMsg := strings.TrimSpace(ev.ErrorMessage); errMsg != "" {
+			text += ": " + errMsg
+		}
+		return icon, text, true
+	default:
+		return "", "", false
+	}
+}
+
+func contextCompactionTriggerLabel(ev libagent.ContextCompactionEvent) string {
+	parts := make([]string, 0, 2)
+	if ev.TriggerContextPercent > 0 {
+		parts = append(parts, fmt.Sprintf("ctx %.1f%%", ev.TriggerContextPercent))
+	}
+	if ev.TriggerEstimatedTokens > 0 {
+		parts = append(parts, fmt.Sprintf("%s estimated tokens", compaction.FormatTokenCount(ev.TriggerEstimatedTokens)))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (r *renderer) emitNestedToolUpdate(text string) {
@@ -966,7 +1094,7 @@ func (r *renderer) spinnerContextLabelLocked() string {
 	if r.contextWindow <= 0 {
 		return "ctx ?"
 	}
-	usedTokens := approximateConversationUsageTokens(r.contextMessages)
+	usedTokens := compaction.ApproximateConversationUsageTokens(r.contextMessages)
 	pct := float64(usedTokens) / float64(r.contextWindow) * 100
 	return fmt.Sprintf("ctx %.1f%%", pct)
 }
@@ -976,6 +1104,26 @@ func (r *renderer) appendContextMessageLocked(msg libagent.Message) {
 		return
 	}
 	r.contextMessages = append(r.contextMessages, msg)
+}
+
+func (r *renderer) applyContextCompactionLocked(ev libagent.ContextCompactionEvent) {
+	if ev.Kept < 0 {
+		ev.Kept = 0
+	}
+	keptStart := len(r.contextMessages) - ev.Kept
+	if keptStart < 0 {
+		keptStart = 0
+	}
+	next := make([]libagent.Message, 0, 1+max(len(r.contextMessages)-keptStart, 0))
+	next = append(next, &libagent.UserMessage{
+		Role:      "user",
+		Content:   compaction.CheckpointPrefix + "(summary checkpoint)",
+		Timestamp: r.now(),
+	})
+	for _, msg := range r.contextMessages[keptStart:] {
+		next = append(next, libagent.CloneMessage(msg))
+	}
+	r.contextMessages = next
 }
 
 func formatDuration(d time.Duration) string {
