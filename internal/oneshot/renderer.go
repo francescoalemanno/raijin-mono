@@ -73,6 +73,7 @@ type renderer struct {
 	thinking         bool
 	thinkingStart    time.Time
 	thinkingLine     strings.Builder
+	thinkingSeen     strings.Builder
 	reasoningStarted bool // tracks if reasoning has started in current block (for first-delta trimming)
 	replyMD          *lineMarkdownRenderer
 	replyLine        strings.Builder
@@ -205,8 +206,13 @@ func (r *renderer) onMessageUpdate(event libagent.AgentEvent) {
 	}
 	switch delta.Type {
 	case "text_start":
-		// No-op: we only render content-bearing deltas.
+		if r.thinking {
+			r.flushThinking()
+		}
 	case "text_delta":
+		if r.thinking {
+			r.flushThinking()
+		}
 		r.replyStreaming = true
 		r.appendReplyDelta(delta.Delta)
 		r.redrawSpinnerLocked()
@@ -216,11 +222,16 @@ func (r *renderer) onMessageUpdate(event libagent.AgentEvent) {
 		r.redrawSpinnerLocked()
 	case "reasoning_start":
 		r.startThinking()
+		r.appendThinkingDelta(delta.Delta)
 	case "reasoning_delta":
 		r.startThinking()
 		r.appendThinkingDelta(delta.Delta)
 	case "reasoning_end":
-		r.flushThinking()
+		if r.thinkingLine.Len() == 0 {
+			r.flushThinking()
+		} else {
+			r.redrawSpinnerLocked()
+		}
 	case "tool_input_start":
 		r.onToolPreviewStart(delta.ID, delta.ToolName, "")
 	case "tool_input_delta":
@@ -351,6 +362,7 @@ func (r *renderer) onMessageEnd(event libagent.AgentEvent) {
 		}
 	case *libagent.AssistantMessage:
 		r.appendContextMessageLocked(m)
+		r.reconcileAssistantReasoning(m)
 		r.replyStreaming = false
 		r.flushReplyTail()
 		r.flushThinking()
@@ -424,6 +436,7 @@ func (r *renderer) startThinking() {
 	r.thinkingStart = r.now()
 	r.reasoningStarted = false
 	r.thinkingLine.Reset()
+	r.thinkingSeen.Reset()
 }
 
 func (r *renderer) flushThinking() {
@@ -499,9 +512,42 @@ func (r *renderer) appendThinkingDelta(delta string) {
 	if !r.reasoningStarted {
 		delta = strings.TrimLeft(delta, " \t\n\r")
 	}
+	if delta == "" {
+		return
+	}
 	r.reasoningStarted = true
+	r.thinkingSeen.WriteString(delta)
 	r.thinkingLine.WriteString(delta)
 	r.flushThinkingBufferedLines()
+}
+
+func (r *renderer) reconcileAssistantReasoning(m *libagent.AssistantMessage) {
+	if m == nil {
+		return
+	}
+	finalReasoning := libagent.AssistantReasoning(m)
+	if finalReasoning == "" {
+		return
+	}
+	seen := r.thinkingSeen.String()
+	if finalReasoning == seen {
+		return
+	}
+
+	switch {
+	case seen == "":
+		r.startThinking()
+		r.appendThinkingDelta(finalReasoning)
+	case strings.HasPrefix(finalReasoning, seen):
+		r.thinkingLine.WriteString(finalReasoning[len(seen):])
+		r.thinkingSeen.WriteString(finalReasoning[len(seen):])
+	default:
+		return
+	}
+
+	if !r.thinking {
+		r.flushThinkingTail()
+	}
 }
 
 func (r *renderer) flushReplyTail() {
@@ -520,10 +566,33 @@ func (r *renderer) flushThinkingTail() {
 	}
 	tail := r.thinkingLine.String()
 	r.thinkingLine.Reset()
+	tail = sanitizeReasoningTailForDisplay(tail)
 	if tail == "" {
 		return
 	}
 	r.writeThinkingLine(tail)
+}
+
+func sanitizeReasoningTailForDisplay(tail string) string {
+	tail = strings.TrimRight(tail, "\r\n")
+	if tail == "" {
+		return ""
+	}
+	last := tail[len(tail)-1]
+	if strings.ContainsRune(".!?:)]}\"'", rune(last)) {
+		return tail
+	}
+
+	lastBoundary := -1
+	for i := 0; i < len(tail); i++ {
+		if strings.ContainsRune(".!?", rune(tail[i])) {
+			lastBoundary = i
+		}
+	}
+	if lastBoundary < 0 {
+		return tail
+	}
+	return strings.TrimRight(tail[:lastBoundary+1], " \t")
 }
 
 func (r *renderer) flushBufferedLines(buf *strings.Builder, render func(string) string) {

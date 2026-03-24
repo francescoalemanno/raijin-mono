@@ -575,9 +575,19 @@ func TestRendererThinkingOutputIsMutedAndLineBuffered(t *testing.T) {
 		Type:  libagent.AgentEventTypeMessageUpdate,
 		Delta: &libagent.StreamDelta{Type: "reasoning_end", ID: "r1"},
 	})
+	if got := stdout.String(); got != expectedFirst {
+		t.Fatalf("expected buffered thinking tail to remain pending after reasoning_end, got %q", got)
+	}
+
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: &libagent.AssistantMessage{
+			Role: "assistant",
+		},
+	})
 	expectedFull := expectedFirst + thinkingMutedStyle.Render("tail") + "\n"
 	if got := stdout.String(); got != expectedFull {
-		t.Fatalf("expected buffered muted thinking tail on reasoning_end %q, got %q", expectedFull, got)
+		t.Fatalf("expected buffered muted thinking tail on assistant end %q, got %q", expectedFull, got)
 	}
 }
 
@@ -598,12 +608,69 @@ func TestRendererThinkingOutputTrimsFirstDeltaLeftWhitespace(t *testing.T) {
 		Type:  libagent.AgentEventTypeMessageUpdate,
 		Delta: &libagent.StreamDelta{Type: "reasoning_end", ID: "r2"},
 	})
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: &libagent.AssistantMessage{
+			Role: "assistant",
+		},
+	})
 
 	// First delta's leading whitespace is trimmed, but internal and trailing spacing is preserved.
 	expected := thinkingMutedStyle.Render("first line   ") + "\n" +
 		thinkingMutedStyle.Render("    second line   ") + "\n"
 	if got := stdout.String(); got != expected {
 		t.Fatalf("expected trimmed first delta output %q, got %q", expected, got)
+	}
+}
+
+func TestRendererBackfillsFinalAssistantReasoningWhenStreamWasIncomplete(t *testing.T) {
+	var stderr bytes.Buffer
+	var stdout bytes.Buffer
+	r := newRenderer(&stderr, &stdout, nil, false)
+
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "reasoning_start", ID: "r3", Delta: "The user is asking"},
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: libagent.NewAssistantMessage(
+			"4",
+			"The user is asking for 2+2. I should answer directly.",
+			nil,
+			time.Now(),
+		),
+	})
+
+	expectedThinking := thinkingMutedStyle.Render("The user is asking for 2+2. I should answer directly.") + "\n"
+	if got := stdout.String(); got != expectedThinking {
+		t.Fatalf("expected reconciled reasoning and final text, got %q", got)
+	}
+}
+
+func TestRendererThinkingTailDropsIncompleteTrailingSentenceFragment(t *testing.T) {
+	var stderr bytes.Buffer
+	var stdout bytes.Buffer
+	r := newRenderer(&stderr, &stdout, nil, false)
+
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "reasoning_start", ID: "r4"},
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "reasoning_delta", ID: "r4", Delta: "The user is asking a simple math question: 2+2. I can answer this directly without needing"},
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: &libagent.AssistantMessage{
+			Role: "assistant",
+		},
+	})
+
+	expected := thinkingMutedStyle.Render("The user is asking a simple math question: 2+2.") + "\n"
+	if got := stdout.String(); got != expected {
+		t.Fatalf("expected incomplete trailing sentence to be dropped, got %q", got)
 	}
 }
 
