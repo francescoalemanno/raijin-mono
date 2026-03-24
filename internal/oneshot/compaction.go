@@ -14,6 +14,9 @@ const (
 	defaultCompactionReserveTokens    int64 = 16_384
 	defaultCompactionKeepRecentTokens int64 = 20_000
 	approximateContextOverheadTokens  int64 = 2_400
+	autoCompactContextFillThreshold         = 60.0
+	compactionTargetFillFraction            = 0.20
+	autoCompactTokenThreshold         int64 = 150_000
 )
 
 func normalizeReserveTokens(contextWindow, reserveTokens int64) int64 {
@@ -34,13 +37,21 @@ func compactionKeepRecentTokens(contextWindow, reserveTokens int64) int64 {
 	if contextWindow <= 0 {
 		return keepRecent
 	}
-	reserve := normalizeReserveTokens(contextWindow, reserveTokens)
-	targetKeep := contextWindow - reserve
-	if targetKeep <= 0 {
-		targetKeep = contextWindow / 2
+
+	targetUsageTokens := int64(math.Floor(float64(contextWindow) * compactionTargetFillFraction))
+	if targetUsageTokens > approximateContextOverheadTokens {
+		keepRecent = targetUsageTokens - approximateContextOverheadTokens
+	} else {
+		keepRecent = max(contextWindow/5, 1)
 	}
-	if targetKeep > 0 {
-		keepRecent = min(keepRecent, targetKeep)
+
+	reserve := normalizeReserveTokens(contextWindow, reserveTokens)
+	maxKeep := contextWindow - reserve
+	if maxKeep <= 0 {
+		maxKeep = contextWindow / 2
+	}
+	if maxKeep > 0 {
+		keepRecent = min(keepRecent, maxKeep)
 	}
 	if keepRecent <= 0 {
 		return 1
@@ -238,6 +249,44 @@ func estimateConversationTokens(msgs []libagent.Message) int64 {
 
 func approximateConversationUsageTokens(msgs []libagent.Message) int64 {
 	return approximateContextOverheadTokens + estimateConversationTokens(msgs)
+}
+
+type autoCompactionWatch struct {
+	estimatedTokens int64
+	contextWindow   int64
+	contextPercent  float64
+	triggerByFill   bool
+	triggerByTokens bool
+}
+
+func newAutoCompactionWatch(msgs []libagent.Message, contextWindow int64) autoCompactionWatch {
+	watch := autoCompactionWatch{
+		estimatedTokens: approximateConversationUsageTokens(msgs),
+		contextWindow:   contextWindow,
+	}
+	if contextWindow > 0 {
+		watch.contextPercent = float64(watch.estimatedTokens) / float64(contextWindow) * 100
+		watch.triggerByFill = watch.contextPercent >= autoCompactContextFillThreshold
+	}
+	watch.triggerByTokens = watch.estimatedTokens >= autoCompactTokenThreshold
+	return watch
+}
+
+func (w autoCompactionWatch) shouldCompact() bool {
+	return w.triggerByFill || w.triggerByTokens
+}
+
+func (w autoCompactionWatch) triggerLabel() string {
+	switch {
+	case w.triggerByFill && w.triggerByTokens:
+		return fmt.Sprintf("ctx %.1f%%, %s estimated tokens", w.contextPercent, formatStatusTokenCount(w.estimatedTokens))
+	case w.triggerByFill:
+		return fmt.Sprintf("ctx %.1f%%", w.contextPercent)
+	case w.triggerByTokens:
+		return fmt.Sprintf("%s estimated tokens", formatStatusTokenCount(w.estimatedTokens))
+	default:
+		return ""
+	}
 }
 
 func firstPersistedMessageID(msgs []libagent.Message) string {

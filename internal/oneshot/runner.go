@@ -27,6 +27,59 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/substitution"
 )
 
+func effectiveContextWindow(opts Options) int64 {
+	contextWindow := opts.RuntimeModel.EffectiveContextWindow()
+	if contextWindow <= 0 {
+		contextWindow = opts.ModelCfg.ContextWindow
+	}
+	return contextWindow
+}
+
+func maybeAutoCompactSession(ctx context.Context, sess *session.Session, runtimeModel libagent.RuntimeModel, contextWindow int64, statusOut io.Writer) (bool, error) {
+	if sess == nil || sess.Agent() == nil || sess.ID() == "" {
+		return false, nil
+	}
+
+	msgs, err := sess.ListMessages(ctx)
+	if err != nil {
+		return false, err
+	}
+	if len(msgs) == 0 {
+		return false, nil
+	}
+
+	watch := newAutoCompactionWatch(msgs, contextWindow)
+	if !watch.shouldCompact() {
+		return false, nil
+	}
+
+	keepRecentTokens := compactionKeepRecentTokens(contextWindow, defaultCompactionReserveTokens)
+	cutIdx := findCompactionCutIndex(msgs, keepRecentTokens)
+	if cutIdx <= 0 || cutIdx >= len(msgs) {
+		return false, nil
+	}
+
+	if statusOut != nil {
+		fmt.Fprintf(statusOut, "%s Auto-compacting session (%s)…\n", renderStatusInfo("●"), watch.triggerLabel())
+	}
+
+	summarized, kept, err := compactSession(ctx, sess, runtimeModel, "")
+	if err != nil {
+		return false, err
+	}
+
+	if statusOut != nil {
+		fmt.Fprintf(statusOut, "%s Context auto-compacted: summarized %d messages, kept %d\n", renderStatusSuccess("✓"), summarized, kept)
+	}
+	return true, nil
+}
+
+func maybeAutoCompactSessionWithWarning(ctx context.Context, opts Options, sess *session.Session, statusOut io.Writer) {
+	if _, err := maybeAutoCompactSession(ctx, sess, opts.RuntimeModel, effectiveContextWindow(opts), statusOut); err != nil && statusOut != nil {
+		fmt.Fprintf(statusOut, "%s Auto-compaction failed: %v\n", renderStatusWarning("●"), err)
+	}
+}
+
 // Options configures a one-shot run.
 type Options struct {
 	RuntimeModel libagent.RuntimeModel
@@ -471,6 +524,13 @@ func handleRetry(opts Options) error {
 		}
 	}
 
+	maybeAutoCompactSessionWithWarning(context.Background(), opts, sess, stderrWriter)
+
+	msgs, err = sess.ListMessages(context.Background())
+	if err != nil {
+		return err
+	}
+
 	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
 	r := newRendererWithOptions(os.Stderr, os.Stdout, sess.Tools(), isTTY, rendererOptions{
 		persistentSpinner: true,
@@ -498,6 +558,10 @@ func handleRetry(opts Options) error {
 		MaxOutputTokens: maxTokens,
 	})
 	_ = sess.EnsurePersisted()
+	if runErr == nil {
+		r.stopPersistentSpinner()
+		maybeAutoCompactSessionWithWarning(context.Background(), opts, sess, stderrWriter)
+	}
 	return runErr
 }
 
@@ -690,10 +754,7 @@ func handleStatus(opts Options, forceNew bool) error {
 
 	usedTokens := approximateConversationUsageTokens(msgs)
 
-	contextWindow := opts.RuntimeModel.EffectiveContextWindow()
-	if contextWindow <= 0 {
-		contextWindow = opts.ModelCfg.ContextWindow
-	}
+	contextWindow := effectiveContextWindow(opts)
 
 	fmt.Printf("Model: %s\n", statusModelLabel(opts))
 	fmt.Printf("Reasoning: %s\n", statusReasoningLabel(opts))
@@ -791,6 +852,8 @@ func runPromptWithSession(opts Options, sess *session.Session, promptText string
 		return errors.New("no model configured; use /add-model to set up")
 	}
 
+	maybeAutoCompactSessionWithWarning(context.Background(), opts, sess, stderrWriter)
+
 	msgs, err := sess.ListMessages(context.Background())
 	if err != nil {
 		return err
@@ -840,6 +903,10 @@ func runPromptWithSession(opts Options, sess *session.Session, promptText string
 	})
 	// Always sync the binding even when the run is interrupted (e.g. Ctrl+C).
 	_ = sess.EnsurePersisted()
+	if runErr == nil {
+		r.stopPersistentSpinner()
+		maybeAutoCompactSessionWithWarning(context.Background(), opts, sess, stderrWriter)
+	}
 	return runErr
 }
 
