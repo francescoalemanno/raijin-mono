@@ -25,7 +25,6 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/session"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
-	"github.com/francescoalemanno/raijin-mono/internal/subagents"
 	"github.com/francescoalemanno/raijin-mono/internal/substitution"
 )
 
@@ -43,6 +42,7 @@ type Options struct {
 	ModelCfg     libagent.ModelConfig
 	Store        *modelconfig.ModelStore
 	ForceNew     bool
+	Ephemeral    bool
 }
 
 // Run executes a single prompt in non-interactive CLI mode.
@@ -310,7 +310,6 @@ func handleHelp() error {
 	var b strings.Builder
 	b.WriteString(commands.HelpText())
 	b.WriteString(renderTemplates())
-	b.WriteString(renderSubagents())
 	b.WriteString(renderSkills())
 	fmt.Print(b.String())
 	return nil
@@ -346,24 +345,6 @@ func renderSkills() string {
 			desc = "(no description)"
 		}
 		fmt.Fprintf(&b, "  +%-18s %s [%s]\n", skill.Name, desc, skill.Source)
-	}
-	return b.String()
-}
-
-func renderSubagents() string {
-	all := subagents.GetSubagents()
-	if len(all) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("\nSubagents:\n")
-	b.WriteString("  Use %name followed by a query to ask the main agent to invoke a subagent on your behalf.\n")
-	for _, subagent := range all {
-		desc := strings.TrimSpace(subagent.Description)
-		if desc == "" {
-			desc = "(no description)"
-		}
-		fmt.Fprintf(&b, "  %%%-17s %s [%s]\n", subagent.Name, desc, subagent.Source)
 	}
 	return b.String()
 }
@@ -786,6 +767,22 @@ func formatStatusTokenCount(tokens int64) string {
 // ---------------------------------------------------------------------------
 
 func openSession(opts Options, forceNew, createIfMissing bool) (*session.Session, error) {
+	if opts.Ephemeral {
+		sess, err := session.NewEphemeral(opts.RuntimeModel)
+		if err != nil && sess == nil {
+			return nil, err
+		}
+		if sess == nil {
+			return nil, errors.New("failed to create session")
+		}
+		if forceNew || createIfMissing {
+			if err := sess.StartEphemeral(context.Background()); err != nil {
+				return nil, err
+			}
+		}
+		return sess, nil
+	}
+
 	sess, err := session.New(opts.RuntimeModel)
 	if err != nil && sess == nil {
 		return nil, err
@@ -864,7 +861,9 @@ func runPromptWithSession(opts Options, sess *session.Session, promptText string
 		MaxOutputTokens: maxTokens,
 	})
 	// Always sync the binding even when the run is interrupted (e.g. Ctrl+C).
-	_ = sess.EnsurePersisted()
+	if !opts.Ephemeral {
+		_ = sess.EnsurePersisted()
+	}
 	return runErr
 }
 

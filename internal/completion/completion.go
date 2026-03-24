@@ -18,7 +18,6 @@ import (
 	fzfmatch "github.com/francescoalemanno/raijin-mono/internal/fzf"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
-	"github.com/francescoalemanno/raijin-mono/internal/subagents"
 	jfzf "github.com/junegunn/fzf/src"
 )
 
@@ -30,7 +29,6 @@ const (
 	TokenFiles               // @ prefix - file paths
 	TokenCommands            // / prefix - builtin commands and templates
 	TokenSkills              // + prefix - skills
-	TokenSubagents           // % prefix - subagent intents
 	TokenUniversal           // no prefix - everything combined
 )
 
@@ -98,9 +96,7 @@ func Parse(line string, pos int) Token {
 		token.Query = strings.TrimPrefix(raw, "+")
 		token.HasPrefix = true
 	case strings.HasPrefix(raw, "%"):
-		token.Type = TokenSubagents
-		token.Query = strings.TrimPrefix(raw, "%")
-		token.HasPrefix = true
+		return Token{Type: TokenUnknown}
 	case strings.HasPrefix(raw, ":"):
 		// Colon prefix: ":token" completes to ": /token" (or appropriate prefix)
 		token.HasPrefix = true
@@ -116,10 +112,9 @@ func Parse(line string, pos int) Token {
 			token.Type = TokenSkills
 			token.Query = strings.TrimPrefix(afterColon, "+")
 		case strings.HasPrefix(afterColon, "%"):
-			token.Type = TokenSubagents
-			token.Query = strings.TrimPrefix(afterColon, "%")
+			return Token{Type: TokenUnknown}
 		default:
-			// ":cmd" -> look up in universal (commands/templates/skills/subagents)
+			// ":cmd" -> look up in universal (commands/templates/skills)
 			token.Type = TokenUniversal
 			token.Query = afterColon
 		}
@@ -171,8 +166,6 @@ func GetCandidates(token Token) []Candidate {
 		return commandCandidates()
 	case TokenSkills:
 		return skillCandidates()
-	case TokenSubagents:
-		return subagentCandidates()
 	case TokenUniversal:
 		return universalCandidates()
 	default:
@@ -390,21 +383,8 @@ func skillCandidates() []Candidate {
 	return candidates
 }
 
-func subagentCandidates() []Candidate {
-	names := subagentNames()
-	candidates := make([]Candidate, len(names))
-	for i, name := range names {
-		candidates[i] = Candidate{
-			Value:     "%" + name,
-			Display:   name,
-			QueryText: name,
-		}
-	}
-	return candidates
-}
-
 func universalCandidates() []Candidate {
-	// Combine commands, templates, skills, and subagents
+	// Combine commands, templates, and skills.
 	var candidates []Candidate
 
 	// Add commands and templates (as /name)
@@ -421,15 +401,6 @@ func universalCandidates() []Candidate {
 		candidates = append(candidates, Candidate{
 			Value:     "+" + name,
 			Display:   "+" + name,
-			QueryText: name,
-		})
-	}
-
-	// Add subagents (as %name)
-	for _, name := range subagentNames() {
-		candidates = append(candidates, Candidate{
-			Value:     "%" + name,
-			Display:   "%" + name,
 			QueryText: name,
 		})
 	}
@@ -474,24 +445,6 @@ func skillNames() []string {
 	var names []string
 	for _, s := range skills.GetSkills() {
 		name := strings.TrimSpace(s.Name)
-		if name == "" {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-func subagentNames() []string {
-	seen := make(map[string]struct{})
-	var names []string
-	for _, subagent := range subagents.GetSubagents() {
-		name := strings.TrimSpace(subagent.Name)
 		if name == "" {
 			continue
 		}
@@ -563,8 +516,6 @@ func fzfArgs(token Token, picker *FZFPicker) []string {
 		args = append(args, "--prompt=/ ")
 	case TokenSkills:
 		args = append(args, "--prompt=+ ")
-	case TokenSubagents:
-		args = append(args, "--prompt=% ")
 	case TokenUniversal:
 		args = append(args, "--prompt=> ")
 	default:
@@ -654,15 +605,11 @@ func applyShellCompletion(current, selected string) string {
 // Completions returns all completable entries as newline-separated string.
 // Used for shell completion listing.
 func Completions() string {
-	// Return bare command/template names (no / prefix),
-	// skills with + prefix, and subagents with % prefix.
+	// Return bare command/template names (no / prefix) and skills with + prefix.
 	var entries []string
 	entries = append(entries, commandAndTemplateNames()...)
 	for _, name := range skillNames() {
 		entries = append(entries, "+"+name)
-	}
-	for _, name := range subagentNames() {
-		entries = append(entries, "%"+name)
 	}
 	return strings.Join(entries, "\n")
 }
