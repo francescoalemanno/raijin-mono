@@ -1,6 +1,12 @@
 package oneshot
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+const userSeparatorWidth = 24
 
 func adaptiveStyle(light, dark string) lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
@@ -29,6 +35,10 @@ var (
 
 func renderUserPrefix() string {
 	return oneshotUserPrefixStyle.Render(userPromptGlyph) + " "
+}
+
+func renderUserSeparator() string {
+	return oneshotMutedStyle.Render(strings.Repeat("─", userSeparatorWidth))
 }
 
 func renderStatusInfo(icon string) string {
