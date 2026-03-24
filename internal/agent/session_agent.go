@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -175,14 +176,25 @@ func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueF
 		maxOut = effectiveMaxOut
 	}
 
+	// Track per-run state.
+	rs := &runState{
+		agent:               a,
+		call:                call,
+		model:               model,
+		genCtx:              genCtx,
+		initialUserNotified: false,
+		messageIDs:          newMessageIDIndex(),
+	}
+
 	// Build the libagent.Agent for this run.
 	ag := libagent.NewAgent(libagent.AgentOptions{
-		RuntimeModel:    model,
-		SystemPrompt:    systemPrompt,
-		Tools:           agentTools,
-		Messages:        history,
-		ProviderOptions: providerOpts,
-		MaxOutputTokens: maxOut,
+		RuntimeModel:     model,
+		SystemPrompt:     systemPrompt,
+		Tools:            agentTools,
+		Messages:         history,
+		TransformContext: a.autoCompactTransform(call.SessionID, model, rs.messageIDs),
+		ProviderOptions:  providerOpts,
+		MaxOutputTokens:  maxOut,
 	})
 
 	// Subscribe to events before starting.
@@ -192,15 +204,6 @@ func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueF
 		unsubOnce.Do(rawUnsub)
 	}
 	defer unsub()
-
-	// Track per-run state.
-	rs := &runState{
-		agent:               a,
-		call:                call,
-		model:               model,
-		genCtx:              genCtx,
-		initialUserNotified: false,
-	}
 
 	// Run the agent prompt in a goroutine; we handle events synchronously.
 	// libagent closes evCh (via stopAllSubscribers) when the run completes,
@@ -256,7 +259,7 @@ func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueF
 			rs.currentAssistant.Completed = true
 			rs.currentAssistant.CompleteReason = "error"
 			rs.currentAssistant.CompleteMessage = promptErr.Error()
-			if err := rs.persistAssistant(ctx); err != nil {
+			if _, err := rs.persistAssistant(ctx); err != nil {
 				return err
 			}
 		}
@@ -270,7 +273,7 @@ func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueF
 			rs.currentAssistant.Completed = true
 			rs.currentAssistant.CompleteReason = "error"
 			rs.currentAssistant.CompleteMessage = rs.loopErr.Error()
-			if err := rs.persistAssistant(ctx); err != nil {
+			if _, err := rs.persistAssistant(ctx); err != nil {
 				return err
 			}
 		}
@@ -290,6 +293,7 @@ type runState struct {
 	currentAssistant    *libagent.AssistantMessage
 	textStarted         bool
 	initialUserNotified bool
+	messageIDs          *messageIDIndex
 	loopErr             error
 }
 
@@ -347,8 +351,12 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 					rs.loopErr = am.Error
 				}
 			}
-			if err := rs.persistAssistant(rs.genCtx); err != nil {
+			created, err := rs.persistAssistant(rs.genCtx)
+			if err != nil {
 				return err
+			}
+			if created != nil {
+				rs.messageIDs.Store(am, libagent.MessageID(created))
 			}
 		}
 		if trm, ok := event.Message.(*libagent.ToolResultMessage); ok {
@@ -362,9 +370,11 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 				meta.SessionID = sessionID
 			}
 			libagent.SetMessageMeta(stored, meta)
-			if _, err := rs.agent.messages.Create(rs.genCtx, sessionID, stored); err != nil {
+			created, err := rs.agent.messages.Create(rs.genCtx, sessionID, stored)
+			if err != nil {
 				return err
 			}
+			rs.messageIDs.Store(trm, libagent.MessageID(created))
 		}
 
 		if um, ok := event.Message.(*libagent.UserMessage); ok {
@@ -383,6 +393,7 @@ func (rs *runState) handleEvent(ctx context.Context, event libagent.AgentEvent) 
 				if err != nil {
 					return err
 				}
+				rs.messageIDs.Store(um, libagent.MessageID(created))
 				if !rs.initialUserNotified && rs.call.OnMessageCreated != nil {
 					rs.call.OnMessageCreated(libagent.MessageID(created))
 					rs.initialUserNotified = true
@@ -424,20 +435,65 @@ func toRuntimeUserMessage(text string, attachments []libagent.FilePart) *libagen
 	}
 }
 
-func (rs *runState) persistAssistant(ctx context.Context) error {
+func (rs *runState) persistAssistant(ctx context.Context) (libagent.Message, error) {
 	if rs.currentAssistant == nil {
-		return nil
+		return nil, nil
 	}
 	toStore := libagent.CloneMessage(rs.currentAssistant)
 	if isEmptyMessage(toStore) {
 		rs.currentAssistant = nil
-		return nil
+		return nil, nil
 	}
-	if _, err := rs.agent.messages.Create(ctx, rs.call.SessionID, toStore); err != nil {
-		return err
+	created, err := rs.agent.messages.Create(ctx, rs.call.SessionID, toStore)
+	if err != nil {
+		return nil, err
 	}
 	rs.currentAssistant = nil
-	return nil
+	return created, nil
+}
+
+type messageIDIndex struct {
+	mu  sync.RWMutex
+	ids map[uintptr]string
+}
+
+func newMessageIDIndex() *messageIDIndex {
+	return &messageIDIndex{ids: make(map[uintptr]string)}
+}
+
+func (idx *messageIDIndex) Store(msg libagent.Message, id string) {
+	if idx == nil || msg == nil || strings.TrimSpace(id) == "" {
+		return
+	}
+	key := messagePointer(msg)
+	if key == 0 {
+		return
+	}
+	idx.mu.Lock()
+	idx.ids[key] = id
+	idx.mu.Unlock()
+}
+
+func (idx *messageIDIndex) Lookup(msg libagent.Message) string {
+	if idx == nil || msg == nil {
+		return ""
+	}
+	key := messagePointer(msg)
+	if key == 0 {
+		return ""
+	}
+	idx.mu.RLock()
+	id := idx.ids[key]
+	idx.mu.RUnlock()
+	return id
+}
+
+func messagePointer(msg libagent.Message) uintptr {
+	v := reflect.ValueOf(msg)
+	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
+		return 0
+	}
+	return v.Pointer()
 }
 
 // Cancel cancels a running session.
