@@ -620,7 +620,7 @@ func TestRendererUserMessageRendersWithPrefix(t *testing.T) {
 		},
 	})
 
-	want := renderUserPrefix() + "hello\n"
+	want := renderUserSeparator() + "\n" + renderUserPrefix() + "hello\n"
 	if got := stdout.String(); got != want {
 		t.Fatalf("user replay output = %q, want %q", got, want)
 	}
@@ -712,6 +712,56 @@ func TestRendererToolExecutionEndIsNotLostWithoutToolMessageEnd(t *testing.T) {
 	}
 }
 
+func TestRendererPreviewOnlyToolIsNotMarkedCancelled(t *testing.T) {
+	var stderr bytes.Buffer
+	r := newRenderer(&stderr, &bytes.Buffer{}, nil, false)
+
+	r.handleEvent(libagent.AgentEvent{Type: libagent.AgentEventTypeTurnStart})
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "tool_input_start", ID: "preview-1", ToolName: "read"},
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: &libagent.AssistantMessage{
+			Role: "assistant",
+		},
+	})
+	r.handleEvent(libagent.AgentEvent{Type: libagent.AgentEventTypeAgentEnd})
+
+	out := stderr.String()
+	if strings.Contains(out, "(cancelled)") {
+		t.Fatalf("expected preview-only tool not to be cancelled, got %q", out)
+	}
+}
+
+func TestRendererContextCompactionUpdatesSpinnerEstimate(t *testing.T) {
+	r := newRendererWithOptions(&bytes.Buffer{}, &bytes.Buffer{}, nil, false, rendererOptions{
+		contextWindow: 10000,
+		initialMessages: []libagent.Message{
+			&libagent.UserMessage{Role: "user", Content: strings.Repeat("a", 2000)},
+			&libagent.AssistantMessage{Role: "assistant", Text: strings.Repeat("b", 2000), Completed: true},
+			&libagent.UserMessage{Role: "user", Content: strings.Repeat("c", 2000)},
+			&libagent.AssistantMessage{Role: "assistant", Text: strings.Repeat("d", 2000), Completed: true},
+		},
+	})
+
+	before := r.spinnerContextLabelLocked()
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeContextCompaction,
+		ContextCompaction: &libagent.ContextCompactionEvent{
+			Phase: libagent.ContextCompactionPhaseEnd,
+			Mode:  libagent.ContextCompactionModeAuto,
+			Kept:  1,
+		},
+	})
+	after := r.spinnerContextLabelLocked()
+
+	if before == after {
+		t.Fatalf("expected compaction to update spinner estimate, before=%q after=%q", before, after)
+	}
+}
+
 func TestRendererHandlesAllAgentEventTypesAndKnownDeltaTypes(t *testing.T) {
 	var stderr bytes.Buffer
 	var stdout bytes.Buffer
@@ -791,6 +841,17 @@ func TestRendererHandlesAllAgentEventTypesAndKnownDeltaTypes(t *testing.T) {
 	r.handleEvent(libagent.AgentEvent{
 		Type:         libagent.AgentEventTypeRetry,
 		RetryMessage: "retrying",
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeContextCompaction,
+		ContextCompaction: &libagent.ContextCompactionEvent{
+			Phase:                  libagent.ContextCompactionPhaseEnd,
+			Mode:                   libagent.ContextCompactionModeAuto,
+			TriggerEstimatedTokens: 165000,
+			TriggerContextPercent:  63.0,
+			Summarized:             100,
+			Kept:                   5,
+		},
 	})
 	r.handleEvent(libagent.AgentEvent{Type: libagent.AgentEventTypeAgentEnd})
 
