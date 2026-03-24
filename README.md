@@ -39,7 +39,7 @@ No MCP. No hidden sub-agents. No permission popups.
 - Use reusable prompt templates with `/template-name args` (for example `/amplify add a tool that checks Jira status`)
 - Fork a conversation from any previous user prompt with `/tree`
 - Resume old chats with `/sessions`
-- Compact long history with `/compact` (it will not auto-run on context overflow, you manage your context)
+- Compact long history with `/compact` or let Raijin auto-compact once the session reaches 60% estimated context fill or 150k estimated tokens, targeting roughly 20% usage after compaction
 
 Raijin runs in one-shot CLI mode and supports prompt features such as attachments, skills, shell substitution, and templates.
 
