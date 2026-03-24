@@ -1,5 +1,5 @@
 ---
-description: Create or update a Raijin extension (skill, plugin tool, or prompt template)
+description: Create or update a Raijin extension (skill, custom tool, prompt template, or subagent)
 ---
 The user wants to create or modify a Raijin extension. Their request is:
 
@@ -15,16 +15,19 @@ $@
 
 | Type | Use when the user wants to… | Skill to load |
 |------|------------------------------|---------------|
-| **Skill** | Teach the LLM a reusable workflow, checklist, or recipe it follows step-by-step. No code — just structured instructions the model executes. | `building-skills` |
-| **Plugin tool** | Give the LLM a new callable tool: fetch data, run a script, query an API, interact with a service. Implemented as an executable. | `creating-plugins` |
-| **Prompt template** | Create a reusable starting prompt the user invokes with `/name [args]`. Supports positional args, tool restrictions, and `{{VAR}}` substitutions. | `building-prompt-templates` |
+| **Skill** | Teach the LLM a reusable workflow, checklist, or recipe it follows step-by-step. No code — just structured instructions the model executes. | `make-skill` |
+| **Custom tool** | Give the LLM a new callable tool: fetch data, run a script, query an API, interact with a service. Implemented as an executable. | `make-tool` |
+| **Prompt template** | Create a reusable starting prompt the user invokes with `/name [args]`. Supports positional args, tool restrictions, and `{{VAR}}` substitutions. | `make-prompt` |
+| **Subagent** | Create a specialized agent persona for specific tasks (exploration, review, analysis) invoked with `%name query`. | `make-subagent` |
 
 ## Decision Rules
 
 - The user describes **a behaviour or process** the LLM should follow → **skill**
-- The user describes **a capability or action** the LLM should be able to invoke → **plugin tool**
+- The user describes **a capability or action** the LLM should be able to invoke → **custom tool**
 - The user describes **a prompt** they want to reuse across sessions → **prompt template**
+- The user describes **a specialized agent** for a specific task (exploration, review, analysis, advisory) → **subagent**
 - When in doubt between skill and prompt template: if it needs step-by-step instructions the model executes autonomously → skill; if it's a starting message the user fires manually → prompt template.
+- Skills define *what the LLM does*; subagents define *a persona that does work* — use subagent when the user wants a named specialist.
 - If the request mentions an existing name, or uses words like "update", "fix", "change", "edit", "improve" → treat as **update**.
 
 ## Steps
