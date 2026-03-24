@@ -1,5 +1,5 @@
 # Raijin Development Guidelines
-Raijin is an AI coding assistant for terminal workflows. It supports one-shot CLI usage, a subprocess REPL mode, built-in tools, skills, templates, and plugin tools.
+Raijin is an AI coding assistant for terminal workflows. It supports one-shot CLI usage, a subprocess REPL mode, built-in tools, skills, templates, and custom tools.
 
 ## Dependencies
 - Go 1.26

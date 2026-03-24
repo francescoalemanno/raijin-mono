@@ -139,8 +139,8 @@ func TestRegisterDefaultToolsPrecedence_ProjectUserBuiltin(t *testing.T) {
 	project := t.TempDir()
 	withCwd(t, project)
 
-	globalDir := paths.UserPluginsDir()
-	localDir := filepath.Join(project, localPluginsDir)
+	globalDir := paths.UserToolsDir()
+	localDir := filepath.Join(project, localToolsDir)
 	if err := os.MkdirAll(globalDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -192,8 +192,8 @@ func TestLoadPluginInfosPrecedence_ProjectOverUser(t *testing.T) {
 	project := t.TempDir()
 	withCwd(t, project)
 
-	globalDir := paths.UserPluginsDir()
-	localDir := filepath.Join(project, localPluginsDir)
+	globalDir := paths.UserToolsDir()
+	localDir := filepath.Join(project, localToolsDir)
 	if err := os.MkdirAll(globalDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

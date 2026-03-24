@@ -61,9 +61,9 @@ func UserSubagentsDir() string {
 	return RaijinPath("agents", "subagents")
 }
 
-// UserPluginsDir returns the path to the user plugins directory.
-func UserPluginsDir() string {
-	return RaijinPath("plugins")
+// UserToolsDir returns the path to the user tools directory.
+func UserToolsDir() string {
+	return RaijinPath("tools")
 }
 
 // Relative path constants for use with filepath.Join or RaijinPath.
@@ -73,13 +73,13 @@ const (
 	ProjectSkillsDirRel    = "./.agents/skills"
 	ProjectPromptsDirRel   = "./.agents/prompts"
 	ProjectSubagentsDirRel = "./.agents/subagents"
-	ProjectPluginsDirRel   = "./.agents/plugins"
+	ProjectToolsDirRel     = "./.agents/tools"
 
 	// User config subpaths (relative to raijin/)
 	UserSkillsDirRel    = "agents/skills"
 	UserPromptsDirRel   = "agents/prompts"
 	UserSubagentsDirRel = "agents/subagents"
-	UserPluginsDirRel   = "plugins"
+	UserToolsDirRel     = "tools"
 
 	// File names
 	SkillFileName  = "SKILL.md"

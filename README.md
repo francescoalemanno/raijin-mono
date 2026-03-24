@@ -83,14 +83,14 @@ You can:
 
 Built-in templates include:
 
-- `/amplify` - generate or update Raijin extensions (skills, plugin tools, prompt templates)
+- `/amplify` - generate or update Raijin extensions (skills, custom tools, prompt templates, subagents)
 - `/init` - generate or refresh an `AGENTS.md` for the current repository
 
 ## Custom extensions
 
 You can extend Raijin without changing core code:
 
-- Plugin tools from `.agents/plugins` (project) or user plugin directory
+- Custom tools from `.agents/tools` (project) or user tools directory
 - Skills from `.agents/skills` (project) or user skill directory
 - Prompt templates from `.agents/prompts` (project) or user prompt directory
 

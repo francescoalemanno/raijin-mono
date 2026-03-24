@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	localPluginsDir = ".agents/plugins"
+	localToolsDir = ".agents/tools"
 )
 
 // pluginMeta is the JSON structure returned by a plugin's --info flag.
@@ -40,12 +40,12 @@ func init() {
 func loadPluginArtifacts() ([]artifacts.Item, error) {
 	var userPlugins []pluginArtifact
 	var allErrs []error
-	if globalDir := paths.UserPluginsDir(); globalDir != "" {
+	if globalDir := paths.UserToolsDir(); globalDir != "" {
 		plugins, errs := discoverPluginArtifacts(globalDir)
 		userPlugins = plugins
 		allErrs = append(allErrs, errs...)
 	}
-	projectPlugins, errs := discoverPluginArtifacts(localPluginsDir)
+	projectPlugins, errs := discoverPluginArtifacts(localToolsDir)
 	allErrs = append(allErrs, errs...)
 
 	merged := artifacts.Merge(func(p pluginArtifact) string { return p.meta.Name }, userPlugins, projectPlugins)
