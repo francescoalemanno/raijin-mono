@@ -200,6 +200,9 @@ func streamAssistantResponse(
 		if err != nil {
 			return nil, nil, fmt.Errorf("transform context: %w", err)
 		}
+		// Carry the transformed context forward so subsequent API calls within the
+		// same loop see the same pruned/compacted history.
+		currentCtx.Messages = append([]Message{}, messages...)
 	}
 
 	// Convert to fantasy messages.
