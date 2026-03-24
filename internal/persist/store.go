@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/francescoalemanno/raijin-mono/internal/compaction"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
@@ -34,7 +35,6 @@ const (
 	dirPerm        = 0o755
 	filePerm       = 0o644
 	titleMaxLen    = 72 // runes
-	compactionPref = "[Context checkpoint created by /compact]\n\n"
 )
 
 // jType identifies a journal entry.
@@ -46,7 +46,8 @@ const (
 	jTypeMsgUpdate  jType = "msg.update" // message updated (streaming)
 	jTypeTitle      jType = "title"      // session title changed
 	jTypeCompaction jType = "compaction" // compaction checkpoint
-	jTypeNavigate   jType = "navigate"   // tree navigation persisted leaf
+	jTypeCompEvt    jType = "compaction.event"
+	jTypeNavigate   jType = "navigate" // tree navigation persisted leaf
 )
 
 // jEntry is the NDJSON envelope written to the journal file.
@@ -69,6 +70,9 @@ type jEntry struct {
 	Summary      string `json:"summary,omitempty"`
 	FirstKeptID  string `json:"first_kept_id,omitempty"`
 	TokensBefore int64  `json:"tokens_before,omitempty"`
+
+	// jTypeCompEvt
+	CompactionEvent *libagent.ContextCompactionEvent `json:"compaction_event,omitempty"`
 
 	// jTypeNavigate
 	LeafID *string `json:"leaf_id,omitempty"`
@@ -101,6 +105,12 @@ type SessionSummary struct {
 	ShortID   string
 	Title     string
 	UpdatedAt int64
+}
+
+// ReplayItem is one replayable persisted event on the active session path.
+type ReplayItem struct {
+	Message           libagent.Message
+	ContextCompaction *libagent.ContextCompactionEvent
 }
 
 // TreeEntry is a node exposed to the /tree selector UI.
@@ -283,47 +293,102 @@ func (st *Store) RemoveSession(sessionID string) error {
 // AppendCompaction appends a compaction checkpoint entry to the loaded session.
 // The entry records a summary and the first message ID that should remain visible.
 func (st *Store) AppendCompaction(summary, firstKeptID string, tokensBefore int64) error {
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return errors.New("persist: compaction summary is empty")
-	}
-	if firstKeptID == "" {
-		return errors.New("persist: compaction first-kept ID is empty")
-	}
+	_, err := st.appendCompactionLocked(summary, firstKeptID, tokensBefore)
+	return err
+}
+
+// AppendCompactionWithEvents persists compaction start/checkpoint/end in order.
+func (st *Store) AppendCompactionWithEvents(start libagent.ContextCompactionEvent, summary, firstKeptID string, tokensBefore int64, end libagent.ContextCompactionEvent) error {
+	start.Phase = libagent.ContextCompactionPhaseStart
+	end.Phase = libagent.ContextCompactionPhaseEnd
 
 	st.mu.Lock()
-	sessionID := st.loaded
-	if sessionID == "" {
-		st.mu.Unlock()
-		return ErrSessionNotFound
-	}
-	if _, ok := st.nodes[firstKeptID]; !ok {
-		st.mu.Unlock()
-		return errors.New("persist: compaction first-kept node not found")
-	}
-	if err := st.flushHeaderLocked(sessionID); err != nil {
+	sessionID, parentID, err := st.prepareCompactionLocked(summary, firstKeptID)
+	if err != nil {
 		st.mu.Unlock()
 		return err
 	}
 
-	parentID := st.leafID
+	startEntry := jEntry{
+		Typ:             jTypeCompEvt,
+		ID:              uuid.New().String(),
+		ParentID:        parentID,
+		CompactionEvent: cloneContextCompactionEvent(start),
+	}
+	compactionID := uuid.New().String()
+	compactionEntry := jEntry{
+		Typ:          jTypeCompaction,
+		ID:           compactionID,
+		ParentID:     parentID,
+		Summary:      strings.TrimSpace(summary),
+		FirstKeptID:  firstKeptID,
+		TokensBefore: tokensBefore,
+	}
+	endEntry := jEntry{
+		Typ:             jTypeCompEvt,
+		ID:              uuid.New().String(),
+		ParentID:        compactionID,
+		CompactionEvent: cloneContextCompactionEvent(end),
+	}
+
+	if err := st.appendEntriesLocked(sessionID, startEntry, compactionEntry, endEntry); err != nil {
+		st.mu.Unlock()
+		return err
+	}
+
+	st.applyCompactionLocked(sessionID, compactionID, parentID, strings.TrimSpace(summary), firstKeptID, tokensBefore)
+	st.mu.Unlock()
+	return nil
+}
+
+func (st *Store) prepareCompactionLocked(summary, firstKeptID string) (sessionID, parentID string, err error) {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return "", "", errors.New("persist: compaction summary is empty")
+	}
+	if firstKeptID == "" {
+		return "", "", errors.New("persist: compaction first-kept ID is empty")
+	}
+
+	sessionID = st.loaded
+	if sessionID == "" {
+		return "", "", ErrSessionNotFound
+	}
+	if _, ok := st.nodes[firstKeptID]; !ok {
+		return "", "", errors.New("persist: compaction first-kept node not found")
+	}
+	if err := st.flushHeaderLocked(sessionID); err != nil {
+		return "", "", err
+	}
+	return sessionID, st.leafID, nil
+}
+
+func (st *Store) appendCompactionLocked(summary, firstKeptID string, tokensBefore int64) (string, error) {
+	st.mu.Lock()
+	sessionID, parentID, err := st.prepareCompactionLocked(summary, firstKeptID)
+	if err != nil {
+		st.mu.Unlock()
+		return "", err
+	}
 	entryID := uuid.New().String()
 	entry := jEntry{
 		Typ:          jTypeCompaction,
 		ID:           entryID,
 		ParentID:     parentID,
-		Summary:      summary,
+		Summary:      strings.TrimSpace(summary),
 		FirstKeptID:  firstKeptID,
 		TokensBefore: tokensBefore,
 	}
-	st.mu.Unlock()
-
-	if err := st.appendEntry(sessionID, entry); err != nil {
-		return err
+	if err := st.appendEntryLocked(sessionID, entry); err != nil {
+		st.mu.Unlock()
+		return "", err
 	}
+	st.applyCompactionLocked(sessionID, entryID, parentID, strings.TrimSpace(summary), firstKeptID, tokensBefore)
+	st.mu.Unlock()
+	return entryID, nil
+}
 
-	st.mu.Lock()
-	defer st.mu.Unlock()
+func (st *Store) applyCompactionLocked(sessionID, entryID, parentID, summary, firstKeptID string, tokensBefore int64) {
 	n := &treeNode{
 		id:           entryID,
 		parentID:     parentID,
@@ -341,7 +406,6 @@ func (st *Store) AppendCompaction(summary, firstKeptID string, tokensBefore int6
 		sess.UpdatedAt = time.Now().Unix()
 		st.sessions[sessionID] = sess
 	}
-	return nil
 }
 
 // Navigate moves the leaf pointer to targetID within the loaded session.
@@ -633,6 +697,25 @@ func hasBijectiveToolCouplingFromLeaf(nodes map[string]*treeNode, leafID string)
 	return libagent.HasBijectiveToolCoupling(path)
 }
 
+func (st *Store) activePathIDsLocked() map[string]struct{} {
+	activePath := make(map[string]struct{}, len(st.nodes))
+	cur := st.leafID
+	seen := make(map[string]struct{}, len(st.nodes))
+	for cur != "" {
+		if _, ok := seen[cur]; ok {
+			break
+		}
+		seen[cur] = struct{}{}
+		activePath[cur] = struct{}{}
+		n, ok := st.nodes[cur]
+		if !ok || n == nil {
+			break
+		}
+		cur = n.parentID
+	}
+	return activePath
+}
+
 // ---------------------------------------------------------------------------
 // journal I/O
 // ---------------------------------------------------------------------------
@@ -673,15 +756,27 @@ func (st *Store) appendEntry(sessionID string, entry jEntry) error {
 
 // appendEntryLocked is appendEntry without locking. Caller must hold mu.
 func (st *Store) appendEntryLocked(sessionID string, entry jEntry) error {
-	entry.V = journalVersion
-	entry.T = time.Now().Unix()
-	entry.SessID = sessionID
+	return st.appendEntriesLocked(sessionID, entry)
+}
 
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("persist: marshal entry: %w", err)
+func (st *Store) appendEntriesLocked(sessionID string, entries ...jEntry) error {
+	if len(entries) == 0 {
+		return nil
 	}
-	data = append(data, '\n')
+	var data []byte
+	now := time.Now().Unix()
+	for _, entry := range entries {
+		entry.V = journalVersion
+		entry.T = now
+		entry.SessID = sessionID
+
+		line, err := json.Marshal(entry)
+		if err != nil {
+			return fmt.Errorf("persist: marshal entry: %w", err)
+		}
+		data = append(data, line...)
+		data = append(data, '\n')
+	}
 
 	f, err := os.OpenFile(st.journalPath(sessionID), os.O_CREATE|os.O_APPEND|os.O_WRONLY, filePerm)
 	if err != nil {
@@ -1020,6 +1115,8 @@ func replayJournal(path string, sessionID string) (
 					parent.children = append(parent.children, entry.ID)
 				}
 			}
+		case jTypeCompEvt:
+			continue
 		case jTypeNavigate:
 			if entry.LeafID == nil {
 				continue
@@ -1340,6 +1437,75 @@ func (ms *messageService) List(_ context.Context, sessionID string) ([]libagent.
 	return path, nil
 }
 
+// ListReplayItems returns the active-path replay stream, including compaction events.
+func (st *Store) ListReplayItems(sessionID string) ([]ReplayItem, error) {
+	st.mu.Lock()
+	needLoad := st.loaded != sessionID || (len(st.nodes) == 0 && !st.pending)
+	st.mu.Unlock()
+	if needLoad {
+		if err := st.OpenSession(sessionID); err != nil {
+			return nil, err
+		}
+	}
+
+	st.mu.Lock()
+	if st.loaded != sessionID {
+		st.mu.Unlock()
+		return nil, nil
+	}
+	activePath := st.activePathIDsLocked()
+	st.mu.Unlock()
+
+	f, err := os.Open(st.journalPath(sessionID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	items := make([]ReplayItem, 0)
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var entry jEntry
+		if json.Unmarshal(line, &entry) != nil || entry.V != journalVersion {
+			continue
+		}
+		switch entry.Typ {
+		case jTypeMsg:
+			if _, ok := activePath[entry.ID]; !ok || entry.Msg == nil {
+				continue
+			}
+			msg, ok := jMsgToMessage(*entry.Msg)
+			if !ok {
+				continue
+			}
+			items = append(items, ReplayItem{Message: msg})
+		case jTypeCompaction:
+			if _, ok := activePath[entry.ID]; !ok {
+				continue
+			}
+			items = append(items, ReplayItem{Message: compactionSummaryMessage(entry.Summary)})
+		case jTypeCompEvt:
+			if _, ok := activePath[entry.ParentID]; !ok || entry.CompactionEvent == nil {
+				continue
+			}
+			items = append(items, ReplayItem{ContextCompaction: cloneContextCompactionEvent(*entry.CompactionEvent)})
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -1347,9 +1513,14 @@ func (ms *messageService) List(_ context.Context, sessionID string) ([]libagent.
 func compactionSummaryMessage(summary string) libagent.Message {
 	return &libagent.UserMessage{
 		Role:      "user",
-		Content:   compactionPref + strings.TrimSpace(summary),
+		Content:   compaction.CheckpointPrefix + strings.TrimSpace(summary),
 		Timestamp: time.Now(),
 	}
+}
+
+func cloneContextCompactionEvent(ev libagent.ContextCompactionEvent) *libagent.ContextCompactionEvent {
+	clone := ev
+	return &clone
 }
 
 // ShortID converts a UUID string into a compact uppercase base-36 identifier
