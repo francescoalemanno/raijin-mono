@@ -359,7 +359,7 @@ func TestRunHistoryReplaysUserOnlyOutput(t *testing.T) {
 		}
 	})
 
-	want := renderUserPrefix() + "hello\n"
+	want := renderUserSeparator() + "\n" + renderUserPrefix() + "hello\n"
 	if got := out; got != want {
 		t.Fatalf("history output = %q, want %q", got, want)
 	}
@@ -404,7 +404,7 @@ func TestRunHistoryReplaysAssistantOutput(t *testing.T) {
 		}
 	})
 
-	want := renderUserPrefix() + "hello\n" +
+	want := renderUserSeparator() + "\n" + renderUserPrefix() + "hello\n" +
 		"first answer\n" + thinkingMutedStyle.Render("thinking...") + "\nsecond answer\n"
 	if got := out; got != want {
 		t.Fatalf("history output = %q, want %q", got, want)
@@ -453,17 +453,95 @@ func TestRunHistoryUsesStandardRendererMarkdownPath(t *testing.T) {
 	}
 }
 
+func TestRunHistoryReplaysPersistedCompactionEvents(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	key := bindTestContext(t)
+
+	store, err := persist.OpenStore()
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	sess, err := store.CreateEphemeral()
+	if err != nil {
+		t.Fatalf("CreateEphemeral: %v", err)
+	}
+	bindSession(t, key, store, sess)
+
+	ctx := context.Background()
+	for i := 0; i < 6; i++ {
+		if _, err := store.Messages().Create(ctx, sess.ID, &libagent.UserMessage{
+			Role:      "user",
+			Content:   strings.Repeat("u", 1200),
+			Timestamp: time.Now(),
+		}); err != nil {
+			t.Fatalf("create user %d: %v", i, err)
+		}
+		msg := libagent.NewAssistantMessage(strings.Repeat("a", 1200), "", nil, time.Now())
+		msg.Completed = true
+		if _, err := store.Messages().Create(ctx, sess.ID, msg); err != nil {
+			t.Fatalf("create assistant %d: %v", i, err)
+		}
+	}
+
+	opts := Options{
+		RuntimeModel: libagent.RuntimeModel{
+			Model: &libagent.StaticTextModel{Response: "checkpoint"},
+			ModelCfg: libagent.ModelConfig{
+				Provider:      "mock",
+				Model:         "mock",
+				ContextWindow: 6000,
+			},
+		},
+		ModelCfg: libagent.ModelConfig{
+			Provider:      "mock",
+			Model:         "mock",
+			ContextWindow: 6000,
+		},
+	}
+
+	compactStderr := captureStderr(t, func() {
+		if err := Run(opts, "/compact"); err != nil {
+			t.Fatalf("Run(/compact): %v", err)
+		}
+	})
+	if !strings.Contains(compactStderr, "Compacting session") {
+		t.Fatalf("expected compact start status, got %q", compactStderr)
+	}
+	if !strings.Contains(compactStderr, "Context compacted") {
+		t.Fatalf("expected compact end status, got %q", compactStderr)
+	}
+
+	var historyStdout string
+	historyStderr := captureStderr(t, func() {
+		historyStdout = captureStdout(t, func() {
+			if err := Run(opts, "/history"); err != nil {
+				t.Fatalf("Run(/history): %v", err)
+			}
+		})
+	})
+	if !strings.Contains(historyStderr, "Compacting session") {
+		t.Fatalf("expected replayed compact start status, got %q", historyStderr)
+	}
+	if !strings.Contains(historyStderr, "Context compacted") {
+		t.Fatalf("expected replayed compact end status, got %q", historyStderr)
+	}
+	if !strings.Contains(historyStdout, "[Context checkpoint created by /compact]") {
+		t.Fatalf("expected checkpoint summary in history output, got %q", historyStdout)
+	}
+}
+
 func TestReplaySessionEventsDoesNotEnablePersistentSpinner(t *testing.T) {
 	var stderr bytes.Buffer
 	var stdout bytes.Buffer
 	r := newRenderer(&stderr, &stdout, nil, true)
 
-	msgs := []libagent.Message{
-		&libagent.UserMessage{Role: "user", Content: "hello"},
-		libagent.NewAssistantMessage("world", "", nil, time.Now()),
+	items := []persist.ReplayItem{
+		{Message: &libagent.UserMessage{Role: "user", Content: "hello"}},
+		{Message: libagent.NewAssistantMessage("world", "", nil, time.Now())},
 	}
 
-	replayed := replaySessionEvents(r, msgs)
+	replayed := replaySessionEvents(r, items)
 	if replayed != 2 {
 		t.Fatalf("replayed messages = %d, want %d", replayed, 2)
 	}
@@ -832,6 +910,32 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = w
 	t.Cleanup(func() {
 		os.Stdout = orig
+		_ = r.Close()
+	})
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close write pipe: %v", err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	return string(out)
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = orig
 		_ = r.Close()
 	})
 
