@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/francescoalemanno/raijin-mono/internal/compaction"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
@@ -68,7 +69,7 @@ func TestAutoCompactTransformCompactsAndPersistsCheckpoint(t *testing.T) {
 	if !ok {
 		t.Fatalf("first transformed message type = %T, want *libagent.UserMessage", compacted[0])
 	}
-	if !strings.HasPrefix(first.Content, autoCompactSummaryPrefix) {
+	if !strings.HasPrefix(first.Content, compaction.CheckpointPrefix) {
 		t.Fatalf("expected transformed context checkpoint, got %q", first.Content)
 	}
 
@@ -80,7 +81,25 @@ func TestAutoCompactTransformCompactsAndPersistsCheckpoint(t *testing.T) {
 	if !ok {
 		t.Fatalf("first persisted message type = %T, want *libagent.UserMessage", persisted[0])
 	}
-	if !strings.HasPrefix(firstPersisted.Content, autoCompactSummaryPrefix) {
+	if !strings.HasPrefix(firstPersisted.Content, compaction.CheckpointPrefix) {
 		t.Fatalf("expected persisted context checkpoint, got %q", firstPersisted.Content)
+	}
+
+	replayItems, err := store.ListReplayItems(sess.ID)
+	if err != nil {
+		t.Fatalf("ListReplayItems: %v", err)
+	}
+	var phases []libagent.ContextCompactionPhase
+	for _, item := range replayItems {
+		if item.ContextCompaction == nil {
+			continue
+		}
+		phases = append(phases, item.ContextCompaction.Phase)
+	}
+	if len(phases) != 2 {
+		t.Fatalf("compaction replay event count = %d, want 2", len(phases))
+	}
+	if phases[0] != libagent.ContextCompactionPhaseStart || phases[1] != libagent.ContextCompactionPhaseEnd {
+		t.Fatalf("compaction replay phases = %#v, want start/end", phases)
 	}
 }
