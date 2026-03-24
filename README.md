@@ -43,6 +43,8 @@ No MCP. No hidden sub-agents. No permission popups.
 
 Raijin runs in one-shot CLI mode and supports prompt features such as attachments, skills, shell substitution, and templates.
 
+Use `raijin --ephemeral "prompt"` to run a one-shot prompt without loading or writing session history.
+
 ## Slash commands
 
 - `/help` - show command help
@@ -83,7 +85,7 @@ You can:
 
 Built-in templates include:
 
-- `/amplify` - generate or update Raijin extensions (skills, custom tools, prompt templates, subagents)
+- `/amplify` - generate or update Raijin extensions (skills, custom tools, prompt templates)
 - `/init` - generate or refresh an `AGENTS.md` for the current repository
 
 ## Custom extensions
@@ -116,6 +118,7 @@ go build -o raijin .
 
 ```bash
 raijin "fix the bug in main.go"
+raijin --ephemeral "review this patch without saving chat history"
 raijin "add unit tests for auth"
 raijin "refactor this messy function"
 raijin "summarize TODOs and propose a plan"
