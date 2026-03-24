@@ -189,7 +189,36 @@ const (
 	AgentEventTypeToolExecutionEnd AgentEventType = "tool_execution_end"
 	// AgentEventTypeRetry is emitted when retrying a failed stream due to connection error.
 	AgentEventTypeRetry AgentEventType = "retry"
+	// AgentEventTypeContextCompaction is emitted when the session context is compacted.
+	AgentEventTypeContextCompaction AgentEventType = "context_compaction"
 )
+
+type ContextCompactionPhase string
+
+const (
+	ContextCompactionPhaseStart  ContextCompactionPhase = "start"
+	ContextCompactionPhaseEnd    ContextCompactionPhase = "end"
+	ContextCompactionPhaseFailed ContextCompactionPhase = "failed"
+)
+
+type ContextCompactionMode string
+
+const (
+	ContextCompactionModeAuto   ContextCompactionMode = "auto"
+	ContextCompactionModeManual ContextCompactionMode = "manual"
+)
+
+// ContextCompactionEvent carries structured metadata for context compaction.
+type ContextCompactionEvent struct {
+	Phase                  ContextCompactionPhase `json:"phase"`
+	Mode                   ContextCompactionMode  `json:"mode"`
+	TriggerEstimatedTokens int64                  `json:"trigger_estimated_tokens,omitempty"`
+	TriggerContextPercent  float64                `json:"trigger_context_percent,omitempty"`
+	TokensBefore           int64                  `json:"tokens_before,omitempty"`
+	Summarized             int                    `json:"summarized,omitempty"`
+	Kept                   int                    `json:"kept,omitempty"`
+	ErrorMessage           string                 `json:"error_message,omitempty"`
+}
 
 // StreamDelta describes a single streaming increment from the assistant.
 type StreamDelta struct {
@@ -230,6 +259,9 @@ type AgentEvent struct {
 
 	// Retry only: message describing the retry attempt
 	RetryMessage string
+
+	// ContextCompaction only
+	ContextCompaction *ContextCompactionEvent
 }
 
 // AgentContext carries the complete conversation state passed to the loop.
