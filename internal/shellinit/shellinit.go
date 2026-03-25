@@ -87,12 +87,12 @@ func Complete(current string) string {
 }
 
 var (
-	runFZFForComplete          = RunFZF
+	runFZFForComplete          = RunFZFWithOptions
 	completionMatchesForSelect = defaultCompletionMatches
 )
 
 // defaultCompletionMatches returns filtered candidates for the given input.
-func defaultCompletionMatches(current string) []string {
+func defaultCompletionMatches(current string) []completion.Candidate {
 	token := completion.ParseLastToken(current)
 	if token.Type == completion.TokenUnknown {
 		return nil
@@ -101,11 +101,7 @@ func defaultCompletionMatches(current string) []string {
 	candidates := completion.GetCandidates(token)
 	filtered := completion.FilterCandidates(candidates, token)
 
-	out := make([]string, len(filtered))
-	for i, c := range filtered {
-		out[i] = c.Value
-	}
-	return out
+	return filtered
 }
 
 // CompleteSelection resolves completion to a single candidate.
@@ -125,7 +121,7 @@ func CompleteSelection(current string) string {
 		return current
 	}
 	if len(matches) == 1 {
-		return applyCompletion(current, matches[0])
+		return applyCompletion(current, matches[0].Value)
 	}
 
 	if chosen, ok := pickCompletionWithFZF(matches, token.Query); ok {
@@ -146,9 +142,10 @@ func applyCompletion(current, selected string) string {
 	return current[:start] + selected + current[end:]
 }
 
-func pickCompletionWithFZF(candidates []string, query string) (string, bool) {
+func pickCompletionWithFZF(candidates []completion.Candidate, query string) (string, bool) {
 	var stdin bytes.Buffer
-	for _, candidate := range candidates {
+	lineToValue, cfg := buildPreviewLinesForCandidates(candidates)
+	for _, candidate := range lineToValue.lines {
 		if strings.TrimSpace(candidate) == "" {
 			continue
 		}
@@ -160,16 +157,74 @@ func pickCompletionWithFZF(candidates []string, query string) (string, bool) {
 	}
 
 	var stdout bytes.Buffer
-	code, err := runFZFForComplete("complete", strings.TrimSpace(query), &stdin, &stdout)
-	if err != nil || code != 0 {
+	result, err := runFZFForComplete("complete", strings.TrimSpace(query), &stdin, cfg)
+	if err != nil || result.Code != 0 {
 		return "", false
+	}
+	for _, item := range result.Selected {
+		if _, writeErr := fmt.Fprintln(&stdout, item); writeErr != nil {
+			return "", false
+		}
 	}
 
 	selected := firstNonEmptyLine(&stdout)
 	if selected == "" {
 		return "", false
 	}
-	return selected, true
+	value, ok := lineToValue.values[selected]
+	if !ok {
+		return "", false
+	}
+	return value, true
+}
+
+type shellPreviewLines struct {
+	lines  []string
+	values map[string]string
+}
+
+func buildPreviewLinesForCandidates(candidates []completion.Candidate) (shellPreviewLines, RunFZFOptions) {
+	lines := make([]string, 0, len(candidates))
+	values := make(map[string]string, len(candidates))
+	needsPreview := false
+
+	for _, candidate := range candidates {
+		line := candidate.Value
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		for {
+			if _, exists := values[line]; !exists {
+				break
+			}
+			line += "*"
+		}
+		if preview := strings.TrimSpace(candidate.Preview); preview != "" {
+			needsPreview = true
+			line += "\t" + encodeFZFPreviewText(preview)
+		}
+		lines = append(lines, line)
+		values[line] = candidate.Value
+	}
+
+	cfg := RunFZFOptions{}
+	if needsPreview {
+		cfg.Delimiter = "\t"
+		cfg.WithNth = "1"
+		cfg.PreviewCommand = "printf '%b' {2}"
+		cfg.PreviewWindow = "right:55%,wrap"
+		cfg.PreviewLabel = "Docs"
+	}
+	return shellPreviewLines{lines: lines, values: values}, cfg
+}
+
+func encodeFZFPreviewText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ReplaceAll(text, "\\", "\\\\")
+	text = strings.ReplaceAll(text, "\t", "    ")
+	text = strings.ReplaceAll(text, "\n", "\\n")
+	return text
 }
 
 func firstNonEmptyLine(r io.Reader) string {
@@ -215,6 +270,11 @@ type RunFZFOptions struct {
 	DisableSort             bool
 	Header                  string
 	InitialPosition         int
+	WithNth                 string
+	Delimiter               string
+	PreviewCommand          string
+	PreviewWindow           string
+	PreviewLabel            string
 }
 
 // RunFZFResult holds the outcome of running fzf.
@@ -359,6 +419,12 @@ func fzfArgs(mode, query string, cfg RunFZFOptions) []string {
 	if header := strings.TrimSpace(cfg.Header); header != "" {
 		args = append(args, "--header="+header)
 	}
+	if delimiter := cfg.Delimiter; delimiter != "" {
+		args = append(args, "--delimiter="+delimiter)
+	}
+	if withNth := strings.TrimSpace(cfg.WithNth); withNth != "" {
+		args = append(args, "--with-nth="+withNth)
+	}
 	if cfg.InitialPosition > 1 {
 		args = append(args, fmt.Sprintf("--bind=load:pos(%d)", cfg.InitialPosition))
 	}
@@ -381,6 +447,15 @@ func fzfArgs(mode, query string, cfg RunFZFOptions) []string {
 			continue
 		}
 		args = append(args, "--bind="+binding)
+	}
+	if preview := strings.TrimSpace(cfg.PreviewCommand); preview != "" {
+		args = append(args, "--preview="+preview)
+	}
+	if previewWindow := strings.TrimSpace(cfg.PreviewWindow); previewWindow != "" {
+		args = append(args, "--preview-window="+previewWindow)
+	}
+	if previewLabel := strings.TrimSpace(cfg.PreviewLabel); previewLabel != "" {
+		args = append(args, "--preview-label="+previewLabel)
 	}
 	return args
 }

@@ -184,7 +184,7 @@ func TestCompleteSelectionReturnsOriginalOnNoMatch(t *testing.T) {
 	t.Cleanup(func() {
 		completionMatchesForSelect = prevMatches
 	})
-	completionMatchesForSelect = func(current string) []string {
+	completionMatchesForSelect = func(current string) []completion.Candidate {
 		return nil
 	}
 
@@ -199,17 +199,17 @@ func TestCompleteSelectionReturnsSingleMatchWithoutFZF(t *testing.T) {
 	t.Cleanup(func() {
 		completionMatchesForSelect = prevMatches
 	})
-	completionMatchesForSelect = func(current string) []string {
-		return []string{"@readme.md"}
+	completionMatchesForSelect = func(current string) []completion.Candidate {
+		return []completion.Candidate{{Value: "@readme.md", Display: "readme.md"}}
 	}
 
 	prev := runFZFForComplete
 	t.Cleanup(func() {
 		runFZFForComplete = prev
 	})
-	runFZFForComplete = func(mode, query string, stdin io.Reader, stdout io.Writer) (int, error) {
+	runFZFForComplete = func(mode, query string, stdin io.Reader, cfg RunFZFOptions) (RunFZFResult, error) {
 		t.Fatalf("runFZFForComplete should not be called for a single match")
-		return 1, nil
+		return RunFZFResult{Code: 1}, nil
 	}
 
 	input := "see @rea"
@@ -224,8 +224,11 @@ func TestCompleteSelectionUsesFZFWhenMultipleMatches(t *testing.T) {
 	t.Cleanup(func() {
 		completionMatchesForSelect = prevMatches
 	})
-	completionMatchesForSelect = func(current string) []string {
-		return []string{"@readme.md", "@real.txt"}
+	completionMatchesForSelect = func(current string) []completion.Candidate {
+		return []completion.Candidate{
+			{Value: "@readme.md", Display: "readme.md"},
+			{Value: "@real.txt", Display: "real.txt"},
+		}
 	}
 
 	prev := runFZFForComplete
@@ -234,7 +237,7 @@ func TestCompleteSelectionUsesFZFWhenMultipleMatches(t *testing.T) {
 	})
 
 	var expected string
-	runFZFForComplete = func(mode, query string, stdin io.Reader, stdout io.Writer) (int, error) {
+	runFZFForComplete = func(mode, query string, stdin io.Reader, cfg RunFZFOptions) (RunFZFResult, error) {
 		if mode != "complete" {
 			t.Fatalf("mode = %q, want complete", mode)
 		}
@@ -250,10 +253,7 @@ func TestCompleteSelectionUsesFZFWhenMultipleMatches(t *testing.T) {
 			t.Fatalf("expected at least 2 completion candidates, got %q", lines)
 		}
 		expected = lines[1]
-		if _, err := io.WriteString(stdout, expected+"\n"); err != nil {
-			t.Fatalf("write stdout: %v", err)
-		}
-		return 0, nil
+		return RunFZFResult{Code: 0, Selected: []string{expected}}, nil
 	}
 
 	input := "see @re"
@@ -272,21 +272,60 @@ func TestCompleteSelectionReturnsOriginalWhenPickerCancelled(t *testing.T) {
 	t.Cleanup(func() {
 		completionMatchesForSelect = prevMatches
 	})
-	completionMatchesForSelect = func(current string) []string {
-		return []string{"@readme.md", "@real.txt"}
+	completionMatchesForSelect = func(current string) []completion.Candidate {
+		return []completion.Candidate{
+			{Value: "@readme.md", Display: "readme.md"},
+			{Value: "@real.txt", Display: "real.txt"},
+		}
 	}
 
 	prev := runFZFForComplete
 	t.Cleanup(func() {
 		runFZFForComplete = prev
 	})
-	runFZFForComplete = func(mode, query string, stdin io.Reader, stdout io.Writer) (int, error) {
-		return 130, nil
+	runFZFForComplete = func(mode, query string, stdin io.Reader, cfg RunFZFOptions) (RunFZFResult, error) {
+		return RunFZFResult{Code: 130}, nil
 	}
 
 	input := "see @re"
 	if got := CompleteSelection(input); got != input {
 		t.Fatalf("CompleteSelection(%q) = %q, want %q on cancel", input, got, input)
+	}
+}
+
+func TestCompleteSelectionConfiguresPreviewForCommandDocs(t *testing.T) {
+	prevMatches := completionMatchesForSelect
+	t.Cleanup(func() {
+		completionMatchesForSelect = prevMatches
+	})
+	completionMatchesForSelect = func(current string) []completion.Candidate {
+		return []completion.Candidate{
+			{Value: "/help", Display: "help", Preview: "/help\n\nShow this help message"},
+			{Value: "/history", Display: "history", Preview: "/history\n\nReplay all assistant output from the active session"},
+		}
+	}
+
+	prev := runFZFForComplete
+	t.Cleanup(func() {
+		runFZFForComplete = prev
+	})
+	runFZFForComplete = func(mode, query string, stdin io.Reader, cfg RunFZFOptions) (RunFZFResult, error) {
+		if cfg.PreviewCommand == "" || cfg.PreviewWindow == "" || cfg.WithNth != "1" || cfg.Delimiter != "\t" {
+			t.Fatalf("expected preview configuration, got %+v", cfg)
+		}
+		raw, err := io.ReadAll(stdin)
+		if err != nil {
+			t.Fatalf("read stdin: %v", err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		if len(lines) == 0 || !strings.Contains(lines[0], "\t") {
+			t.Fatalf("expected preview payload in stdin, got %q", lines)
+		}
+		return RunFZFResult{Code: 0, Selected: []string{lines[0]}}, nil
+	}
+
+	if got := CompleteSelection(":h"); got != ": /help" {
+		t.Fatalf("CompleteSelection(:h) = %q, want %q", got, ": /help")
 	}
 }
 

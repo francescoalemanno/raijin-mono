@@ -76,6 +76,31 @@ func TestFZFArgsIncludeInitialPositionBinding(t *testing.T) {
 	}
 }
 
+func TestFZFArgsIncludePreviewConfiguration(t *testing.T) {
+	args := strings.Join(fzfArgs("default", "", RunFZFOptions{
+		Delimiter:      "\t",
+		WithNth:        "1",
+		PreviewCommand: "printf '%b' {2}",
+		PreviewWindow:  "right:55%,wrap",
+		PreviewLabel:   "Docs",
+	}), " ")
+	if !strings.Contains(args, "--delimiter=\t") {
+		t.Fatalf("args missing delimiter, got %q", args)
+	}
+	if !strings.Contains(args, "--with-nth=1") {
+		t.Fatalf("args missing with-nth, got %q", args)
+	}
+	if !strings.Contains(args, "--preview=printf '%b' {2}") {
+		t.Fatalf("args missing preview command, got %q", args)
+	}
+	if !strings.Contains(args, "--preview-window=right:55%,wrap") {
+		t.Fatalf("args missing preview window, got %q", args)
+	}
+	if !strings.Contains(args, "--preview-label=Docs") {
+		t.Fatalf("args missing preview label, got %q", args)
+	}
+}
+
 func TestSplitExpectOutputEnterWithEmptyFirstLine(t *testing.T) {
 	key, selected := splitExpectOutput([]string{"", "model-a"}, []string{"ctrl-x"})
 	if key != "" {

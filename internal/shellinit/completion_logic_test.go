@@ -41,8 +41,8 @@ func TestCompleteSelectionEmptySignal(t *testing.T) {
 	t.Cleanup(func() {
 		runFZFForComplete = prev
 	})
-	runFZFForComplete = func(mode, query string, stdin io.Reader, stdout io.Writer) (int, error) {
-		return 0, nil
+	runFZFForComplete = func(mode, query string, stdin io.Reader, cfg RunFZFOptions) (RunFZFResult, error) {
+		return RunFZFResult{Code: 0}, nil
 	}
 
 	// Ambiguous input should return the original string as-is when the picker emits nothing.
