@@ -520,88 +520,27 @@ func replPromptExecCmd(baseArgs []string, binding replBinding, prompt string) (t
 
 func (c *replPickerExec) Run() error {
 	// Determine fzf mode based on token type
-	mode := "repl-complete"
 	prompt := "Raijin > "
+	useFullscreen := false
 	switch c.token.Type {
 	case completion.TokenFiles:
-		mode = "paths"
 		prompt = "@ "
+		useFullscreen = true
 	case completion.TokenCommands:
 		prompt = "/ "
 	case completion.TokenSkills:
 		prompt = "+ "
 	}
 
-	// Build fzf input from candidate displays
-	var stdin bytes.Buffer
-	for _, c := range c.candidates {
-		stdin.WriteString(c.Display)
-		stdin.WriteByte('\n')
-	}
-
-	// Use shellinit.RunFZF through the completion picker
-	var stdout bytes.Buffer
-	// For paths mode, we need special handling
-	if mode == "paths" {
-		// Get paths directly from completion package
-		pathCandidates := completion.GetCandidates(completion.Token{Type: completion.TokenFiles})
-		filtered := completion.FilterCandidates(pathCandidates, c.token)
-		var pathStdin bytes.Buffer
-		for _, pc := range filtered {
-			pathStdin.WriteString(pc.Display)
-			pathStdin.WriteByte('\n')
-		}
-		code, err := runFZFWithPrompt("paths", c.token.Query, prompt, &pathStdin, &stdout)
-		if err != nil {
-			return err
-		}
-		if code == 0 {
-			c.selected = strings.TrimSpace(stdout.String())
-		}
-		return nil
-	}
-
-	code, err := runFZFWithPrompt("repl-complete", c.token.Query, prompt, &stdin, &stdout)
+	picker := &completion.FZFPicker{UseFullscreen: useFullscreen, Prompt: prompt}
+	selected, err := picker.Pick(c.candidates, c.token)
 	if err != nil {
 		return err
 	}
-	if code == 0 {
-		c.selected = strings.TrimSpace(stdout.String())
+	if selected != "" {
+		c.selected = selected
 	}
 	return nil
-}
-
-func runFZFWithPrompt(mode, query, prompt string, stdin io.Reader, stdout io.Writer) (int, error) {
-	// We need to access shellinit.RunFZF, but it's not exported
-	// Use the completion package's FZFPicker instead
-	picker := &completion.FZFPicker{UseFullscreen: mode == "paths", Prompt: prompt}
-	candidates := []completion.Candidate{}
-	// Read from stdin and create candidates
-	if stdin != nil {
-		data, _ := io.ReadAll(stdin)
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				candidates = append(candidates, completion.Candidate{
-					Value:     line,
-					Display:   line,
-					QueryText: line,
-				})
-			}
-		}
-	}
-	if len(candidates) == 0 {
-		return 1, nil
-	}
-	selected, err := picker.Pick(candidates, completion.Token{Type: completion.TokenUniversal, Query: query})
-	if err != nil {
-		return 1, err
-	}
-	if selected == "" {
-		return 1, nil
-	}
-	fmt.Fprintln(stdout, selected)
-	return 0, nil
 }
 
 func (c *replPickerExec) SetStdin(io.Reader)  {}
