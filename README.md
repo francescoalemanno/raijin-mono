@@ -40,6 +40,7 @@ No MCP. No hidden sub-agents. No permission popups.
 - Fork a conversation from any previous user prompt with `/tree`
 - Resume old chats with `/sessions`
 - Compact long history with `/compact` or let Raijin auto-compact once the session reaches 60% estimated context fill or 150k estimated tokens, targeting roughly 20% usage after compaction
+- Use `/plan` as the guided Ralph entrypoint for creating, reviewing, revising, and running repo-local plans in `.raijin/ralph/`
 
 Raijin runs in one-shot CLI mode and supports prompt features such as attachments, skills, shell substitution, and templates.
 
@@ -56,6 +57,7 @@ Use `raijin --ephemeral "prompt"` to run a one-shot prompt without loading or wr
 - `/tree` - browse conversation history and fork at any safe boundary
 - `/history` - replay all assistant output from the active session
 - `/compact [instructions]` - summarize old context, keep recent context
+- `/plan [goal]` - guide Ralph plan creation, review, revision, and execution
 - `/status` - show current model, reasoning, and context fill percentage
 - `/reasoning [low|medium|high|max]` - select reasoning level (interactive when omitted)
 - `/edit` - open `$EDITOR` (or fallback editors), then send saved file content as prompt

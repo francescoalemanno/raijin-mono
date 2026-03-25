@@ -24,6 +24,7 @@ var BuiltinCommands = []Command{
 	{Command: "/history", Desc: "Replay all assistant output from the active session"},
 	{Command: "/retry", Desc: "Resume the active session from the last valid state"},
 	{Command: "/compact", Desc: "Summarize old context and keep recent messages (optional instructions)"},
+	{Command: "/plan", Desc: "Guide Ralph planning, review, revision, and execution"},
 	{Command: "/status", Desc: "Show current model, reasoning, and context fill percentage"},
 	{Command: "/reasoning", Desc: "Select reasoning level for the default model"},
 	{Command: "/edit", Desc: "Open an editor and send the saved content as a prompt"},

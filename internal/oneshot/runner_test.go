@@ -15,6 +15,7 @@ import (
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
 	"github.com/francescoalemanno/raijin-mono/internal/paths"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
+	"github.com/francescoalemanno/raijin-mono/internal/ralph"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
@@ -204,6 +205,12 @@ func TestRunHelpIncludesPromptTemplates(t *testing.T) {
 	if !strings.Contains(out, "/retry") {
 		t.Fatalf("expected /retry in /help output, got %q", out)
 	}
+	if !strings.Contains(out, "/plan") {
+		t.Fatalf("expected /plan in /help output, got %q", out)
+	}
+	if strings.Contains(out, "/start-plan") || strings.Contains(out, "/read-plan") {
+		t.Fatalf("expected old Ralph commands to be absent from /help output, got %q", out)
+	}
 	if !strings.Contains(out, "Prompt templates:\n") {
 		t.Fatalf("expected templates section in /help output, got %q", out)
 	}
@@ -229,6 +236,453 @@ func TestRunPromptRequiresBoundContext(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bound context") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunPlanBuiltinDoesNotRequireBoundContext(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(persist.SessionBindingKeyEnv, "")
+	t.Setenv(persist.SessionBindingOwnerPIDEnv, "")
+	repo := t.TempDir()
+	t.Chdir(repo)
+	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	origRunRalph := runRalph
+	origActionPicker := runPlanActionPicker
+	origPostPicker := runPostPlanActionPicker
+	t.Cleanup(func() {
+		runRalph = origRunRalph
+		runPlanActionPicker = origActionPicker
+		runPostPlanActionPicker = origPostPicker
+	})
+	runPlanActionPicker = func(_ ralph.PlanningState, _ bool) (planAction, bool, error) {
+		t.Fatalf("action picker should not be called when no Ralph plan exists")
+		return "", false, nil
+	}
+	runPostPlanActionPicker = func() (postPlanAction, bool, error) {
+		return "", false, nil
+	}
+
+	called := false
+	runRalph = func(_ context.Context, opts ralph.Options) error {
+		called = true
+		if opts.Mode != ralph.ModePlan {
+			t.Fatalf("Mode = %q, want %q", opts.Mode, ralph.ModePlan)
+		}
+		if opts.PlanningRequest != "design the loop" {
+			t.Fatalf("PlanningRequest = %q, want %q", opts.PlanningRequest, "design the loop")
+		}
+		if opts.Goal != "" {
+			t.Fatalf("Goal = %q, want empty canonical goal for /plan", opts.Goal)
+		}
+		if !opts.ResetPlan {
+			t.Fatalf("ResetPlan = false, want true for fresh plan path")
+		}
+		if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("design the loop\n"), 0o644); err != nil {
+			t.Fatalf("write goal: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] first step\n"), 0o644); err != nil {
+			t.Fatalf("write plan: %v", err)
+		}
+		return nil
+	}
+
+	if err := Run(Options{}, "/plan design the loop"); err != nil {
+		t.Fatalf("Run(/plan): %v", err)
+	}
+	if !called {
+		t.Fatalf("expected Ralph runner to be called")
+	}
+
+	sessionsDir := filepath.Join(home, ".config", "raijin", "sessions")
+	sessionMatches, err := filepath.Glob(filepath.Join(sessionsDir, "*.jsonl"))
+	if err != nil {
+		t.Fatalf("Glob sessions: %v", err)
+	}
+	if len(sessionMatches) != 0 {
+		t.Fatalf("expected no persisted sessions, got %v", sessionMatches)
+	}
+}
+
+func TestHandlePlanUsesEditorWhenGoalMissing(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	editorPath := filepath.Join(dir, "fake-editor-plan.sh")
+	editorScript := "#!/bin/sh\ncat <<'EOF' > \"$1\"\ndesign the loop from editor\nEOF\n"
+	if err := os.WriteFile(editorPath, []byte(editorScript), 0o755); err != nil {
+		t.Fatalf("write fake editor: %v", err)
+	}
+	t.Setenv("EDITOR", editorPath)
+
+	origRunRalph := runRalph
+	origActionPicker := runPlanActionPicker
+	origPostPicker := runPostPlanActionPicker
+	t.Cleanup(func() {
+		runRalph = origRunRalph
+		runPlanActionPicker = origActionPicker
+		runPostPlanActionPicker = origPostPicker
+	})
+	runPlanActionPicker = func(_ ralph.PlanningState, _ bool) (planAction, bool, error) {
+		t.Fatalf("action picker should not be called when no Ralph plan exists")
+		return "", false, nil
+	}
+	runPostPlanActionPicker = func() (postPlanAction, bool, error) {
+		return "", false, nil
+	}
+
+	called := false
+	runRalph = func(_ context.Context, opts ralph.Options) error {
+		called = true
+		if opts.Mode != ralph.ModePlan {
+			t.Fatalf("Mode = %q, want %q", opts.Mode, ralph.ModePlan)
+		}
+		if opts.PlanningRequest != "design the loop from editor" {
+			t.Fatalf("PlanningRequest = %q", opts.PlanningRequest)
+		}
+		if !opts.ResetPlan {
+			t.Fatalf("ResetPlan = false, want true for fresh plan path")
+		}
+		if err := os.MkdirAll(filepath.Join(dir, ".raijin", "ralph"), 0o755); err != nil {
+			t.Fatalf("mkdir ralph dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".raijin", "ralph", "goal.md"), []byte("design the loop from editor\n"), 0o644); err != nil {
+			t.Fatalf("write goal: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".raijin", "ralph", "plan.md"), []byte("- [ ] first step\n"), 0o644); err != nil {
+			t.Fatalf("write plan: %v", err)
+		}
+		return nil
+	}
+
+	if err := handlePlan(""); err != nil {
+		t.Fatalf("handlePlan(\"\"): %v", err)
+	}
+	if !called {
+		t.Fatalf("expected Ralph runner to be called")
+	}
+}
+
+func TestHandlePlanEmptyEditorPromptIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	editorPath := filepath.Join(dir, "fake-editor-empty-plan.sh")
+	editorScript := "#!/bin/sh\n: > \"$1\"\n"
+	if err := os.WriteFile(editorPath, []byte(editorScript), 0o755); err != nil {
+		t.Fatalf("write fake editor: %v", err)
+	}
+	t.Setenv("EDITOR", editorPath)
+
+	origRunRalph := runRalph
+	origActionPicker := runPlanActionPicker
+	origPostPicker := runPostPlanActionPicker
+	t.Cleanup(func() {
+		runRalph = origRunRalph
+		runPlanActionPicker = origActionPicker
+		runPostPlanActionPicker = origPostPicker
+	})
+	runRalph = func(_ context.Context, _ ralph.Options) error {
+		t.Fatalf("runRalph should not be called for empty editor prompt")
+		return nil
+	}
+	runPlanActionPicker = func(_ ralph.PlanningState, _ bool) (planAction, bool, error) {
+		t.Fatalf("action picker should not be called for empty editor prompt")
+		return "", false, nil
+	}
+	runPostPlanActionPicker = func() (postPlanAction, bool, error) {
+		t.Fatalf("post-plan picker should not be called for empty editor prompt")
+		return "", false, nil
+	}
+
+	stderr := captureStderr(t, func() {
+		if err := handlePlan(""); err != nil {
+			t.Fatalf("handlePlan(\"\"): %v", err)
+		}
+	})
+
+	if !strings.Contains(stderr, "Plan prompt was empty; nothing changed") {
+		t.Fatalf("expected empty-plan warning, got %q", stderr)
+	}
+}
+
+func TestHandlePlanCancelActionPickerIsNoOp(t *testing.T) {
+	repo := t.TempDir()
+	t.Chdir(repo)
+	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("existing goal\n"), 0o644); err != nil {
+		t.Fatalf("write existing goal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] existing\n"), 0o644); err != nil {
+		t.Fatalf("write existing plan: %v", err)
+	}
+
+	origRunRalph := runRalph
+	origActionPicker := runPlanActionPicker
+	t.Cleanup(func() {
+		runRalph = origRunRalph
+		runPlanActionPicker = origActionPicker
+	})
+	runRalph = func(_ context.Context, _ ralph.Options) error {
+		t.Fatalf("runRalph should not be called when action picker is cancelled")
+		return nil
+	}
+	runPlanActionPicker = func(_ ralph.PlanningState, _ bool) (planAction, bool, error) {
+		return "", false, nil
+	}
+
+	if err := handlePlan("keep current plan but maybe tweak it"); err != nil {
+		t.Fatalf("handlePlan(cancelled action picker): %v", err)
+	}
+}
+
+func TestHandlePlanUsesReviewActionWhenPlanAlreadyExists(t *testing.T) {
+	repo := t.TempDir()
+	t.Chdir(repo)
+	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("existing goal\n"), 0o644); err != nil {
+		t.Fatalf("write existing goal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] existing\n"), 0o644); err != nil {
+		t.Fatalf("write existing plan: %v", err)
+	}
+
+	origRunRalph := runRalph
+	origActionPicker := runPlanActionPicker
+	origPostPicker := runPostPlanActionPicker
+	t.Cleanup(func() {
+		runRalph = origRunRalph
+		runPlanActionPicker = origActionPicker
+		runPostPlanActionPicker = origPostPicker
+	})
+
+	pickerCalled := false
+	runPlanActionPicker = func(state ralph.PlanningState, hasRequest bool) (planAction, bool, error) {
+		pickerCalled = true
+		if state != ralph.PlanningStatePlanned {
+			t.Fatalf("state = %q, want planned", state)
+		}
+		if hasRequest {
+			t.Fatalf("hasRequest = true, want false")
+		}
+		return planActionReview, true, nil
+	}
+	runPostPlanActionPicker = func() (postPlanAction, bool, error) {
+		t.Fatalf("post-plan picker should not be called after review action")
+		return "", false, nil
+	}
+
+	runRalph = func(_ context.Context, opts ralph.Options) error {
+		t.Fatalf("runRalph should not be called for review action")
+		return nil
+	}
+
+	out := captureStdout(t, func() {
+		if err := handlePlan(""); err != nil {
+			t.Fatalf("handlePlan(existing review): %v", err)
+		}
+	})
+	if !strings.Contains(out, "existing goal") || !strings.Contains(out, "existing") {
+		t.Fatalf("expected rendered plan review output, got %q", out)
+	}
+	if !pickerCalled {
+		t.Fatalf("expected action picker to be called when Ralph state exists")
+	}
+}
+
+func TestHandlePlanRunActionInvokesRalphAutoMode(t *testing.T) {
+	repo := t.TempDir()
+	t.Chdir(repo)
+	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("existing goal\n"), 0o644); err != nil {
+		t.Fatalf("write existing goal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] existing\n"), 0o644); err != nil {
+		t.Fatalf("write existing plan: %v", err)
+	}
+
+	origRunRalph := runRalph
+	origActionPicker := runPlanActionPicker
+	t.Cleanup(func() {
+		runRalph = origRunRalph
+		runPlanActionPicker = origActionPicker
+	})
+	runPlanActionPicker = func(_ ralph.PlanningState, _ bool) (planAction, bool, error) {
+		return planActionRun, true, nil
+	}
+	called := false
+	runRalph = func(_ context.Context, opts ralph.Options) error {
+		called = true
+		if opts.Mode != ralph.ModeAuto {
+			t.Fatalf("Mode = %q, want auto", opts.Mode)
+		}
+		return nil
+	}
+
+	if err := handlePlan(""); err != nil {
+		t.Fatalf("handlePlan(run): %v", err)
+	}
+	if !called {
+		t.Fatalf("expected Ralph auto mode to be called")
+	}
+}
+
+func TestHandlePlanReviseActionUsesProvidedRequest(t *testing.T) {
+	repo := t.TempDir()
+	t.Chdir(repo)
+	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("existing goal\n"), 0o644); err != nil {
+		t.Fatalf("write existing goal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] existing\n"), 0o644); err != nil {
+		t.Fatalf("write existing plan: %v", err)
+	}
+
+	origRunRalph := runRalph
+	origActionPicker := runPlanActionPicker
+	origPostPicker := runPostPlanActionPicker
+	t.Cleanup(func() {
+		runRalph = origRunRalph
+		runPlanActionPicker = origActionPicker
+		runPostPlanActionPicker = origPostPicker
+	})
+	runPlanActionPicker = func(_ ralph.PlanningState, hasRequest bool) (planAction, bool, error) {
+		if !hasRequest {
+			t.Fatalf("hasRequest = false, want true")
+		}
+		return planActionRevise, true, nil
+	}
+	runPostPlanActionPicker = func() (postPlanAction, bool, error) {
+		return "", false, nil
+	}
+	called := false
+	runRalph = func(_ context.Context, opts ralph.Options) error {
+		called = true
+		if opts.Mode != ralph.ModePlan {
+			t.Fatalf("Mode = %q, want plan", opts.Mode)
+		}
+		if opts.PlanningRequest != "revise this plan" {
+			t.Fatalf("PlanningRequest = %q", opts.PlanningRequest)
+		}
+		if opts.ResetPlan {
+			t.Fatalf("ResetPlan = true, want false")
+		}
+		if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("existing goal revised\n"), 0o644); err != nil {
+			t.Fatalf("write goal: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] revised\n"), 0o644); err != nil {
+			t.Fatalf("write plan: %v", err)
+		}
+		return nil
+	}
+
+	if err := handlePlan("revise this plan"); err != nil {
+		t.Fatalf("handlePlan(revise): %v", err)
+	}
+	if !called {
+		t.Fatalf("expected Ralph plan mode to be called")
+	}
+}
+
+func TestHandlePlanPostPlanRunNowInvokesAutoMode(t *testing.T) {
+	repo := t.TempDir()
+	t.Chdir(repo)
+	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	origRunRalph := runRalph
+	origActionPicker := runPlanActionPicker
+	origPostPicker := runPostPlanActionPicker
+	t.Cleanup(func() {
+		runRalph = origRunRalph
+		runPlanActionPicker = origActionPicker
+		runPostPlanActionPicker = origPostPicker
+	})
+	runPlanActionPicker = func(_ ralph.PlanningState, _ bool) (planAction, bool, error) {
+		t.Fatalf("action picker should not be called when no Ralph plan exists")
+		return "", false, nil
+	}
+	postCalls := 0
+	runPostPlanActionPicker = func() (postPlanAction, bool, error) {
+		postCalls++
+		if postCalls == 1 {
+			return postPlanActionRun, true, nil
+		}
+		return "", false, nil
+	}
+	planCalls := 0
+	autoCalls := 0
+	runRalph = func(_ context.Context, opts ralph.Options) error {
+		switch opts.Mode {
+		case ralph.ModePlan:
+			planCalls++
+			if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("new goal\n"), 0o644); err != nil {
+				t.Fatalf("write goal: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] do it\n"), 0o644); err != nil {
+				t.Fatalf("write plan: %v", err)
+			}
+		case ralph.ModeAuto:
+			autoCalls++
+		default:
+			t.Fatalf("unexpected mode %q", opts.Mode)
+		}
+		return nil
+	}
+
+	if err := handlePlan("new flow"); err != nil {
+		t.Fatalf("handlePlan(post-plan run): %v", err)
+	}
+	if planCalls != 1 || autoCalls != 1 {
+		t.Fatalf("planCalls=%d autoCalls=%d, want 1/1", planCalls, autoCalls)
+	}
+}
+
+func TestRunPromptWritesAssistantCaptureFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(persist.SessionBindingKeyEnv, "")
+	t.Setenv(persist.SessionBindingOwnerPIDEnv, "")
+
+	capturePath := filepath.Join(t.TempDir(), "assistant.txt")
+	t.Setenv(assistantCaptureEnv, capturePath)
+
+	opts := Options{
+		Ephemeral: true,
+		RuntimeModel: libagent.RuntimeModel{
+			Model: &libagent.StaticTextModel{Response: "captured output\n<promise>DONE</promise>"},
+			ModelCfg: libagent.ModelConfig{
+				Provider: "mock",
+				Model:    "mock",
+			},
+		},
+		ModelCfg: libagent.ModelConfig{
+			Provider: "mock",
+			Model:    "mock",
+		},
+	}
+
+	if err := Run(opts, "hello"); err != nil {
+		t.Fatalf("Run(ephemeral prompt): %v", err)
+	}
+
+	data, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("ReadFile(capture): %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "<promise>DONE</promise>") {
+		t.Fatalf("capture = %q, want promise marker", got)
 	}
 }
 

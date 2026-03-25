@@ -388,6 +388,24 @@ func TestUniversalCandidates(t *testing.T) {
 	}
 }
 
+func TestCommandCandidatesIncludePlanningCommands(t *testing.T) {
+	candidates := commandCandidates()
+	hasPlan := false
+	for _, c := range candidates {
+		if c.Value == "/plan" && c.Display == "plan" {
+			hasPlan = true
+		}
+	}
+	if !hasPlan {
+		t.Fatalf("expected /plan in command candidates, got %#v", candidates)
+	}
+	for _, c := range candidates {
+		if c.Value == "/start-plan" || c.Value == "/read-plan" {
+			t.Fatalf("expected old Ralph commands to be absent, got %#v", candidates)
+		}
+	}
+}
+
 func TestCompletionTokenBounds(t *testing.T) {
 	tests := []struct {
 		name      string

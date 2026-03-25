@@ -11,7 +11,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/francescoalemanno/raijin-mono/internal/compaction"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -23,6 +26,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/input"
 	"github.com/francescoalemanno/raijin-mono/internal/persist"
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
+	"github.com/francescoalemanno/raijin-mono/internal/ralph"
 	"github.com/francescoalemanno/raijin-mono/internal/session"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
 	"github.com/francescoalemanno/raijin-mono/internal/substitution"
@@ -44,6 +48,8 @@ type Options struct {
 	ForceNew     bool
 	Ephemeral    bool
 }
+
+const assistantCaptureEnv = "RAIJIN_ASSISTANT_CAPTURE_FILE"
 
 // Run executes a single prompt in non-interactive CLI mode.
 // Slash commands are supported: non-interactive ones run inline,
@@ -174,6 +180,9 @@ func handleBuiltin(opts Options, resolved resolvedPrompt, forceNew bool) error {
 	case cmd.name == "compact":
 		instructions := strings.TrimSpace(cmd.args)
 		return handleCompact(opts, instructions, forceNew)
+
+	case cmd.name == "plan":
+		return handlePlan(strings.TrimSpace(cmd.args))
 
 	case cmd.name == "sessions":
 		return handleSessions(opts)
@@ -370,6 +379,300 @@ func handleCompact(opts Options, instructions string, forceNew bool) error {
 		return err
 	}
 	return nil
+}
+
+func handlePlan(rawArgs string) error {
+	status, err := ralph.InspectPlanningState(context.Background(), "")
+	if err != nil {
+		return err
+	}
+
+	request := strings.TrimSpace(rawArgs)
+	if status.State == ralph.PlanningStateEmpty {
+		request, err = resolvePlanningRequest(request)
+		if err != nil || request == "" {
+			return err
+		}
+		if err := runPlanningRequest(request, true); err != nil {
+			return err
+		}
+		return handlePostPlanFlow()
+	}
+
+	action, ok, err := runPlanActionPicker(status.State, request != "")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+
+	switch action {
+	case planActionReview:
+		return renderCurrentPlan()
+	case planActionRevise:
+		request, err = resolvePlanningRequest(request)
+		if err != nil || request == "" {
+			return err
+		}
+		if err := runPlanningRequest(request, false); err != nil {
+			return err
+		}
+		return handlePostPlanFlow()
+	case planActionRun:
+		return runExistingPlan()
+	case planActionScratch:
+		request, err = resolvePlanningRequest(request)
+		if err != nil || request == "" {
+			return err
+		}
+		if err := runPlanningRequest(request, true); err != nil {
+			return err
+		}
+		return handlePostPlanFlow()
+	default:
+		return nil
+	}
+}
+
+type planAction string
+
+const (
+	planActionReview  planAction = "review"
+	planActionRevise  planAction = "revise"
+	planActionRun     planAction = "run"
+	planActionScratch planAction = "scratch"
+	planActionCancel  planAction = "cancel"
+)
+
+type postPlanAction string
+
+const (
+	postPlanActionRun    postPlanAction = "run"
+	postPlanActionRevise postPlanAction = "revise"
+	postPlanActionClose  postPlanAction = "close"
+)
+
+var (
+	runPlanActionPicker     = defaultRunPlanActionPicker
+	runPostPlanActionPicker = defaultRunPostPlanActionPicker
+)
+
+func defaultRunPlanActionPicker(state ralph.PlanningState, hasRequest bool) (planAction, bool, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+		return "", false, fmt.Errorf("interactive picker requires a TTY")
+	}
+
+	items := []planActionItem{
+		{action: planActionReview, label: "Review current goal and plan", desc: "Render the saved goal and checklist"},
+		{action: planActionRevise, label: "Revise current plan", desc: "Adjust the current goal and plan in place"},
+		{action: planActionRun, label: "Run current plan", desc: "Start Ralph execution from the saved plan"},
+		{action: planActionScratch, label: "Start a new plan from scratch", desc: "Discard saved Ralph state and replan"},
+		{action: planActionCancel, label: "Cancel", desc: "Leave Ralph unchanged"},
+	}
+
+	initialAction := planActionRun
+	switch {
+	case hasRequest:
+		initialAction = planActionRevise
+	case state == ralph.PlanningStateCompleted:
+		initialAction = planActionReview
+	}
+
+	cursor := 0
+	for i, item := range items {
+		if item.action == initialAction {
+			cursor = i
+			break
+		}
+	}
+
+	fl := newFilterList(
+		"RALPH ACTIONS",
+		items,
+		cursor,
+		0,
+		func(item planActionItem) string {
+			return string(item.action) + " " + item.label + " " + item.desc
+		},
+		func(item planActionItem, selected bool) string {
+			label := item.label
+			if item.desc != "" {
+				label += " — " + item.desc
+			}
+			pointer := "  "
+			if selected {
+				pointer = "→ "
+				return oneshotAccentStyle.Bold(true).Render(pointer + label)
+			}
+			if item.action == planActionCancel {
+				return oneshotMutedStyle.Render(pointer + label)
+			}
+			return oneshotNormalStyle.Render(pointer + label)
+		},
+	)
+
+	final, err := tea.NewProgram(fl, tea.WithAltScreen()).Run()
+	if err != nil {
+		return "", false, err
+	}
+	result := final.(filterList[planActionItem])
+	if result.quitting || result.chosen == nil || result.chosen.action == planActionCancel {
+		return "", false, nil
+	}
+	return result.chosen.action, true, nil
+}
+
+func defaultRunPostPlanActionPicker() (postPlanAction, bool, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+		return "", false, fmt.Errorf("interactive picker requires a TTY")
+	}
+
+	items := []postPlanActionItem{
+		{action: postPlanActionRun, label: "Run now", desc: "Start the freshly reviewed plan"},
+		{action: postPlanActionRevise, label: "Revise again", desc: "Open another planning iteration"},
+		{action: postPlanActionClose, label: "Close", desc: "Leave the current plan as is"},
+	}
+
+	fl := newFilterList(
+		"NEXT STEP",
+		items,
+		0,
+		0,
+		func(item postPlanActionItem) string {
+			return string(item.action) + " " + item.label + " " + item.desc
+		},
+		func(item postPlanActionItem, selected bool) string {
+			label := item.label
+			if item.desc != "" {
+				label += " — " + item.desc
+			}
+			pointer := "  "
+			if selected {
+				pointer = "→ "
+				return oneshotAccentStyle.Bold(true).Render(pointer + label)
+			}
+			if item.action == postPlanActionClose {
+				return oneshotMutedStyle.Render(pointer + label)
+			}
+			return oneshotNormalStyle.Render(pointer + label)
+		},
+	)
+
+	final, err := tea.NewProgram(fl, tea.WithAltScreen()).Run()
+	if err != nil {
+		return "", false, err
+	}
+	result := final.(filterList[postPlanActionItem])
+	if result.quitting || result.chosen == nil || result.chosen.action == postPlanActionClose {
+		return "", false, nil
+	}
+	return result.chosen.action, true, nil
+}
+
+type planActionItem struct {
+	action planAction
+	label  string
+	desc   string
+}
+
+type postPlanActionItem struct {
+	action postPlanAction
+	label  string
+	desc   string
+}
+
+func resolvePlanningRequest(request string) (string, error) {
+	request = strings.TrimSpace(request)
+	if request != "" {
+		return request, nil
+	}
+
+	prompt, err := capturePromptFromEditor("")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(prompt) == "" {
+		fmt.Fprintln(os.Stderr, renderStatusWarning("●")+" Plan prompt was empty; nothing changed")
+		return "", nil
+	}
+	return strings.TrimSpace(prompt), nil
+}
+
+func runPlanningRequest(request string, reset bool) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	err := runRalph(ctx, ralph.Options{
+		PlanningRequest: request,
+		Mode:            ralph.ModePlan,
+		ResetPlan:       reset,
+	})
+	if errors.Is(err, context.Canceled) {
+		fmt.Fprintln(os.Stderr, "Ralph interrupted")
+		return nil
+	}
+	return err
+}
+
+func runExistingPlan() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	err := runRalph(ctx, ralph.Options{
+		Mode: ralph.ModeAuto,
+	})
+	if errors.Is(err, context.Canceled) {
+		fmt.Fprintln(os.Stderr, "Ralph interrupted")
+		return nil
+	}
+	return err
+}
+
+func renderCurrentPlan() error {
+	snapshot, err := ralph.ReadSnapshot(context.Background(), "")
+	if err != nil {
+		return err
+	}
+
+	var doc strings.Builder
+	doc.WriteString("# Goal\n\n")
+	doc.WriteString(snapshot.Goal)
+	doc.WriteString("\n\n# Plan\n\n")
+	doc.WriteString(snapshot.Plan)
+	doc.WriteString("\n")
+
+	renderMarkdownDocument(os.Stdout, doc.String())
+	return nil
+}
+
+func handlePostPlanFlow() error {
+	for {
+		if err := renderCurrentPlan(); err != nil {
+			return err
+		}
+		action, ok, err := runPostPlanActionPicker()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		switch action {
+		case postPlanActionRun:
+			return runExistingPlan()
+		case postPlanActionRevise:
+			request, err := resolvePlanningRequest("")
+			if err != nil || request == "" {
+				return err
+			}
+			if err := runPlanningRequest(request, false); err != nil {
+				return err
+			}
+		default:
+			return nil
+		}
+	}
 }
 
 func handleSessions(opts Options) error {
@@ -713,6 +1016,27 @@ func handleStatus(opts Options, forceNew bool) error {
 	return nil
 }
 
+func renderMarkdownDocument(w io.Writer, doc string) {
+	if w == nil {
+		return
+	}
+
+	r := newLineMarkdownRenderer()
+	for _, line := range strings.Split(strings.ReplaceAll(doc, "\r\n", "\n"), "\n") {
+		rendered := r.RenderLine(line)
+		if rendered == "" {
+			if strings.TrimSpace(line) == "" {
+				fmt.Fprintln(w)
+			}
+			continue
+		}
+		fmt.Fprintln(w, rendered)
+	}
+	if tail := r.FlushTable(); tail != "" {
+		fmt.Fprintln(w, tail)
+	}
+}
+
 func statusModelLabel(opts Options) string {
 	provider := strings.TrimSpace(opts.ModelCfg.Provider)
 	model := strings.TrimSpace(opts.ModelCfg.Model)
@@ -860,6 +1184,9 @@ func runPromptWithSession(opts Options, sess *session.Session, promptText string
 		Attachments:     attachments,
 		MaxOutputTokens: maxTokens,
 	})
+	if capturePath := strings.TrimSpace(os.Getenv(assistantCaptureEnv)); capturePath != "" {
+		_ = os.WriteFile(capturePath, []byte(r.FinalText()), 0o644)
+	}
 	// Always sync the binding even when the run is interrupted (e.g. Ctrl+C).
 	if !opts.Ephemeral {
 		_ = sess.EnsurePersisted()
@@ -869,3 +1196,5 @@ func runPromptWithSession(opts Options, sess *session.Session, promptText string
 
 // stderrWriter is a helper to write status messages to stderr.
 var stderrWriter io.Writer = os.Stderr
+
+var runRalph = ralph.Run
