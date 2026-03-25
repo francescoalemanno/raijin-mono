@@ -648,6 +648,61 @@ func TestHandlePlanPostPlanRunNowInvokesAutoMode(t *testing.T) {
 	}
 }
 
+func TestHandlePlanPostPlanReviewRendersAndStops(t *testing.T) {
+	repo := t.TempDir()
+	t.Chdir(repo)
+	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	origRunRalph := runRalph
+	origActionPicker := runPlanActionPicker
+	origPostPicker := runPostPlanActionPicker
+	t.Cleanup(func() {
+		runRalph = origRunRalph
+		runPlanActionPicker = origActionPicker
+		runPostPlanActionPicker = origPostPicker
+	})
+	runPlanActionPicker = func(_ ralph.PlanningState, _ bool) (planAction, bool, error) {
+		t.Fatalf("action picker should not be called when no Ralph plan exists")
+		return "", false, nil
+	}
+	postCalls := 0
+	runPostPlanActionPicker = func() (postPlanAction, bool, error) {
+		postCalls++
+		return postPlanActionReview, true, nil
+	}
+	planCalls := 0
+	runRalph = func(_ context.Context, opts ralph.Options) error {
+		if opts.Mode != ralph.ModePlan {
+			t.Fatalf("unexpected mode %q", opts.Mode)
+		}
+		planCalls++
+		if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("new goal\n"), 0o644); err != nil {
+			t.Fatalf("write goal: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] do it\n"), 0o644); err != nil {
+			t.Fatalf("write plan: %v", err)
+		}
+		return nil
+	}
+
+	out := captureStdout(t, func() {
+		if err := handlePlan("new flow"); err != nil {
+			t.Fatalf("handlePlan(post-plan review stop): %v", err)
+		}
+	})
+	if planCalls != 1 {
+		t.Fatalf("planCalls=%d, want 1", planCalls)
+	}
+	if postCalls != 1 {
+		t.Fatalf("postCalls=%d, want 1", postCalls)
+	}
+	if strings.Count(out, "new goal") < 2 || strings.Count(out, "do it") < 2 {
+		t.Fatalf("expected plan to be rendered before picker and once more for review, got %q", out)
+	}
+}
+
 func TestRunPromptWritesAssistantCaptureFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -448,6 +448,7 @@ const (
 type postPlanAction string
 
 const (
+	postPlanActionReview postPlanAction = "review"
 	postPlanActionRun    postPlanAction = "run"
 	postPlanActionRevise postPlanAction = "revise"
 	postPlanActionClose  postPlanAction = "close"
@@ -529,6 +530,7 @@ func defaultRunPostPlanActionPicker() (postPlanAction, bool, error) {
 	}
 
 	items := []postPlanActionItem{
+		{action: postPlanActionReview, label: "Review current goal and plan", desc: "Render the saved goal and checklist"},
 		{action: postPlanActionRun, label: "Run now", desc: "Start the freshly reviewed plan"},
 		{action: postPlanActionRevise, label: "Revise again", desc: "Open another planning iteration"},
 		{action: postPlanActionClose, label: "Close", desc: "Leave the current plan as is"},
@@ -659,6 +661,8 @@ func handlePostPlanFlow() error {
 			return nil
 		}
 		switch action {
+		case postPlanActionReview:
+			return renderCurrentPlan()
 		case postPlanActionRun:
 			return runExistingPlan()
 		case postPlanActionRevise:
