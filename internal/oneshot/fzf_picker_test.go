@@ -5,7 +5,7 @@ import "testing"
 func TestBuildFZFPickerLinesMakesDuplicateLabelsUnique(t *testing.T) {
 	t.Parallel()
 
-	lines, lineToKey := buildFZFPickerLines([]fzfPickerItem{
+	lines, lineToKey, previewEnabled := buildFZFPickerLines([]fzfPickerItem{
 		{key: "a", label: "same"},
 		{key: "b", label: "same"},
 		{key: "c", label: "same"},
@@ -28,12 +28,15 @@ func TestBuildFZFPickerLinesMakesDuplicateLabelsUnique(t *testing.T) {
 			t.Fatalf("line %q missing key mapping", line)
 		}
 	}
+	if previewEnabled {
+		t.Fatalf("previewEnabled = true, want false")
+	}
 }
 
 func TestBuildFZFPickerLinesPreservesLeadingWhitespace(t *testing.T) {
 	t.Parallel()
 
-	lines, _ := buildFZFPickerLines([]fzfPickerItem{
+	lines, _, _ := buildFZFPickerLines([]fzfPickerItem{
 		{key: "a", label: "   └─ + child"},
 	})
 
@@ -53,9 +56,30 @@ func TestPickerLinePositionUsesResolvedLines(t *testing.T) {
 		{key: "b", label: "same"},
 		{key: "c", label: "other"},
 	}
-	lines, lineToKey := buildFZFPickerLines(items)
+	lines, lineToKey, _ := buildFZFPickerLines(items)
 
 	if got, want := pickerLinePosition(lines, lineToKey, "b"), 2; got != want {
 		t.Fatalf("pickerLinePosition(...) = %d, want %d", got, want)
+	}
+}
+
+func TestBuildFZFPickerLinesIncludesEncodedPreview(t *testing.T) {
+	t.Parallel()
+
+	lines, lineToKey, previewEnabled := buildFZFPickerLines([]fzfPickerItem{
+		{key: "help", label: "/help", preview: "/help\n\nShow help"},
+	})
+
+	if !previewEnabled {
+		t.Fatalf("previewEnabled = false, want true")
+	}
+	if len(lines) != 1 {
+		t.Fatalf("len(lines) = %d, want 1", len(lines))
+	}
+	if got, want := lines[0], "/help\t/help\\n\\nShow help"; got != want {
+		t.Fatalf("line = %q, want %q", got, want)
+	}
+	if got, want := lineToKey[lines[0]], "help"; got != want {
+		t.Fatalf("lineToKey[...] = %q, want %q", got, want)
 	}
 }

@@ -13,8 +13,9 @@ import (
 )
 
 type fzfPickerItem struct {
-	key   string
-	label string
+	key     string
+	label   string
+	preview string
 }
 
 type fzfPickerAction string
@@ -36,7 +37,7 @@ func pickWithEmbeddedFZFInitial(items []fzfPickerItem, query string, allowDelete
 		return "", fzfPickerActionCancel, errFZFPickerUnavailable
 	}
 
-	lines, lineToKey := buildFZFPickerLines(items)
+	lines, lineToKey, previewEnabled := buildFZFPickerLines(items)
 	if len(lines) == 0 {
 		return "", fzfPickerActionCancel, nil
 	}
@@ -50,6 +51,13 @@ func pickWithEmbeddedFZFInitial(items []fzfPickerItem, query string, allowDelete
 	cfg := shellinit.RunFZFOptions{}
 	cfg.DisableSort = preserveOrder
 	cfg.InitialPosition = pickerLinePosition(lines, lineToKey, initialKey)
+	if previewEnabled {
+		cfg.Delimiter = "\t"
+		cfg.WithNth = "1"
+		cfg.PreviewCommand = "printf '%b' {2}"
+		cfg.PreviewWindow = "right:55%,wrap"
+		cfg.PreviewLabel = "Docs"
+	}
 	if allowDelete {
 		cfg.ExpectKeys = []string{"ctrl-x"}
 		cfg.Bindings = []string{"ctrl-x:accept"}
@@ -98,9 +106,10 @@ func canUseEmbeddedFZF() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-func buildFZFPickerLines(items []fzfPickerItem) ([]string, map[string]string) {
+func buildFZFPickerLines(items []fzfPickerItem) ([]string, map[string]string, bool) {
 	lines := make([]string, 0, len(items))
 	lineToKey := make(map[string]string, len(items))
+	previewEnabled := false
 
 	for _, item := range items {
 		label := item.label
@@ -114,9 +123,22 @@ func buildFZFPickerLines(items []fzfPickerItem) ([]string, map[string]string) {
 		for _, exists := lineToKey[line]; exists; _, exists = lineToKey[line] {
 			line += "*"
 		}
+		if preview := strings.TrimSpace(item.preview); preview != "" {
+			previewEnabled = true
+			line += "\t" + encodeFZFPreviewText(preview)
+		}
 		lineToKey[line] = item.key
 		lines = append(lines, line)
 	}
 
-	return lines, lineToKey
+	return lines, lineToKey, previewEnabled
+}
+
+func encodeFZFPreviewText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ReplaceAll(text, "\\", "\\\\")
+	text = strings.ReplaceAll(text, "\t", "    ")
+	text = strings.ReplaceAll(text, "\n", "\\n")
+	return text
 }
