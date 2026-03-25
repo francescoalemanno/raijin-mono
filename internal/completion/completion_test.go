@@ -406,6 +406,34 @@ func TestCommandCandidatesIncludePlanningCommands(t *testing.T) {
 	}
 }
 
+func TestCommandCandidatesIncludePreviewDocs(t *testing.T) {
+	candidates := commandCandidates()
+	for _, c := range candidates {
+		if c.Value != "/help" {
+			continue
+		}
+		if !strings.Contains(c.Preview, "Show this help message") {
+			t.Fatalf("preview for /help = %q, want builtin description", c.Preview)
+		}
+		return
+	}
+	t.Fatal("expected /help in command candidates")
+}
+
+func TestSkillCandidatesIncludePreviewDocs(t *testing.T) {
+	candidates := skillCandidates()
+	for _, c := range candidates {
+		if c.Value != "+make-skill" {
+			continue
+		}
+		if !strings.Contains(c.Preview, "Creates or updates skills for Raijin") {
+			t.Fatalf("preview for +make-skill = %q, want skill description", c.Preview)
+		}
+		return
+	}
+	t.Fatal("expected +make-skill in skill candidates")
+}
+
 func TestCompletionTokenBounds(t *testing.T) {
 	tests := []struct {
 		name      string

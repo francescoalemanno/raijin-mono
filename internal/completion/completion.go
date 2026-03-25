@@ -3,7 +3,6 @@
 package completion
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -47,6 +46,7 @@ type Candidate struct {
 	Value     string // Full value with prefix (e.g., "@path/to/file")
 	Display   string // What to show in fzf (e.g., "path/to/file")
 	QueryText string // Text to use for fuzzy matching
+	Preview   string // Optional right-side preview text for fzf
 }
 
 // Source provides candidates for a specific token type.
@@ -257,6 +257,14 @@ type FZFPicker struct {
 	Prompt string
 }
 
+type fzfPreviewConfig struct {
+	delimiter      string
+	withNth        string
+	previewCommand string
+	previewWindow  string
+	previewLabel   string
+}
+
 // Pick runs fzf to select from candidates.
 func (p *FZFPicker) Pick(candidates []Candidate, token Token) (string, error) {
 	if len(candidates) == 0 {
@@ -266,16 +274,10 @@ func (p *FZFPicker) Pick(candidates []Candidate, token Token) (string, error) {
 		return candidates[0].Value, nil
 	}
 
-	// Build fzf input
-	var stdin bytes.Buffer
-	for _, c := range candidates {
-		// Use Display for fzf list, we'll map back to Value after
-		stdin.WriteString(c.Display)
-		stdin.WriteByte('\n')
-	}
+	lines, lineToValue, cfg := buildPreviewLinesForCandidates(candidates)
 
 	// Build args
-	args := fzfArgs(token, p)
+	args := fzfArgs(token, p, cfg)
 	options, err := jfzf.ParseOptions(true, args)
 	if err != nil {
 		return "", fmt.Errorf("parse fzf options: %w", err)
@@ -285,8 +287,8 @@ func (p *FZFPicker) Pick(candidates []Candidate, token Token) (string, error) {
 	inputChan := make(chan string)
 	go func() {
 		defer close(inputChan)
-		for _, c := range candidates {
-			inputChan <- c.Display
+		for _, line := range lines {
+			inputChan <- line
 		}
 	}()
 
@@ -312,11 +314,8 @@ func (p *FZFPicker) Pick(candidates []Candidate, token Token) (string, error) {
 		return "", nil
 	}
 
-	// Map display back to value
-	for _, c := range candidates {
-		if c.Display == selectedDisplay {
-			return c.Value, nil
-		}
+	if value, ok := lineToValue[selectedDisplay]; ok {
+		return value, nil
 	}
 	return "", nil
 }
@@ -358,27 +357,62 @@ func fileCandidates() []Candidate {
 }
 
 func commandCandidates() []Candidate {
+	builtinsByName := make(map[string]commands.Command, len(commands.BuiltinCommands))
+	for _, cmd := range commands.BuiltinCommands {
+		name := strings.TrimPrefix(cmd.Command, "/")
+		if name == "" {
+			continue
+		}
+		builtinsByName[name] = cmd
+	}
+
+	templatesByName := make(map[string]prompts.Template)
+	for _, tmpl := range prompts.GetTemplates() {
+		if tmpl.Name == "" {
+			continue
+		}
+		templatesByName[tmpl.Name] = tmpl
+	}
+
 	names := commandAndTemplateNames()
-	candidates := make([]Candidate, len(names))
-	for i, name := range names {
-		candidates[i] = Candidate{
+	candidates := make([]Candidate, 0, len(names))
+	for _, name := range names {
+		candidate := Candidate{
 			Value:     "/" + name,
 			Display:   name,
 			QueryText: name,
 		}
+		if cmd, ok := builtinsByName[name]; ok {
+			candidate.Preview = builtinCommandPreview(cmd)
+		} else if tmpl, ok := templatesByName[name]; ok {
+			candidate.Preview = templatePreview(tmpl)
+		}
+		candidates = append(candidates, candidate)
 	}
 	return candidates
 }
 
 func skillCandidates() []Candidate {
+	skillsByName := make(map[string]skills.Skill)
+	for _, skill := range skills.GetSkills() {
+		if skill.Name == "" {
+			continue
+		}
+		skillsByName[skill.Name] = skill
+	}
+
 	names := skillNames()
-	candidates := make([]Candidate, len(names))
-	for i, name := range names {
-		candidates[i] = Candidate{
+	candidates := make([]Candidate, 0, len(names))
+	for _, name := range names {
+		candidate := Candidate{
 			Value:     "+" + name,
 			Display:   name,
 			QueryText: name,
 		}
+		if skill, ok := skillsByName[name]; ok {
+			candidate.Preview = skillPreview(skill)
+		}
+		candidates = append(candidates, candidate)
 	}
 	return candidates
 }
@@ -388,24 +422,112 @@ func universalCandidates() []Candidate {
 	var candidates []Candidate
 
 	// Add commands and templates (as /name)
-	for _, name := range commandAndTemplateNames() {
+	for _, candidate := range commandCandidates() {
 		candidates = append(candidates, Candidate{
-			Value:     "/" + name,
-			Display:   "/" + name,
-			QueryText: name,
+			Value:     candidate.Value,
+			Display:   candidate.Value,
+			QueryText: candidate.QueryText,
+			Preview:   candidate.Preview,
 		})
 	}
 
 	// Add skills (as +name)
-	for _, name := range skillNames() {
+	for _, candidate := range skillCandidates() {
 		candidates = append(candidates, Candidate{
-			Value:     "+" + name,
-			Display:   "+" + name,
-			QueryText: name,
+			Value:     candidate.Value,
+			Display:   candidate.Value,
+			QueryText: candidate.QueryText,
+			Preview:   candidate.Preview,
 		})
 	}
 
 	return candidates
+}
+
+func buildPreviewLinesForCandidates(candidates []Candidate) ([]string, map[string]string, fzfPreviewConfig) {
+	lines := make([]string, 0, len(candidates))
+	lineToValue := make(map[string]string, len(candidates))
+	needsPreview := false
+
+	for _, candidate := range candidates {
+		line := candidate.Display
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		for {
+			if _, exists := lineToValue[line]; !exists {
+				break
+			}
+			line += "*"
+		}
+		if preview := strings.TrimSpace(candidate.Preview); preview != "" {
+			needsPreview = true
+			line += "\t" + encodeFZFPreviewText(preview)
+		}
+		lines = append(lines, line)
+		lineToValue[line] = candidate.Value
+	}
+
+	cfg := fzfPreviewConfig{}
+	if needsPreview {
+		cfg.delimiter = "\t"
+		cfg.withNth = "1"
+		cfg.previewCommand = "printf '%b' {2}"
+		cfg.previewWindow = "right:55%,wrap"
+		cfg.previewLabel = "Docs"
+	}
+	return lines, lineToValue, cfg
+}
+
+func encodeFZFPreviewText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ReplaceAll(text, "\\", "\\\\")
+	text = strings.ReplaceAll(text, "\t", "    ")
+	text = strings.ReplaceAll(text, "\n", "\\n")
+	return text
+}
+
+func builtinCommandPreview(cmd commands.Command) string {
+	desc := strings.TrimSpace(cmd.Desc)
+	if desc == "" {
+		desc = "(no description)"
+	}
+	return strings.Join([]string{
+		cmd.Command,
+		"",
+		desc,
+		"",
+		"Type: builtin slash command",
+	}, "\n")
+}
+
+func templatePreview(tmpl prompts.Template) string {
+	desc := strings.TrimSpace(tmpl.Description)
+	if desc == "" {
+		desc = "(no description)"
+	}
+	return strings.Join([]string{
+		"/" + tmpl.Name,
+		"",
+		desc,
+		"",
+		fmt.Sprintf("Type: prompt template [%s]", tmpl.Source),
+	}, "\n")
+}
+
+func skillPreview(skill skills.Skill) string {
+	desc := strings.TrimSpace(skill.Description)
+	if desc == "" {
+		desc = "(no description)"
+	}
+	return strings.Join([]string{
+		"+" + skill.Name,
+		"",
+		desc,
+		"",
+		fmt.Sprintf("Type: skill [%s]", skill.Source),
+	}, "\n")
 }
 
 func commandAndTemplateNames() []string {
@@ -500,7 +622,7 @@ func collectPaths(root string) ([]string, error) {
 	return items, nil
 }
 
-func fzfArgs(token Token, picker *FZFPicker) []string {
+func fzfArgs(token Token, picker *FZFPicker, cfg fzfPreviewConfig) []string {
 	args := []string{"--reverse", "--border", "--no-scrollbar", "--exit-0", "--select-1"}
 
 	if !picker.UseFullscreen {
@@ -531,6 +653,21 @@ func fzfArgs(token Token, picker *FZFPicker) []string {
 	}
 
 	args = append(args, "--bind=tab:accept")
+	if delimiter := cfg.delimiter; delimiter != "" {
+		args = append(args, "--delimiter="+delimiter)
+	}
+	if withNth := strings.TrimSpace(cfg.withNth); withNth != "" {
+		args = append(args, "--with-nth="+withNth)
+	}
+	if preview := strings.TrimSpace(cfg.previewCommand); preview != "" {
+		args = append(args, "--preview="+preview)
+	}
+	if previewWindow := strings.TrimSpace(cfg.previewWindow); previewWindow != "" {
+		args = append(args, "--preview-window="+previewWindow)
+	}
+	if previewLabel := strings.TrimSpace(cfg.previewLabel); previewLabel != "" {
+		args = append(args, "--preview-label="+previewLabel)
+	}
 
 	return args
 }
