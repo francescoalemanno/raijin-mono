@@ -515,9 +515,9 @@ Read these files first if they exist:
 - README.md
 - existing implementation files relevant to the request
 
-Your task is to create or revise %s in place and initialize or revise %s in place. The spec is the durable user/planner specification. It must stay builder-readable and progress-free.
+Create or revise %s in place and create or revise %s in place.
 
-Keep %s as a single Markdown document with these sections in order:
+Keep %s as the planner-owned durable spec with these sections:
 
 # Goal
 <durable project goal>
@@ -529,19 +529,13 @@ Keep %s as a single Markdown document with these sections in order:
 <durable implementation plan or checklist>
 
 Requirements:
-1. Treat %s as planner-owned durable state. Do not use it for progress tracking, completion tracking, or builder handoff notes.
-2. If %s already exists, treat it as canonical and revise it surgically against the new planning request instead of replacing it wholesale.
-3. If %s does not exist yet, create it from the planning request.
-4. Initialize or revise %s so the builder Ralph can immediately pick up the next highest-leverage task from it.
-5. Use %s for concrete task breakdown, sequencing, remaining work, and short builder-facing notes that are still relevant.
-6. do not write interview transcript, open questions, or temporary planning scratch notes into %s. Planning mode must never leave PROMISE: DONE or PROMISE: CONTINUE in it.
-7. Keep both files technical, concise, stable across builder iterations, and limited to durable facts that are already established.
-8. If uncertainty would materially change the goal, scope boundaries, constraints, acceptance criteria, or sequencing, ask clarifying questions instead of guessing.
-9. Use the question tool for those clarifications. Ask only 1-3 focused high-leverage questions before waiting for answers.
-10. Free-form answers are always allowed. After answers arrive, continue planning in the same session.
-11. You may write partial drafts of %s and %s as you learn durable facts, but keep them clean and builder-usable.
-12. Planning mode must never execute the plan, must not edit implementation files, and must not run verification commands, builds, tests, or migrations.
-13. The builder Ralph will treat %s as read-only and continue execution from %s.
+1. Treat %s as planner-owned durable state. Keep it progress-free and revise it surgically when it already exists.
+2. Treat %s as builder-facing mutable state. Keep it limited to concrete next tasks, ordering, remaining work, and short notes that still matter.
+3. Keep both files technical, concise, and limited to durable facts that are already established.
+4. If uncertainty would materially change the goal, scope, constraints, acceptance criteria, or sequencing, use the question tool and ask 1-3 focused clarifying questions before proceeding. Free-form answers are allowed.
+5. Planning mode only. Do not edit implementation files or run builds, tests, migrations, or other verification commands.
+6. Do not leave %s or %s in %s.
+7. The builder Ralph will treat %s as read-only durable input and continue execution from %s.
 
 New planning request from /plan:
 %s
@@ -552,15 +546,12 @@ New planning request from /plan:
 		relPath(repoRoot, pair.ProgressPath), // task progress
 		relPath(repoRoot, pair.SpecPath),     // keep spec
 		relPath(repoRoot, pair.SpecPath),     // req 1
-		relPath(repoRoot, pair.SpecPath),     // req 2
-		relPath(repoRoot, pair.SpecPath),     // req 3
-		relPath(repoRoot, pair.ProgressPath), // req 4
-		relPath(repoRoot, pair.ProgressPath), // req 5
-		relPath(repoRoot, pair.ProgressPath), // req 6
-		relPath(repoRoot, pair.SpecPath),     // req 11 first
-		relPath(repoRoot, pair.ProgressPath), // req 11 second
-		relPath(repoRoot, pair.SpecPath),     // req 13 spec
-		relPath(repoRoot, pair.ProgressPath), // req 13 progress
+		relPath(repoRoot, pair.ProgressPath), // req 2
+		promiseDone,                          // req 6 first promise
+		promiseContinue,                      // req 6 second promise
+		relPath(repoRoot, pair.ProgressPath), // req 6 path
+		relPath(repoRoot, pair.SpecPath),     // req 7 spec
+		relPath(repoRoot, pair.ProgressPath), // req 7 progress
 		renderPromptBlock(planningRequest),   // request
 	)
 }
@@ -650,22 +641,15 @@ Read these files first if they exist:
 
 Rules:
 1. Treat %s as read-only durable input. Do not modify it.
-2. Use %s as your mutable current-view progress file. Update it surgically to track your task breakdown, current progress, controller notes that still matter, and next-iteration notes.
-3. Preserve still-relevant progress content, remaining work, and controller notes in %s. Do not wipe or drastically shrink the file unless the old content is obsolete and you replace it with an equally complete current view.
-4. If %s does not exist yet, create it before finishing.
-5. Keep exactly one whole-line canonical promise in %s before the iteration ends:
+2. Use %s as your mutable working state. Preserve still-relevant task breakdown, remaining work, and controller notes. If it does not exist yet, create it before finishing.
+3. At the start of the iteration, choose one concrete highest-leverage open task from %s.
+4. Do only that one task this iteration. Prefer foundational work that unlocks or de-risks later work.
+5. Run the relevant checks for that work before finishing.
+6. Update %s to reflect what changed, what remains, and any short notes that still matter.
+7. End %s with exactly one whole-line promise:
    - %s
    - %s
-6. You must choose exactly one of those two promise lines and persist it in %s before the iteration is allowed to end.
-7. Write %s only if the entire current specification is complete, verified, and there is no important remaining work. Otherwise write %s.
-8. Finishing your single chosen task is not enough for %s unless that task also completes the entire current specification.
-9. Do not rely on %s for progress tracking or completion tracking.
-10. Run relevant checks inside the repo before finishing.
-11. Re-read the files you need before making decisions.
-12. At the start of the iteration, choose exactly one single most high-leverage task from %s to work on.
-13. Prefer the most important foundational item that unlocks or de-risks later work, while still keeping the chosen task concrete and finishable within one iteration.
-14. Do that single chosen task, update %s to reflect the result, and then stop.
-15. Do not try to push progress across the whole specification in one iteration.
+8. Write %s only if the entire current specification is complete and verified. Otherwise write %s.
 `),
 		relPath(repoRoot, pair.SpecPath),
 		relPath(repoRoot, pair.ProgressPath),
@@ -674,15 +658,11 @@ Rules:
 		relPath(repoRoot, pair.ProgressPath),
 		relPath(repoRoot, pair.ProgressPath),
 		relPath(repoRoot, pair.ProgressPath),
-		promiseDone,
-		promiseContinue,
 		relPath(repoRoot, pair.ProgressPath),
 		promiseDone,
 		promiseContinue,
 		promiseDone,
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.ProgressPath),
-		relPath(repoRoot, pair.ProgressPath),
+		promiseContinue,
 	)
 }
 

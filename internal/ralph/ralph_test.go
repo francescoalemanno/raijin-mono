@@ -50,6 +50,15 @@ func testSpecContent(title string) string {
 	return "# Goal\n\n" + title + "\n\n# User Specification\n\nKeep changes narrow.\n\n# Plan\n\n1. Do the work.\n"
 }
 
+func assertContainsAll(t *testing.T, got string, want ...string) {
+	t.Helper()
+	for _, needle := range want {
+		if !strings.Contains(got, needle) {
+			t.Fatalf("expected %q to contain %q", got, needle)
+		}
+	}
+}
+
 func TestReadSnapshotReturnsSpecAndProgress(t *testing.T) {
 	repo := t.TempDir()
 	pair := writeNamedSpecPair(t, repo, "otter-thread-sage", testSpecContent("Ship the builder"), "working\nPROMISE: CONTINUE\n")
@@ -249,21 +258,17 @@ func TestRunPlanCreatesNamedSpecAndInitializesProgress(t *testing.T) {
 		if !strings.Contains(prompt, ".raijin/ralph/progress-otter-thread-sage.txt") {
 			t.Fatalf("planning prompt missing progress path: %q", prompt)
 		}
-		if !strings.Contains(prompt, "Initialize or revise .raijin/ralph/progress-otter-thread-sage.txt") {
-			t.Fatalf("planning prompt should require progress initialization: %q", prompt)
-		}
-		if !strings.Contains(prompt, "must never leave PROMISE: DONE or PROMISE: CONTINUE") {
-			t.Fatalf("planning prompt should forbid promise lines in progress: %q", prompt)
-		}
-		if !strings.Contains(prompt, "ask clarifying questions instead of guessing") {
-			t.Fatalf("planning prompt should require clarifications: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Ask only 1-3 focused high-leverage questions") {
-			t.Fatalf("planning prompt should limit question batches: %q", prompt)
-		}
-		if !strings.Contains(prompt, "do not write interview transcript") {
-			t.Fatalf("planning prompt should forbid interview transcript state: %q", prompt)
-		}
+		assertContainsAll(t, prompt,
+			"# Goal",
+			"# User Specification",
+			"# Plan",
+			"builder-facing mutable state",
+			"question tool",
+			"ask 1-3 focused clarifying questions",
+			"Planning mode only",
+			promiseDone,
+			promiseContinue,
+		)
 		if strings.Contains(prompt, "plan.md") {
 			t.Fatalf("planning prompt should not reference legacy plan.md: %q", prompt)
 		}
@@ -514,29 +519,17 @@ func TestRunAutoClearsPromisesAndCompletesFromProgressFile(t *testing.T) {
 		if !strings.Contains(prompt, promiseDone) || !strings.Contains(prompt, promiseContinue) {
 			t.Fatalf("builder prompt missing promise instructions: %q", prompt)
 		}
-		if !strings.Contains(prompt, "Update it surgically") {
-			t.Fatalf("builder prompt missing surgical progress instruction: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Do not wipe or drastically shrink the file") {
-			t.Fatalf("builder prompt missing anti-destructive progress instruction: %q", prompt)
-		}
-		if !strings.Contains(prompt, "choose exactly one single most high-leverage task") {
-			t.Fatalf("builder prompt missing high-leverage task instruction: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Prefer the most important foundational item") {
-			t.Fatalf("builder prompt missing foundational-priority instruction: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Do that single chosen task") {
-			t.Fatalf("builder prompt missing stop-after-one-task instruction: %q", prompt)
-		}
+		assertContainsAll(t, prompt,
+			"read-only durable input",
+			"mutable working state",
+			"one concrete highest-leverage open task",
+			"Do only that one task this iteration",
+			"Run the relevant checks",
+			"Update .raijin/ralph/progress-otter-thread-sage.txt to reflect what changed",
+			"entire current specification is complete and verified",
+		)
 		if strings.Contains(prompt, "%!s(MISSING)") {
 			t.Fatalf("builder prompt has missing interpolation: %q", prompt)
-		}
-		if !strings.Contains(prompt, "update .raijin/ralph/progress-otter-thread-sage.txt to reflect the result") {
-			t.Fatalf("builder prompt missing interpolated progress path in stop instruction: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Finishing your single chosen task is not enough for PROMISE: DONE") {
-			t.Fatalf("builder prompt missing conservative DONE rule: %q", prompt)
 		}
 
 		switch callCount {
