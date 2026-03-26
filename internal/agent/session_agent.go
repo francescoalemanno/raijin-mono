@@ -26,11 +26,13 @@ type SessionAgentCall struct {
 	SessionID        string
 	Prompt           string
 	Attachments      []libagent.FilePart
+	ExtraTools       []libagent.Tool
 	MaxOutputTokens  int64
 	Temperature      *float64
 	TopP             *float64
 	TopK             *int64
 	OnMessageCreated func(messageID string)
+	OnCompleteHook   libagent.OnCompleteHook
 }
 
 // SessionAgent orchestrates LLM interactions with proper message and session management.
@@ -115,6 +117,9 @@ func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueF
 	model := a.model
 	systemPrompt := a.systemPrompt
 	a.mu.RUnlock()
+	if len(call.ExtraTools) > 0 {
+		agentTools = mergeCallTools(agentTools, call.ExtraTools)
+	}
 
 	if model.Model == nil {
 		return errors.New("llm runtime is not configured")
@@ -194,6 +199,7 @@ func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueF
 		TransformContext: a.autoCompactTransform(call.SessionID, model, rs.messageIDs),
 		ProviderOptions:  providerOpts,
 		MaxOutputTokens:  maxOut,
+		OnCompleteHook:   call.OnCompleteHook,
 	})
 
 	// Subscribe to events before starting.
@@ -280,6 +286,29 @@ func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueF
 	}
 
 	return nil
+}
+
+func mergeCallTools(base, extra []libagent.Tool) []libagent.Tool {
+	if len(extra) == 0 {
+		return base
+	}
+	merged := make([]libagent.Tool, 0, len(base)+len(extra))
+	seen := make(map[string]int, len(base)+len(extra))
+	for _, tool := range base {
+		name := tool.Info().Name
+		seen[name] = len(merged)
+		merged = append(merged, tool)
+	}
+	for _, tool := range extra {
+		name := tool.Info().Name
+		if idx, ok := seen[name]; ok {
+			merged[idx] = tool
+			continue
+		}
+		seen[name] = len(merged)
+		merged = append(merged, tool)
+	}
+	return merged
 }
 
 // runState holds mutable per-run state updated as agent events arrive.
