@@ -386,6 +386,38 @@ func TestRendererLiveSpinnerToolPhaseLastsUntilAllToolResultsFinish(t *testing.T
 	}
 }
 
+func TestRendererInteractiveDialogSuspendsSpinnerRedraw(t *testing.T) {
+	var stderr bytes.Buffer
+	current := time.Unix(300, 0)
+	r := newRendererWithOptions(&stderr, &bytes.Buffer{}, nil, true, rendererOptions{
+		persistentSpinner: true,
+		now:               func() time.Time { return current },
+		spinnerInterval:   time.Hour,
+		modelLabel:        "openai/gpt-test",
+		contextWindow:     10000,
+	})
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	stderr.Reset()
+	r.beginInteractiveDialog()
+	cleared := stderr.String()
+	if !strings.Contains(cleared, "\r") {
+		t.Fatalf("expected beginInteractiveDialog to clear the spinner, got %q", cleared)
+	}
+
+	stderr.Reset()
+	r.redrawSpinnerLocked()
+	if got := stderr.String(); got != "" {
+		t.Fatalf("spinner redraw should be suppressed during dialog, got %q", got)
+	}
+
+	r.endInteractiveDialog()
+	if got := stderr.String(); !strings.Contains(got, "Reasoning") {
+		t.Fatalf("expected spinner redraw after dialog ends, got %q", got)
+	}
+}
+
 func TestRendererLiveSpinnerSuspendsAroundStdoutWrites(t *testing.T) {
 	var tty bytes.Buffer
 	current := time.Unix(300, 0)

@@ -24,6 +24,12 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 const defaultSpinnerInterval = 120 * time.Millisecond
 
+var activeRendererStack struct {
+	mu      sync.Mutex
+	stack   []*renderer
+	current *renderer
+}
+
 type rendererOptions struct {
 	persistentSpinner bool
 	now               func() time.Time
@@ -97,10 +103,44 @@ type renderer struct {
 	modelLabel          string
 	contextWindow       int64
 	contextMessages     []libagent.Message
+	interactiveDialogs  int
 }
 
 func newRenderer(stderr, stdout io.Writer, agentTools []libagent.Tool, isTTY bool) *renderer {
 	return newRendererWithOptions(stderr, stdout, agentTools, isTTY, rendererOptions{})
+}
+
+func pushActiveRenderer(r *renderer) func() {
+	activeRendererStack.mu.Lock()
+	activeRendererStack.stack = append(activeRendererStack.stack, r)
+	activeRendererStack.current = r
+	activeRendererStack.mu.Unlock()
+
+	return func() {
+		activeRendererStack.mu.Lock()
+		defer activeRendererStack.mu.Unlock()
+		if n := len(activeRendererStack.stack); n > 0 {
+			activeRendererStack.stack = activeRendererStack.stack[:n-1]
+		}
+		if n := len(activeRendererStack.stack); n > 0 {
+			activeRendererStack.current = activeRendererStack.stack[n-1]
+			return
+		}
+		activeRendererStack.current = nil
+	}
+}
+
+func beginCurrentRendererInteractiveDialog() func() {
+	activeRendererStack.mu.Lock()
+	r := activeRendererStack.current
+	activeRendererStack.mu.Unlock()
+	if r == nil {
+		return func() {}
+	}
+	r.beginInteractiveDialog()
+	return func() {
+		r.endInteractiveDialog()
+	}
 }
 
 func newRendererWithOptions(stderr, stdout io.Writer, agentTools []libagent.Tool, isTTY bool, opts rendererOptions) *renderer {
@@ -1042,7 +1082,7 @@ func (r *renderer) spinnerLineLocked() string {
 }
 
 func (r *renderer) redrawSpinnerLocked() {
-	if !r.spinnerEnabled || r.spinnerStateStart.IsZero() || r.nestedPendingInline {
+	if !r.spinnerEnabled || r.spinnerStateStart.IsZero() || r.nestedPendingInline || r.interactiveDialogs > 0 {
 		return
 	}
 	line := r.spinnerLineLocked()
@@ -1058,6 +1098,27 @@ func (r *renderer) redrawSpinnerLocked() {
 	}
 	r.spinnerVisible = true
 	r.spinnerWidth = lineWidth
+}
+
+func (r *renderer) beginInteractiveDialog() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.interactiveDialogs++
+	if r.interactiveDialogs == 1 {
+		r.clearSpinnerLocked()
+	}
+}
+
+func (r *renderer) endInteractiveDialog() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.interactiveDialogs == 0 {
+		return
+	}
+	r.interactiveDialogs--
+	if r.interactiveDialogs == 0 {
+		r.redrawSpinnerLocked()
+	}
 }
 
 func (r *renderer) clearSpinnerLocked() {
