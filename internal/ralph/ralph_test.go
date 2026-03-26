@@ -2,162 +2,118 @@ package ralph
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
-func TestRunPlanCreatesArtifactsWithoutImplicitVerifyDiscovery(t *testing.T) {
-	repo := t.TempDir()
-
-	origPrompt := runEphemeralPrompt
-	t.Cleanup(func() { runEphemeralPrompt = origPrompt })
-	runEphemeralPrompt = func(_ context.Context, repoRoot, prompt string, _, _ io.Writer) (promptResult, error) {
-		if repoRoot != repo {
-			t.Fatalf("repoRoot = %q, want %q", repoRoot, repo)
-		}
-		if !strings.Contains(prompt, "revise .raijin/ralph/goal.md and .raijin/ralph/plan.md in place") {
-			t.Fatalf("planning prompt missing revision instruction: %q", prompt)
-		}
-		if !strings.Contains(prompt, "- .raijin/ralph/plan.md") {
-			t.Fatalf("planning prompt should read the existing plan: %q", prompt)
-		}
-		if !strings.Contains(prompt, "If .raijin/ralph/feedback.md exists, decide whether it still matters for planning") {
-			t.Fatalf("planning prompt should explain feedback handling: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Be surgical and technical.") {
-			t.Fatalf("planning prompt should demand a technical plan: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Prefer narrow implementation steps over broad phases.") {
-			t.Fatalf("planning prompt should prefer narrow tasks: %q", prompt)
-		}
-		if !strings.Contains(prompt, "The plan should read like a careful engineer's execution checklist") {
-			t.Fatalf("planning prompt should require an engineer-style plan: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Planning mode must never execute the plan.") {
-			t.Fatalf("planning prompt should explicitly forbid execution: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Do not run verification commands, builds, tests, or migrations in planning mode.") {
-			t.Fatalf("planning prompt should explicitly forbid command execution: %q", prompt)
-		}
-		if !strings.Contains(prompt, "New planning request from /plan:") {
-			t.Fatalf("planning prompt should include the /plan request: %q", prompt)
-		}
-		if strings.Contains(prompt, "Current canonical goal from .raijin/ralph/goal.md:") {
-			t.Fatalf("planning prompt should not inject canonical goal content directly: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Read .raijin/ralph/goal.md yourself if it exists") {
-			t.Fatalf("planning prompt should tell the model to read goal.md itself: %q", prompt)
-		}
-		if !strings.Contains(prompt, "implement ralph") {
-			t.Fatalf("planning prompt should include the initial planning request: %q", prompt)
-		}
-		if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] first task\n"), 0o644); err != nil {
-			t.Fatalf("write plan.md: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("implement ralph\n"), 0o644); err != nil {
-			t.Fatalf("write goal.md: %v", err)
-		}
-		return promptResult{Stdout: "planned\n"}, nil
+func writeSpecFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
 	}
-
-	if err := Run(context.Background(), Options{
-		PlanningRequest: "implement ralph",
-		Mode:            ModePlan,
-		RepoRoot:        repo,
-	}); err != nil {
-		t.Fatalf("Run(plan): %v", err)
-	}
-
-	state, err := loadState(filepath.Join(repo, ".raijin", "ralph", "state.json"))
-	if err != nil {
-		t.Fatalf("loadState: %v", err)
-	}
-	if state.LastStatus != "planned" {
-		t.Fatalf("LastStatus = %q, want planned", state.LastStatus)
-	}
-	if state.Goal != "implement ralph" {
-		t.Fatalf("Goal = %q, want %q", state.Goal, "implement ralph")
-	}
-	if goal := readOptionalFile(filepath.Join(repo, ".raijin", "ralph", "goal.md")); strings.TrimSpace(goal) != "implement ralph" {
-		t.Fatalf("goal.md = %q", goal)
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(content)+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
 	}
 }
 
-func TestReadSnapshotReturnsGoalAndPlan(t *testing.T) {
-	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
+func writeProgressFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("ship the tui refresh\n"), 0o644); err != nil {
-		t.Fatalf("write goal: %v", err)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] tighten spacing\n"), 0o644); err != nil {
-		t.Fatalf("write plan: %v", err)
-	}
+}
 
-	got, err := ReadSnapshot(context.Background(), repo)
+func writeNamedSpecPair(t *testing.T, repo, slug, spec, progress string) SpecPair {
+	t.Helper()
+	pair := SpecPair{
+		SpecPath:     filepath.Join(repo, ".raijin", "ralph", "spec-"+slug+".md"),
+		ProgressPath: filepath.Join(repo, ".raijin", "ralph", "progress-"+slug+".txt"),
+		Slug:         slug,
+	}
+	writeSpecFile(t, pair.SpecPath, spec)
+	if progress != "" {
+		writeProgressFile(t, pair.ProgressPath, progress)
+	}
+	return pair
+}
+
+func testSpecContent(title string) string {
+	return "# Goal\n\n" + title + "\n\n# User Specification\n\nKeep changes narrow.\n\n# Plan\n\n1. Do the work.\n"
+}
+
+func TestReadSnapshotReturnsSpecAndProgress(t *testing.T) {
+	repo := t.TempDir()
+	pair := writeNamedSpecPair(t, repo, "otter-thread-sage", testSpecContent("Ship the builder"), "working\nPROMISE: CONTINUE\n")
+
+	got, err := ReadSnapshot(context.Background(), repo, pair.SpecPath)
 	if err != nil {
 		t.Fatalf("ReadSnapshot: %v", err)
 	}
 	if got.RepoRoot != repo {
 		t.Fatalf("RepoRoot = %q, want %q", got.RepoRoot, repo)
 	}
-	if got.Goal != "ship the tui refresh" {
-		t.Fatalf("Goal = %q", got.Goal)
+	if got.SpecPath != pair.SpecPath {
+		t.Fatalf("SpecPath = %q, want %q", got.SpecPath, pair.SpecPath)
 	}
-	if got.Plan != "- [ ] tighten spacing" {
-		t.Fatalf("Plan = %q", got.Plan)
+	if got.ProgressPath != pair.ProgressPath {
+		t.Fatalf("ProgressPath = %q, want %q", got.ProgressPath, pair.ProgressPath)
 	}
-}
-
-func TestHasPlanningState(t *testing.T) {
-	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	if !strings.Contains(got.Spec, "# Goal") {
+		t.Fatalf("Spec = %q, want goal section", got.Spec)
 	}
-
-	got, err := HasPlanningState(context.Background(), repo)
-	if err != nil {
-		t.Fatalf("HasPlanningState(empty): %v", err)
-	}
-	if got {
-		t.Fatalf("HasPlanningState(empty) = true, want false")
-	}
-
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("goal\n"), 0o644); err != nil {
-		t.Fatalf("write goal: %v", err)
-	}
-	got, err = HasPlanningState(context.Background(), repo)
-	if err != nil {
-		t.Fatalf("HasPlanningState(goal only): %v", err)
-	}
-	if got {
-		t.Fatalf("HasPlanningState(goal only) = true, want false")
-	}
-
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] task\n"), 0o644); err != nil {
-		t.Fatalf("write plan: %v", err)
-	}
-	got, err = HasPlanningState(context.Background(), repo)
-	if err != nil {
-		t.Fatalf("HasPlanningState(goal+plan): %v", err)
-	}
-	if !got {
-		t.Fatalf("HasPlanningState(goal+plan) = false, want true")
+	if !strings.Contains(got.Progress, promiseContinue) {
+		t.Fatalf("Progress = %q, want promise", got.Progress)
 	}
 }
 
-func TestInspectPlanningStateClassifiesStatuses(t *testing.T) {
+func TestResolveSpecSelectionSupportsSlugPathAndCustomSpecPaths(t *testing.T) {
 	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	pair := writeNamedSpecPair(t, repo, "otter-thread-sage", testSpecContent("Named spec"), "")
+
+	got, found, err := ResolveSpecSelection(context.Background(), repo, pair.Slug)
+	if err != nil {
+		t.Fatalf("ResolveSpecSelection(slug): %v", err)
+	}
+	if !found || got.SpecPath != pair.SpecPath || got.ProgressPath != pair.ProgressPath {
+		t.Fatalf("ResolveSpecSelection(slug) = %#v, %v", got, found)
 	}
 
-	status, err := InspectPlanningState(context.Background(), repo)
+	got, found, err = ResolveSpecSelection(context.Background(), repo, pair.SpecPath)
+	if err != nil {
+		t.Fatalf("ResolveSpecSelection(path): %v", err)
+	}
+	if !found || got.SpecPath != pair.SpecPath {
+		t.Fatalf("ResolveSpecSelection(path) = %#v, %v", got, found)
+	}
+
+	customSpec := filepath.Join(repo, "docs", "feature-spec.md")
+	writeSpecFile(t, customSpec, testSpecContent("External spec"))
+	got, found, err = ResolveSpecSelection(context.Background(), repo, customSpec)
+	if err != nil {
+		t.Fatalf("ResolveSpecSelection(custom path): %v", err)
+	}
+	if !found {
+		t.Fatalf("ResolveSpecSelection(custom path) found = false, want true")
+	}
+	wantProgress := filepath.Join(repo, "docs", "feature-spec.progress.txt")
+	if got.ProgressPath != wantProgress {
+		t.Fatalf("ProgressPath = %q, want %q", got.ProgressPath, wantProgress)
+	}
+}
+
+func TestInspectPlanningStateUsesProgressPromise(t *testing.T) {
+	repo := t.TempDir()
+
+	status, err := InspectPlanningState(context.Background(), repo, "")
 	if err != nil {
 		t.Fatalf("InspectPlanningState(empty): %v", err)
 	}
@@ -165,466 +121,403 @@ func TestInspectPlanningStateClassifiesStatuses(t *testing.T) {
 		t.Fatalf("state = %q, want empty", status.State)
 	}
 
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("goal\n"), 0o644); err != nil {
-		t.Fatalf("write goal: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] task\n"), 0o644); err != nil {
-		t.Fatalf("write plan: %v", err)
-	}
+	pair := writeNamedSpecPair(t, repo, "otter-thread-sage", testSpecContent("Implement loop"), "")
 
-	status, err = InspectPlanningState(context.Background(), repo)
+	status, err = InspectPlanningState(context.Background(), repo, pair.SpecPath)
 	if err != nil {
-		t.Fatalf("InspectPlanningState(planned): %v", err)
+		t.Fatalf("InspectPlanningState(spec only): %v", err)
 	}
 	if status.State != PlanningStatePlanned {
 		t.Fatalf("state = %q, want planned", status.State)
 	}
 
-	if err := saveState(filepath.Join(repo, ".raijin", "ralph", "state.json"), State{
-		Goal:          "goal",
-		RepoRoot:      repo,
-		MaxIterations: defaultMaxIterations,
-		LastStatus:    "completed",
-	}); err != nil {
-		t.Fatalf("saveState: %v", err)
+	writeProgressFile(t, pair.ProgressPath, "still working\nPROMISE: CONTINUE\n")
+	status, err = InspectPlanningState(context.Background(), repo, pair.SpecPath)
+	if err != nil {
+		t.Fatalf("InspectPlanningState(continue): %v", err)
+	}
+	if status.State != PlanningStatePlanned {
+		t.Fatalf("state = %q, want planned", status.State)
 	}
 
-	status, err = InspectPlanningState(context.Background(), repo)
+	writeProgressFile(t, pair.ProgressPath, "still working with no explicit promise\n")
+	status, err = InspectPlanningState(context.Background(), repo, pair.SpecPath)
 	if err != nil {
-		t.Fatalf("InspectPlanningState(completed): %v", err)
+		t.Fatalf("InspectPlanningState(missing promise): %v", err)
+	}
+	if status.State != PlanningStatePlanned {
+		t.Fatalf("state = %q, want planned when promise is missing", status.State)
+	}
+
+	writeProgressFile(t, pair.ProgressPath, "done\nPROMISE: DONE\n")
+	status, err = InspectPlanningState(context.Background(), repo, pair.SpecPath)
+	if err != nil {
+		t.Fatalf("InspectPlanningState(done): %v", err)
 	}
 	if status.State != PlanningStateCompleted {
 		t.Fatalf("state = %q, want completed", status.State)
 	}
+
+	hasState, err := HasPlanningState(context.Background(), repo, pair.SpecPath)
+	if err != nil {
+		t.Fatalf("HasPlanningState: %v", err)
+	}
+	if !hasState {
+		t.Fatalf("HasPlanningState = false, want true")
+	}
 }
 
-func TestRunPlanDoesNotDeleteExistingPlanOnGoalRevision(t *testing.T) {
+func TestRunPlanCreatesNamedSpecWithoutProgress(t *testing.T) {
 	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	existingGoal := "make TUI awesome by improving layout, typography, and navigation"
-	revisionRequest := "revise item 3: do not add progress bars"
-	existingPlan := "- [x] foundation complete\n- [ ] next step\n"
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte(existingPlan), 0o644); err != nil {
-		t.Fatalf("write existing plan: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte(existingGoal+"\n"), 0o644); err != nil {
-		t.Fatalf("write existing goal: %v", err)
-	}
-	if err := saveState(filepath.Join(repo, ".raijin", "ralph", "state.json"), State{
-		Goal:          existingGoal,
-		RepoRoot:      repo,
-		Iteration:     17,
-		MaxIterations: defaultMaxIterations,
-		LastStatus:    "max_iterations",
-		LastPromise:   "CONTINUE",
-		LastError:     "previous failure",
-	}); err != nil {
-		t.Fatalf("saveState: %v", err)
-	}
 
 	origPrompt := runEphemeralPrompt
-	t.Cleanup(func() { runEphemeralPrompt = origPrompt })
-	runEphemeralPrompt = func(_ context.Context, repoRoot, prompt string, _, _ io.Writer) (promptResult, error) {
+	origSlug := generateSpecSlug
+	origAsk := askPlanningQuestion
+	t.Cleanup(func() {
+		runEphemeralPrompt = origPrompt
+		generateSpecSlug = origSlug
+		askPlanningQuestion = origAsk
+	})
+
+	generateSpecSlug = func() string { return "otter-thread-sage" }
+	askPlanningQuestion = func(context.Context, PlanningQuestionPrompt) (string, error) {
+		return "answer", nil
+	}
+	runEphemeralPrompt = func(_ context.Context, repoRoot string, opts EphemeralPromptOptions, _, _ io.Writer) (promptResult, error) {
+		prompt := opts.Prompt
 		if repoRoot != repo {
 			t.Fatalf("repoRoot = %q, want %q", repoRoot, repo)
 		}
-		currentGoal, err := os.ReadFile(filepath.Join(repoRoot, ".raijin", "ralph", "goal.md"))
+		if opts.OnCompleteHook == nil {
+			t.Fatalf("planning prompt should set onCompleteHook")
+		}
+		if len(opts.ExtraTools) != 1 {
+			t.Fatalf("planning prompt should inject exactly one extra tool, got %d", len(opts.ExtraTools))
+		}
+		if opts.ExtraTools[0].Info().Name != "question" {
+			t.Fatalf("planning extra tool = %q, want question", opts.ExtraTools[0].Info().Name)
+		}
+		if !strings.Contains(prompt, ".raijin/ralph/spec-otter-thread-sage.md") {
+			t.Fatalf("planning prompt missing spec path: %q", prompt)
+		}
+		if !strings.Contains(prompt, ".raijin/ralph/progress-otter-thread-sage.txt") {
+			t.Fatalf("planning prompt missing progress path: %q", prompt)
+		}
+		if !strings.Contains(prompt, "must not create or modify .raijin/ralph/progress-otter-thread-sage.txt") {
+			t.Fatalf("planning prompt should forbid progress writes: %q", prompt)
+		}
+		if !strings.Contains(prompt, "ask clarifying questions instead of guessing") {
+			t.Fatalf("planning prompt should require clarifications: %q", prompt)
+		}
+		if !strings.Contains(prompt, "Ask only 1-3 focused high-leverage questions") {
+			t.Fatalf("planning prompt should limit question batches: %q", prompt)
+		}
+		if !strings.Contains(prompt, "do not write interview transcript") {
+			t.Fatalf("planning prompt should forbid interview transcript state: %q", prompt)
+		}
+		if strings.Contains(prompt, "plan.md") {
+			t.Fatalf("planning prompt should not reference legacy plan.md: %q", prompt)
+		}
+		writeSpecFile(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), testSpecContent("Design the loop"))
+		inject, ok, err := opts.OnCompleteHook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
 		if err != nil {
-			t.Fatalf("ReadFile(goal): %v", err)
+			t.Fatalf("planning onCompleteHook: %v", err)
 		}
-		if strings.TrimSpace(string(currentGoal)) != existingGoal {
-			t.Fatalf("existing goal was modified before planning run: %q", string(currentGoal))
-		}
-		currentPlan, err := os.ReadFile(filepath.Join(repoRoot, ".raijin", "ralph", "plan.md"))
-		if err != nil {
-			t.Fatalf("ReadFile(plan): %v", err)
-		}
-		if string(currentPlan) != existingPlan {
-			t.Fatalf("existing plan was modified before planning run: %q", string(currentPlan))
-		}
-		if !strings.Contains(prompt, "treat it as canonical and treat the new /plan request as revision instructions against it") {
-			t.Fatalf("planning prompt missing goal-revision guidance: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Do not blindly replace .raijin/ralph/goal.md with the raw /plan request text.") {
-			t.Fatalf("planning prompt missing no-blind-replacement guidance: %q", prompt)
-		}
-		if strings.Contains(prompt, existingGoal) {
-			t.Fatalf("planning prompt should not inject the existing goal content directly: %q", prompt)
-		}
-		if !strings.Contains(prompt, revisionRequest) {
-			t.Fatalf("planning prompt should include the revision request: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Read .raijin/ralph/goal.md yourself if it exists") {
-			t.Fatalf("planning prompt should tell the model to read goal.md itself: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Remove completed items or completed phases") {
-			t.Fatalf("planning prompt missing completed-item pruning guidance: %q", prompt)
-		}
-		if !strings.Contains(prompt, "Avoid roadmap-style items such as \"foundation\", \"architecture\", \"polish\", or \"improve quality\"") {
-			t.Fatalf("planning prompt missing anti-roadmap guidance: %q", prompt)
-		}
-		if !strings.Contains(prompt, "If it is obsolete after the revision, delete it.") {
-			t.Fatalf("planning prompt missing obsolete-feedback deletion guidance: %q", prompt)
-		}
-		if err := os.WriteFile(filepath.Join(repoRoot, ".raijin", "ralph", "plan.md"), []byte("- [ ] revised next step\n"), 0o644); err != nil {
-			t.Fatalf("write revised plan: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(repoRoot, ".raijin", "ralph", "goal.md"), []byte(existingGoal+" without progress bars\n"), 0o644); err != nil {
-			t.Fatalf("write revised goal: %v", err)
+		if !ok || inject != "" {
+			t.Fatalf("planning onCompleteHook = %q, %v, want accept", inject, ok)
 		}
 		return promptResult{Stdout: "planned\n"}, nil
 	}
 
 	if err := Run(context.Background(), Options{
-		PlanningRequest: revisionRequest,
+		PlanningRequest: "design the loop",
 		Mode:            ModePlan,
 		RepoRoot:        repo,
 	}); err != nil {
 		t.Fatalf("Run(plan): %v", err)
 	}
 
-	gotPlan, err := os.ReadFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"))
-	if err != nil {
-		t.Fatalf("ReadFile(revised plan): %v", err)
+	if !fileExists(filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md")) {
+		t.Fatalf("expected spec file to be created")
 	}
-	if string(gotPlan) != "- [ ] revised next step\n" {
-		t.Fatalf("plan after revision = %q", string(gotPlan))
-	}
-	gotGoal, err := os.ReadFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"))
-	if err != nil {
-		t.Fatalf("ReadFile(revised goal): %v", err)
-	}
-	if strings.TrimSpace(string(gotGoal)) != existingGoal+" without progress bars" {
-		t.Fatalf("goal after revision = %q", string(gotGoal))
-	}
-
-	state, err := loadState(filepath.Join(repo, ".raijin", "ralph", "state.json"))
-	if err != nil {
-		t.Fatalf("loadState(revised): %v", err)
-	}
-	if state.Goal != existingGoal+" without progress bars" {
-		t.Fatalf("Goal after planning = %q, want revised goal", state.Goal)
-	}
-	if state.Iteration != 0 {
-		t.Fatalf("Iteration after planning = %d, want 0", state.Iteration)
-	}
-	if state.LastStatus != "planned" {
-		t.Fatalf("LastStatus after planning = %q, want planned", state.LastStatus)
-	}
-	if state.LastPromise != "" {
-		t.Fatalf("LastPromise after planning = %q, want empty", state.LastPromise)
-	}
-	if state.LastError != "" {
-		t.Fatalf("LastError after planning = %q, want empty", state.LastError)
+	if fileExists(filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")) {
+		t.Fatalf("progress file should not be created during planning")
 	}
 }
 
-func TestRunPlanFromScratchClearsExistingGoalAndPlanBeforePlanning(t *testing.T) {
+func TestPlanningSpecChangedHookReinjectsWhenSpecDidNotChange(t *testing.T) {
 	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	specPath := filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md")
+	initialSpec := testSpecContent("Initial spec")
+	writeSpecFile(t, specPath, initialSpec)
+
+	hook := planningSpecChangedHook(repo, specPath, readOptionalFile(specPath))
+	inject, ok, err := hook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
+	if err != nil {
+		t.Fatalf("hook unchanged: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] stale task\n"), 0o644); err != nil {
-		t.Fatalf("write existing plan: %v", err)
+	if ok {
+		t.Fatalf("hook unchanged ok = true, want false")
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "goal.md"), []byte("old goal\n"), 0o644); err != nil {
-		t.Fatalf("write existing goal: %v", err)
+	if !strings.Contains(inject, "bidirectionally create or revise the durable Ralph specification with the user") {
+		t.Fatalf("inject = %q, want bidirectional reminder", inject)
 	}
-	if err := saveState(filepath.Join(repo, ".raijin", "ralph", "state.json"), State{
-		Goal:          "old goal",
-		RepoRoot:      repo,
-		Iteration:     9,
-		MaxIterations: defaultMaxIterations,
-		LastStatus:    "continue",
-		LastPromise:   "CONTINUE",
-		LastError:     "old failure",
-	}); err != nil {
-		t.Fatalf("saveState: %v", err)
+	if !strings.Contains(inject, ".raijin/ralph/spec-otter-thread-sage.md") {
+		t.Fatalf("inject = %q, want spec path", inject)
 	}
 
+	writeSpecFile(t, specPath, testSpecContent("Updated spec"))
+	inject, ok, err = hook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
+	if err != nil {
+		t.Fatalf("hook changed: %v", err)
+	}
+	if !ok || inject != "" {
+		t.Fatalf("hook changed = %q, %v, want accept", inject, ok)
+	}
+}
+
+func TestPlanningQuestionToolValidatesAndReturnsAnswer(t *testing.T) {
+	origAsk := askPlanningQuestion
+	t.Cleanup(func() { askPlanningQuestion = origAsk })
+
+	askPlanningQuestion = func(_ context.Context, prompt PlanningQuestionPrompt) (string, error) {
+		if prompt.Question != "Which baseline?" {
+			t.Fatalf("Question = %q", prompt.Question)
+		}
+		if len(prompt.Options) != 2 {
+			t.Fatalf("len(Options) = %d, want 2", len(prompt.Options))
+		}
+		if prompt.Options[0].Label != "CLI-first" || prompt.Options[1].Label != "Library-first" {
+			t.Fatalf("unexpected options = %#v", prompt.Options)
+		}
+		return "CLI-first", nil
+	}
+
+	tool, err := newPlanningQuestionTool()
+	if err != nil {
+		t.Fatalf("newPlanningQuestionTool: %v", err)
+	}
+
+	resp, err := tool.Run(context.Background(), libagent.ToolCall{
+		Name:  "question",
+		Input: `{"question":"Which baseline?","options":[{"label":"CLI-first","description":"Keep the CLI as the main path."},{"label":"Library-first","description":"Optimize for embedded use."}]}`,
+	})
+	if err != nil {
+		t.Fatalf("tool.Run(valid): %v", err)
+	}
+	if resp.IsError {
+		t.Fatalf("tool response unexpectedly errored: %q", resp.Content)
+	}
+	if strings.TrimSpace(resp.Content) != "CLI-first" {
+		t.Fatalf("resp.Content = %q, want %q", resp.Content, "CLI-first")
+	}
+
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "empty question",
+			input: `{"question":"   ","options":[{"label":"A","description":"alpha"}]}`,
+			want:  "question is required",
+		},
+		{
+			name:  "no options",
+			input: `{"question":"Which?","options":[]}`,
+			want:  "at least one option is required",
+		},
+		{
+			name:  "too many options",
+			input: `{"question":"Which?","options":[{"label":"A"},{"label":"B"},{"label":"C"},{"label":"D"}]}`,
+			want:  "at most three options are allowed",
+		},
+		{
+			name:  "empty label",
+			input: `{"question":"Which?","options":[{"label":" ","description":"alpha"}]}`,
+			want:  "option labels must not be empty",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := tool.Run(context.Background(), libagent.ToolCall{Name: "question", Input: tc.input})
+			if err != nil {
+				t.Fatalf("tool.Run(%s): %v", tc.name, err)
+			}
+			if !resp.IsError {
+				t.Fatalf("tool.Run(%s) IsError = false, want true", tc.name)
+			}
+			if !strings.Contains(resp.Content, tc.want) {
+				t.Fatalf("tool.Run(%s) Content = %q, want substring %q", tc.name, resp.Content, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunPlanKeepsPartialDraftWhenClarificationIsCanceled(t *testing.T) {
+	repo := t.TempDir()
+
 	origPrompt := runEphemeralPrompt
-	t.Cleanup(func() { runEphemeralPrompt = origPrompt })
-	runEphemeralPrompt = func(_ context.Context, repoRoot, prompt string, _, _ io.Writer) (promptResult, error) {
+	origSlug := generateSpecSlug
+	origAsk := askPlanningQuestion
+	t.Cleanup(func() {
+		runEphemeralPrompt = origPrompt
+		generateSpecSlug = origSlug
+		askPlanningQuestion = origAsk
+	})
+
+	generateSpecSlug = func() string { return "otter-thread-sage" }
+	askPlanningQuestion = func(context.Context, PlanningQuestionPrompt) (string, error) {
+		return "", context.Canceled
+	}
+	runEphemeralPrompt = func(_ context.Context, repoRoot string, opts EphemeralPromptOptions, _, _ io.Writer) (promptResult, error) {
 		if repoRoot != repo {
 			t.Fatalf("repoRoot = %q, want %q", repoRoot, repo)
 		}
-		if fileExists(filepath.Join(repoRoot, ".raijin", "ralph", "goal.md")) {
-			t.Fatalf("goal.md should be cleared before scratch planning")
+		if len(opts.ExtraTools) != 1 || opts.ExtraTools[0].Info().Name != "question" {
+			t.Fatalf("expected planning question tool, got %#v", opts.ExtraTools)
 		}
-		if fileExists(filepath.Join(repoRoot, ".raijin", "ralph", "plan.md")) {
-			t.Fatalf("plan.md should be cleared before scratch planning")
-		}
-		if err := os.WriteFile(filepath.Join(repoRoot, ".raijin", "ralph", "plan.md"), []byte("- [ ] brand new task\n"), 0o644); err != nil {
-			t.Fatalf("write new plan: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(repoRoot, ".raijin", "ralph", "goal.md"), []byte("brand new goal\n"), 0o644); err != nil {
-			t.Fatalf("write new goal: %v", err)
-		}
-		return promptResult{Stdout: "planned\n"}, nil
+		writeSpecFile(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), "# Goal\n\nPartial draft\n\n# User Specification\n\nKnown facts only.\n\n# Plan\n\n1. Initial draft.\n")
+		_, err := opts.ExtraTools[0].Run(context.Background(), libagent.ToolCall{
+			Name:  "question",
+			Input: `{"question":"Which deployment target matters most?","options":[{"label":"CLI","description":"Interactive users first."}]}`,
+		})
+		return promptResult{}, err
 	}
 
 	if err := Run(context.Background(), Options{
-		PlanningRequest: "start over completely",
+		PlanningRequest: "design the loop",
 		Mode:            ModePlan,
 		RepoRoot:        repo,
-		ResetPlan:       true,
 	}); err != nil {
-		t.Fatalf("Run(plan scratch): %v", err)
+		t.Fatalf("Run(plan cancel): %v", err)
 	}
 
-	state, err := loadState(filepath.Join(repo, ".raijin", "ralph", "state.json"))
-	if err != nil {
-		t.Fatalf("loadState: %v", err)
+	specPath := filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md")
+	if !fileExists(specPath) {
+		t.Fatalf("expected partial spec draft to remain on disk")
 	}
-	if state.Goal != "brand new goal" {
-		t.Fatalf("Goal = %q, want brand new goal", state.Goal)
+	if !strings.Contains(readOptionalFile(specPath), "Partial draft") {
+		t.Fatalf("partial spec draft was not preserved")
 	}
-	if state.Iteration != 0 {
-		t.Fatalf("Iteration = %d, want 0", state.Iteration)
+	if fileExists(filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")) {
+		t.Fatalf("progress file should not be created during interrupted planning")
 	}
 }
 
-func TestRunAutoRetriesAfterHarnessFeedbackAndCompletes(t *testing.T) {
+func TestRunAutoClearsPromisesAndCompletesFromProgressFile(t *testing.T) {
 	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] task one\n- [ ] task two\n"), 0o644); err != nil {
-		t.Fatalf("write initial plan: %v", err)
-	}
+	pair := writeNamedSpecPair(t, repo, "otter-thread-sage", testSpecContent("Ship the refactor"), "stale note\nPROMISE: CONTINUE\n")
 
 	origPrompt := runEphemeralPrompt
-	t.Cleanup(func() {
-		runEphemeralPrompt = origPrompt
-	})
+	t.Cleanup(func() { runEphemeralPrompt = origPrompt })
 
-	call := 0
-	runEphemeralPrompt = func(_ context.Context, repoRoot, prompt string, _, _ io.Writer) (promptResult, error) {
-		call++
-		switch call {
-		case 1:
-			if fileExists(filepath.Join(repoRoot, ".raijin", "ralph", "feedback.md")) {
-				t.Fatalf("feedback should not exist before first build iteration")
-			}
-			if fileExists(filepath.Join(repoRoot, ".raijin", "ralph", "harness_feedback.md")) {
-				t.Fatalf("harness feedback should not exist before first build iteration")
-			}
-			if err := os.WriteFile(filepath.Join(repoRoot, ".raijin", "ralph", "plan.md"), []byte("- [x] task one\n- [ ] task two\n"), 0o644); err != nil {
-				t.Fatalf("write plan after iteration 1: %v", err)
-			}
-			if err := os.WriteFile(filepath.Join(repoRoot, ".raijin", "ralph", "feedback.md"), []byte("Agent note: wiring between parser and CLI still needs final call-site hookup.\n"), 0o644); err != nil {
-				t.Fatalf("write agent feedback note: %v", err)
-			}
-			return promptResult{Stdout: "implemented first task\n"}, nil
-		case 2:
-			feedback := readOptionalFile(filepath.Join(repoRoot, ".raijin", "ralph", "feedback.md"))
-			if !strings.Contains(feedback, "Agent note: wiring between parser and CLI still needs final call-site hookup.") {
-				t.Fatalf("expected agent handoff note to be preserved, got %q", feedback)
-			}
-			if fileExists(filepath.Join(repoRoot, ".raijin", "ralph", "harness_feedback.md")) {
-				t.Fatalf("harness_feedback.md should be removed before the next iteration runs")
-			}
-			if !strings.Contains(prompt, "Harness feedback from the previous iteration:") {
-				t.Fatalf("expected interpolated harness feedback section, got %q", prompt)
-			}
-			if !strings.Contains(prompt, "The agent did not emit a required completion marker.") {
-				t.Fatalf("expected harness feedback in prompt, got %q", prompt)
-			}
-			if err := os.WriteFile(filepath.Join(repoRoot, ".raijin", "ralph", "plan.md"), []byte("- [x] task one\n- [x] task two\n"), 0o644); err != nil {
-				t.Fatalf("write plan after iteration 2: %v", err)
-			}
-			return promptResult{Stdout: "implemented second task\n<promise>DONE</promise>\n"}, nil
-		default:
-			t.Fatalf("unexpected prompt invocation %d", call)
-			return promptResult{}, nil
+	callCount := 0
+	runEphemeralPrompt = func(_ context.Context, repoRoot string, opts EphemeralPromptOptions, _, _ io.Writer) (promptResult, error) {
+		prompt := opts.Prompt
+		onCompleteHook := opts.OnCompleteHook
+		callCount++
+		if repoRoot != repo {
+			t.Fatalf("repoRoot = %q, want %q", repoRoot, repo)
 		}
+		if onCompleteHook == nil {
+			t.Fatalf("builder run should set onCompleteHook")
+		}
+		if len(opts.ExtraTools) != 0 {
+			t.Fatalf("builder run should not inject planning tools, got %d extra tools", len(opts.ExtraTools))
+		}
+		progressBefore := readOptionalFile(pair.ProgressPath)
+		if strings.Contains(progressBefore, "PROMISE:") {
+			t.Fatalf("promise line should be cleared before iteration %d, got %q", callCount, progressBefore)
+		}
+		if !strings.Contains(prompt, promiseDone) || !strings.Contains(prompt, promiseContinue) {
+			t.Fatalf("builder prompt missing promise instructions: %q", prompt)
+		}
+		if !strings.Contains(prompt, "Update it surgically") {
+			t.Fatalf("builder prompt missing surgical progress instruction: %q", prompt)
+		}
+		if !strings.Contains(prompt, "Do not wipe or drastically shrink the file") {
+			t.Fatalf("builder prompt missing anti-destructive progress instruction: %q", prompt)
+		}
+		if !strings.Contains(prompt, "choose exactly one single most high-leverage task") {
+			t.Fatalf("builder prompt missing high-leverage task instruction: %q", prompt)
+		}
+		if !strings.Contains(prompt, "Prefer the most important foundational item") {
+			t.Fatalf("builder prompt missing foundational-priority instruction: %q", prompt)
+		}
+		if !strings.Contains(prompt, "Do that single chosen task") {
+			t.Fatalf("builder prompt missing stop-after-one-task instruction: %q", prompt)
+		}
+		if strings.Contains(prompt, "%!s(MISSING)") {
+			t.Fatalf("builder prompt has missing interpolation: %q", prompt)
+		}
+		if !strings.Contains(prompt, "update .raijin/ralph/progress-otter-thread-sage.txt to reflect the result") {
+			t.Fatalf("builder prompt missing interpolated progress path in stop instruction: %q", prompt)
+		}
+		if !strings.Contains(prompt, "Finishing your single chosen task is not enough for PROMISE: DONE") {
+			t.Fatalf("builder prompt missing conservative DONE rule: %q", prompt)
+		}
+
+		switch callCount {
+		case 1:
+			writeProgressFile(t, pair.ProgressPath, "working through task breakdown\n")
+			inject, ok, err := onCompleteHook(context.Background(), libagent.NewAssistantMessage("iteration one", "", nil, time.Now()), nil)
+			if err != nil {
+				t.Fatalf("onCompleteHook(iteration one): %v", err)
+			}
+			if ok {
+				t.Fatalf("onCompleteHook(iteration one) ok = true, want false")
+			}
+			if !strings.Contains(inject, promiseDone) || !strings.Contains(inject, promiseContinue) {
+				t.Fatalf("inject = %q, want promise reminder", inject)
+			}
+			if !strings.Contains(inject, "Preserve still-relevant progress") {
+				t.Fatalf("inject = %q, want progress-preservation reminder", inject)
+			}
+			if !strings.Contains(inject, "Finishing only the current task is not enough") {
+				t.Fatalf("inject = %q, want conservative DONE reminder", inject)
+			}
+			writeProgressFile(t, pair.ProgressPath, "working through task breakdown\nPROMISE: CONTINUE\n")
+		case 2:
+			writeProgressFile(t, pair.ProgressPath, "final validation passed\nPROMISE: DONE\n")
+			inject, ok, err := onCompleteHook(context.Background(), libagent.NewAssistantMessage("iteration two", "", nil, time.Now()), nil)
+			if err != nil {
+				t.Fatalf("onCompleteHook(iteration two): %v", err)
+			}
+			if !ok || inject != "" {
+				t.Fatalf("onCompleteHook(iteration two) = %q, %v", inject, ok)
+			}
+		default:
+			t.Fatalf("unexpected iteration %d", callCount)
+		}
+		return promptResult{}, nil
 	}
 
 	if err := Run(context.Background(), Options{
-		Goal:          "ship two tasks",
 		Mode:          ModeAuto,
 		RepoRoot:      repo,
-		MaxIterations: 3,
+		SpecPath:      pair.SpecPath,
+		MaxIterations: 4,
 	}); err != nil {
 		t.Fatalf("Run(auto): %v", err)
 	}
 
-	state, err := loadState(filepath.Join(repo, ".raijin", "ralph", "state.json"))
+	if callCount != 2 {
+		t.Fatalf("callCount = %d, want 2", callCount)
+	}
+	status, err := InspectPlanningState(context.Background(), repo, pair.SpecPath)
 	if err != nil {
-		t.Fatalf("loadState: %v", err)
+		t.Fatalf("InspectPlanningState(final): %v", err)
 	}
-	if state.Iteration != 2 {
-		t.Fatalf("Iteration = %d, want 2", state.Iteration)
+	if status.State != PlanningStateCompleted {
+		t.Fatalf("state = %q, want completed", status.State)
 	}
-	if state.LastStatus != "completed" {
-		t.Fatalf("LastStatus = %q, want completed", state.LastStatus)
-	}
-	if state.LastPromise != "DONE" {
-		t.Fatalf("LastPromise = %q, want DONE", state.LastPromise)
-	}
-	feedbackAfterSuccess := readOptionalFile(filepath.Join(repo, ".raijin", "ralph", "feedback.md"))
-	if !strings.Contains(feedbackAfterSuccess, "Agent note: wiring between parser and CLI still needs final call-site hookup.") {
-		t.Fatalf("expected manual feedback to survive successful verification, got %q", feedbackAfterSuccess)
+	if fileExists(filepath.Join(repo, ".raijin", "ralph", "feedback.md")) {
+		t.Fatalf("feedback.md should not exist")
 	}
 	if fileExists(filepath.Join(repo, ".raijin", "ralph", "harness_feedback.md")) {
-		t.Fatalf("harness_feedback.md should be removed after the next iteration consumes it")
+		t.Fatalf("harness_feedback.md should not exist")
 	}
-	if !fileExists(filepath.Join(repo, ".raijin", "ralph", "logs", "iter-1.txt")) || !fileExists(filepath.Join(repo, ".raijin", "ralph", "logs", "iter-2.txt")) {
-		t.Fatalf("expected iteration logs to exist")
-	}
-}
-
-func TestRunAutoStopsAtMaxIterationsAndPreservesState(t *testing.T) {
-	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, ".raijin", "ralph"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, ".raijin", "ralph", "plan.md"), []byte("- [ ] still open\n"), 0o644); err != nil {
-		t.Fatalf("write initial plan: %v", err)
-	}
-
-	origPrompt := runEphemeralPrompt
-	t.Cleanup(func() {
-		runEphemeralPrompt = origPrompt
-	})
-
-	runEphemeralPrompt = func(_ context.Context, repoRoot, prompt string, _, _ io.Writer) (promptResult, error) {
-		if err := os.WriteFile(filepath.Join(repoRoot, ".raijin", "ralph", "plan.md"), []byte("- [ ] still open\n"), 0o644); err != nil {
-			t.Fatalf("keep plan open: %v", err)
-		}
-		return promptResult{Stdout: "not done\n<promise>CONTINUE</promise>\n"}, nil
-	}
-	err := Run(context.Background(), Options{
-		Goal:          "keep looping",
-		Mode:          ModeAuto,
-		RepoRoot:      repo,
-		MaxIterations: 1,
-	})
-	if !errors.Is(err, ErrMaxIterationsReached) {
-		t.Fatalf("err = %v, want ErrMaxIterationsReached", err)
-	}
-
-	state, err := loadState(filepath.Join(repo, ".raijin", "ralph", "state.json"))
-	if err != nil {
-		t.Fatalf("loadState: %v", err)
-	}
-	if state.LastStatus != "max_iterations" {
-		t.Fatalf("LastStatus = %q, want max_iterations", state.LastStatus)
-	}
-	if state.Iteration != 1 {
-		t.Fatalf("Iteration = %d, want 1", state.Iteration)
-	}
-	if !fileExists(filepath.Join(repo, ".raijin", "ralph", "plan.md")) {
-		t.Fatalf("plan.md should be preserved")
-	}
-}
-
-func TestUpsertEnvReplacesExistingEntry(t *testing.T) {
-	t.Parallel()
-
-	env := []string{"A=1", "RAIJIN_FORCE_ANSI=0"}
-	got := upsertEnv(env, "RAIJIN_FORCE_ANSI", "1")
-	if len(got) != 2 {
-		t.Fatalf("len(got) = %d, want 2", len(got))
-	}
-	if got[1] != "RAIJIN_FORCE_ANSI=1" {
-		t.Fatalf("got[1] = %q, want %q", got[1], "RAIJIN_FORCE_ANSI=1")
-	}
-}
-
-func TestBuildImplementationPromptExplainsFeedbackLifecycle(t *testing.T) {
-	t.Parallel()
-
-	prompt := buildImplementationPrompt(State{
-		Goal: "fix the loop",
-	}, "Harness verification failed:\ngo test ./...")
-
-	if !strings.Contains(prompt, "If .raijin/ralph/feedback.md exists, read it before choosing work.") {
-		t.Fatalf("implementation prompt missing feedback-read guidance: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Harness feedback from the previous iteration:") {
-		t.Fatalf("implementation prompt missing harness-feedback section: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Harness verification failed:\ngo test ./...") {
-		t.Fatalf("implementation prompt missing interpolated harness feedback: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Do not opportunistically start a second unchecked task") {
-		t.Fatalf("implementation prompt missing single-task guardrail: %q", prompt)
-	}
-	if !strings.Contains(prompt, "If you leave unfinished wiring, partial integration, follow-up edge cases, or any other technical handoff") {
-		t.Fatalf("implementation prompt missing unfinished-wiring guidance: %q", prompt)
-	}
-	if !strings.Contains(prompt, "If it is still useful for the next fresh iteration, rewrite it as a short actionable note.") {
-		t.Fatalf("implementation prompt missing feedback-rewrite guidance: %q", prompt)
-	}
-	if !strings.Contains(prompt, "If no feedback is needed, do not keep the file around.") {
-		t.Fatalf("implementation prompt missing feedback cleanup guidance: %q", prompt)
-	}
-}
-
-func TestHarnessFeedbackLifecycleUsesSeparateFile(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	feedbackPath := filepath.Join(dir, "feedback.md")
-	harnessPath := filepath.Join(dir, "harness_feedback.md")
-	manual := "Agent note: unfinished wiring in internal/oneshot still needs final integration.\n"
-	if err := os.WriteFile(feedbackPath, []byte(manual), 0o644); err != nil {
-		t.Fatalf("write manual feedback: %v", err)
-	}
-
-	if err := writeHarnessFeedback(harnessPath, "Harness verification failed:\ngo test ./..."); err != nil {
-		t.Fatalf("writeHarnessFeedback: %v", err)
-	}
-
-	if got := readOptionalFile(feedbackPath); strings.TrimSpace(got) != strings.TrimSpace(manual) {
-		t.Fatalf("manual feedback should be untouched, got %q want %q", got, manual)
-	}
-	if got := readOptionalFile(harnessPath); !strings.Contains(got, "Harness verification failed:\ngo test ./...") {
-		t.Fatalf("expected harness feedback content, got %q", got)
-	}
-
-	if err := clearHarnessFeedback(harnessPath); err != nil {
-		t.Fatalf("clearHarnessFeedback: %v", err)
-	}
-
-	if !fileExists(feedbackPath) {
-		t.Fatalf("manual feedback file should remain")
-	}
-	if fileExists(harnessPath) {
-		t.Fatalf("harness feedback file should be removed")
-	}
-}
-
-func TestRalphPromptsDescribeFreshEphemeralRunsWithoutHistoryWarnings(t *testing.T) {
-	t.Parallel()
-
-	planningPrompt := buildPlanningPrompt(State{
-		Goal: "plan the work",
-	}, "revise item 3")
-	implementationPrompt := buildImplementationPrompt(State{
-		Goal: "implement the work",
-	}, "")
-
-	if !strings.Contains(planningPrompt, "This is a fresh ephemeral run.") {
-		t.Fatalf("planning prompt missing ephemeral guidance: %q", planningPrompt)
-	}
-	if !strings.Contains(planningPrompt, "small enough that one implementation iteration can plausibly complete it") {
-		t.Fatalf("planning prompt missing iteration-sized task guidance: %q", planningPrompt)
-	}
-	if strings.Contains(planningPrompt, "conversation history") {
-		t.Fatalf("planning prompt should not mention conversation history: %q", planningPrompt)
-	}
-
-	if !strings.Contains(implementationPrompt, "This is a fresh ephemeral run.") {
-		t.Fatalf("implementation prompt missing ephemeral guidance: %q", implementationPrompt)
-	}
-	if !strings.Contains(implementationPrompt, "Harness feedback from the previous iteration:\n(none)") {
-		t.Fatalf("implementation prompt should render an empty harness section: %q", implementationPrompt)
-	}
-	if strings.Contains(implementationPrompt, "conversation state") || strings.Contains(implementationPrompt, "chat history") {
-		t.Fatalf("implementation prompt should not mention prior chat state: %q", implementationPrompt)
+	if fileExists(filepath.Join(repo, ".raijin", "ralph", "logs")) {
+		t.Fatalf("logs directory should not exist")
 	}
 }

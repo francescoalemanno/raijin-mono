@@ -3,17 +3,18 @@ package ralph
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/francescoalemanno/raijin-mono/internal/shell"
-	"golang.org/x/term"
+	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
 
 type Mode string
@@ -23,8 +24,8 @@ const (
 	ModePlan Mode = "plan"
 
 	defaultMaxIterations = 25
-	forceANSIEnv         = "RAIJIN_FORCE_ANSI"
-	assistantCaptureEnv  = "RAIJIN_ASSISTANT_CAPTURE_FILE"
+	promiseDone          = "PROMISE: DONE"
+	promiseContinue      = "PROMISE: CONTINUE"
 )
 
 var ErrMaxIterationsReached = errors.New("ralph: maximum iterations reached")
@@ -36,23 +37,15 @@ type Options struct {
 	RepoRoot        string
 	MaxIterations   int
 	ResetPlan       bool
-}
-
-type State struct {
-	Goal          string `json:"goal"`
-	RepoRoot      string `json:"repo_root"`
-	Iteration     int    `json:"iteration"`
-	MaxIterations int    `json:"max_iterations"`
-	LastStatus    string `json:"last_status,omitempty"`
-	LastPromise   string `json:"last_promise,omitempty"`
-	LastError     string `json:"last_error,omitempty"`
-	UpdatedAt     string `json:"updated_at"`
+	SpecPath        string
 }
 
 type Snapshot struct {
-	RepoRoot string
-	Goal     string
-	Plan     string
+	RepoRoot     string
+	SpecPath     string
+	ProgressPath string
+	Spec         string
+	Progress     string
 }
 
 type PlanningState string
@@ -64,19 +57,21 @@ const (
 )
 
 type PlanningStatus struct {
-	RepoRoot string
-	State    PlanningState
+	RepoRoot     string
+	SpecPath     string
+	ProgressPath string
+	State        PlanningState
 }
 
-type loopPaths struct {
-	root            string
-	baseDir         string
-	logsDir         string
-	goal            string
-	plan            string
-	state           string
-	feedback        string
-	harnessFeedback string
+type SpecPair struct {
+	SpecPath     string
+	ProgressPath string
+	Slug         string
+}
+
+type basePaths struct {
+	root    string
+	baseDir string
 }
 
 type promptResult struct {
@@ -84,10 +79,44 @@ type promptResult struct {
 	Stderr string
 }
 
+type EphemeralPromptOptions struct {
+	Prompt         string
+	OnCompleteHook libagent.OnCompleteHook
+	ExtraTools     []libagent.Tool
+}
+
+type PlanningQuestionOption struct {
+	Label       string `json:"label" description:"Short answer option label returned to the planner if selected"`
+	Description string `json:"description,omitempty" description:"Brief explanation shown to the user for this answer option"`
+}
+
+type PlanningQuestionPrompt struct {
+	Question string                   `json:"question" description:"Clarifying question the planner needs answered"`
+	Options  []PlanningQuestionOption `json:"options" description:"One to three suggested answer options"`
+}
+
 var (
-	runEphemeralPrompt = defaultRunEphemeralPrompt
-	resolveRepoRoot    = defaultResolveRepoRoot
+	runEphemeralPrompt  func(ctx context.Context, repoRoot string, opts EphemeralPromptOptions, stdout, stderr io.Writer) (promptResult, error)
+	askPlanningQuestion func(context.Context, PlanningQuestionPrompt) (string, error)
+	resolveRepoRoot     = defaultResolveRepoRoot
+	resolveSpecTarget   = ResolveSpecSelection
+	generateSpecSlug    = defaultGenerateSpecSlug
 )
+
+func SetEphemeralPromptRunner(fn func(ctx context.Context, repoRoot string, opts EphemeralPromptOptions, stdout, stderr io.Writer) (stdoutText, stderrText string, err error)) {
+	if fn == nil {
+		runEphemeralPrompt = nil
+		return
+	}
+	runEphemeralPrompt = func(ctx context.Context, repoRoot string, opts EphemeralPromptOptions, stdout, stderr io.Writer) (promptResult, error) {
+		stdoutText, stderrText, err := fn(ctx, repoRoot, opts, stdout, stderr)
+		return promptResult{Stdout: stdoutText, Stderr: stderrText}, err
+	}
+}
+
+func SetPlanningQuestionAsker(fn func(context.Context, PlanningQuestionPrompt) (string, error)) {
+	askPlanningQuestion = fn
+}
 
 func Run(ctx context.Context, opts Options) error {
 	mode := opts.Mode
@@ -102,452 +131,559 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-
-	paths := newLoopPaths(repoRoot)
+	paths := newBasePaths(repoRoot)
 	if err := ensureDirs(paths); err != nil {
 		return err
 	}
-	if mode == ModePlan && opts.ResetPlan {
-		if err := resetPlanningWorkspace(paths); err != nil {
-			return err
-		}
-	}
 
-	planningRequest := strings.TrimSpace(opts.PlanningRequest)
-	if mode == ModePlan && planningRequest == "" {
-		planningRequest = strings.TrimSpace(opts.Goal)
-	}
-	canonicalGoal := strings.TrimSpace(opts.Goal)
-	if mode == ModePlan {
-		canonicalGoal = ""
-	}
-
-	state, reset, err := prepareState(repoRoot, paths, Options{
-		Goal:            canonicalGoal,
-		PlanningRequest: planningRequest,
+	pair, planningRequest, maxIterations, err := prepareRun(repoRoot, paths, Options{
+		Goal:            strings.TrimSpace(opts.Goal),
+		PlanningRequest: strings.TrimSpace(opts.PlanningRequest),
 		Mode:            mode,
 		MaxIterations:   opts.MaxIterations,
+		ResetPlan:       opts.ResetPlan,
+		SpecPath:        strings.TrimSpace(opts.SpecPath),
 	})
 	if err != nil {
 		return err
 	}
-	if reset {
-		if err := resetWorkspace(paths); err != nil {
-			return err
-		}
-		state.Iteration = 0
-		state.LastStatus = ""
-		state.LastPromise = ""
-		state.LastError = ""
-	}
 
-	if mode != ModePlan {
-		if err := writeGoal(paths.goal, state.Goal); err != nil {
+	if opts.ResetPlan {
+		if err := resetPair(pair); err != nil {
 			return err
 		}
 	}
 
 	switch mode {
 	case ModePlan:
-		if err := runPlanning(ctx, paths, &state, planningRequest); err != nil {
-			if errors.Is(err, context.Canceled) {
-				state.LastStatus = "interrupted"
-				state.LastError = ""
-				_ = saveState(paths.state, state)
-			}
-			return err
-		}
-		return nil
+		return runPlanning(ctx, repoRoot, pair, planningRequest)
 	case ModeAuto:
-		return runAutomatic(ctx, paths, &state)
+		return runAutomatic(ctx, repoRoot, pair, maxIterations)
 	default:
 		return fmt.Errorf("ralph: unsupported mode %q", mode)
 	}
 }
 
-func ReadSnapshot(ctx context.Context, repoRoot string) (Snapshot, error) {
+func ReadSnapshot(ctx context.Context, repoRoot, specTarget string) (Snapshot, error) {
 	resolvedRoot, err := resolveRepoRoot(ctx, strings.TrimSpace(repoRoot))
 	if err != nil {
 		return Snapshot{}, err
 	}
-
-	paths := newLoopPaths(resolvedRoot)
-	goal := strings.TrimSpace(readOptionalFile(paths.goal))
-	plan := strings.TrimSpace(readOptionalFile(paths.plan))
-	if goal == "" && plan == "" {
-		return Snapshot{}, fmt.Errorf("ralph: no goal or plan found in %s; run /plan <goal> first", relPath(resolvedRoot, paths.baseDir))
-	}
-	if goal == "" {
-		return Snapshot{}, fmt.Errorf("ralph: %s does not exist or is empty", relPath(resolvedRoot, paths.goal))
-	}
-	if plan == "" {
-		return Snapshot{}, fmt.Errorf("ralph: %s does not exist or is empty", relPath(resolvedRoot, paths.plan))
+	pair, err := resolveSnapshotPair(ctx, resolvedRoot, strings.TrimSpace(specTarget))
+	if err != nil {
+		return Snapshot{}, err
 	}
 
+	spec, err := os.ReadFile(pair.SpecPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Snapshot{}, fmt.Errorf("ralph: %s does not exist; run /plan <request> first", relPath(resolvedRoot, pair.SpecPath))
+		}
+		return Snapshot{}, err
+	}
+	if strings.TrimSpace(string(spec)) == "" {
+		return Snapshot{}, fmt.Errorf("ralph: %s is empty", relPath(resolvedRoot, pair.SpecPath))
+	}
+
+	progress := readOptionalFile(pair.ProgressPath)
 	return Snapshot{
-		RepoRoot: resolvedRoot,
-		Goal:     goal,
-		Plan:     plan,
+		RepoRoot:     resolvedRoot,
+		SpecPath:     pair.SpecPath,
+		ProgressPath: pair.ProgressPath,
+		Spec:         string(spec),
+		Progress:     progress,
 	}, nil
 }
 
-func HasPlanningState(ctx context.Context, repoRoot string) (bool, error) {
-	status, err := InspectPlanningState(ctx, repoRoot)
+func HasPlanningState(ctx context.Context, repoRoot, specTarget string) (bool, error) {
+	status, err := InspectPlanningState(ctx, repoRoot, specTarget)
 	if err != nil {
 		return false, err
 	}
 	return status.State != PlanningStateEmpty, nil
 }
 
-func InspectPlanningState(ctx context.Context, repoRoot string) (PlanningStatus, error) {
+func InspectPlanningState(ctx context.Context, repoRoot, specTarget string) (PlanningStatus, error) {
 	resolvedRoot, err := resolveRepoRoot(ctx, strings.TrimSpace(repoRoot))
 	if err != nil {
 		return PlanningStatus{}, err
 	}
 
-	paths := newLoopPaths(resolvedRoot)
-	goal := strings.TrimSpace(readOptionalFile(paths.goal))
-	plan := strings.TrimSpace(readOptionalFile(paths.plan))
-	if goal == "" || plan == "" {
+	pair, err := resolveSnapshotPair(ctx, resolvedRoot, strings.TrimSpace(specTarget))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "no specs found in") {
+			return PlanningStatus{RepoRoot: resolvedRoot, State: PlanningStateEmpty}, nil
+		}
+		return PlanningStatus{}, err
+	}
+	spec := strings.TrimSpace(readOptionalFile(pair.SpecPath))
+	if spec == "" {
 		return PlanningStatus{RepoRoot: resolvedRoot, State: PlanningStateEmpty}, nil
 	}
 
-	state, err := loadState(paths.state)
-	if err == nil && state.LastStatus == "completed" {
-		return PlanningStatus{RepoRoot: resolvedRoot, State: PlanningStateCompleted}, nil
+	promise, err := readProgressPromiseForState(pair.ProgressPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return PlanningStatus{
+				RepoRoot:     resolvedRoot,
+				SpecPath:     pair.SpecPath,
+				ProgressPath: pair.ProgressPath,
+				State:        PlanningStatePlanned,
+			}, nil
+		}
+		return PlanningStatus{}, err
 	}
-	return PlanningStatus{RepoRoot: resolvedRoot, State: PlanningStatePlanned}, nil
+	state := PlanningStatePlanned
+	if promise == promiseDone {
+		state = PlanningStateCompleted
+	}
+	return PlanningStatus{
+		RepoRoot:     resolvedRoot,
+		SpecPath:     pair.SpecPath,
+		ProgressPath: pair.ProgressPath,
+		State:        state,
+	}, nil
 }
 
-func runAutomatic(ctx context.Context, paths loopPaths, state *State) error {
-	if !fileExists(paths.plan) {
-		return fmt.Errorf("ralph: %s does not exist; run /plan <goal> first", relPath(paths.root, paths.plan))
+func ListSpecPairs(ctx context.Context, repoRoot string) ([]SpecPair, error) {
+	resolvedRoot, err := resolveRepoRoot(ctx, strings.TrimSpace(repoRoot))
+	if err != nil {
+		return nil, err
+	}
+	baseDir := newBasePaths(resolvedRoot).baseDir
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	pairs := make([]SpecPair, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		slug, ok := specSlugFromName(name)
+		if !ok {
+			continue
+		}
+		specPath := filepath.Join(baseDir, name)
+		pairs = append(pairs, SpecPair{
+			SpecPath:     specPath,
+			ProgressPath: deriveProgressPath(specPath),
+			Slug:         slug,
+		})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].SpecPath < pairs[j].SpecPath
+	})
+	return pairs, nil
+}
+
+func AllocateNamedSpecPair(ctx context.Context, repoRoot string) (SpecPair, error) {
+	resolvedRoot, err := resolveRepoRoot(ctx, strings.TrimSpace(repoRoot))
+	if err != nil {
+		return SpecPair{}, err
+	}
+	paths := newBasePaths(resolvedRoot)
+	if err := ensureDirs(paths); err != nil {
+		return SpecPair{}, err
+	}
+	return newNamedSpecPair(paths)
+}
+
+func ResolveSpecSelection(ctx context.Context, repoRoot, target string) (SpecPair, bool, error) {
+	resolvedRoot, err := resolveRepoRoot(ctx, strings.TrimSpace(repoRoot))
+	if err != nil {
+		return SpecPair{}, false, err
 	}
 
-	for {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return SpecPair{}, false, nil
+	}
+
+	if looksLikePath(target) {
+		specPath, err := filepath.Abs(target)
+		if err != nil {
+			return SpecPair{}, false, err
+		}
+		if fileExists(specPath) {
+			return newSpecPair(specPath), true, nil
+		}
+		return SpecPair{}, false, nil
+	}
+
+	pairs, err := ListSpecPairs(ctx, resolvedRoot)
+	if err != nil {
+		return SpecPair{}, false, err
+	}
+	for _, pair := range pairs {
+		if pair.Slug == target {
+			return pair, true, nil
+		}
+	}
+	return SpecPair{}, false, nil
+}
+
+func runAutomatic(ctx context.Context, repoRoot string, pair SpecPair, maxIterations int) error {
+	if !fileExists(pair.SpecPath) {
+		return fmt.Errorf("ralph: %s does not exist; run /plan <request> first", relPath(repoRoot, pair.SpecPath))
+	}
+	if strings.TrimSpace(readOptionalFile(pair.SpecPath)) == "" {
+		return fmt.Errorf("ralph: %s is empty", relPath(repoRoot, pair.SpecPath))
+	}
+	if runEphemeralPrompt == nil {
+		return errors.New("ralph: no ephemeral runner registered")
+	}
+
+	for iteration := 1; ; iteration++ {
 		if err := ctx.Err(); err != nil {
-			state.LastStatus = "interrupted"
-			state.LastError = ""
-			if saveErr := saveState(paths.state, *state); saveErr != nil {
-				return saveErr
-			}
 			return nil
 		}
-		if state.Iteration >= state.MaxIterations {
-			state.LastStatus = "max_iterations"
-			state.LastError = ErrMaxIterationsReached.Error()
-			if err := saveState(paths.state, *state); err != nil {
-				return err
-			}
+		if iteration > maxIterations {
 			return ErrMaxIterationsReached
 		}
-
-		state.Iteration++
-		state.LastStatus = "iterating"
-		state.LastError = ""
-		if err := saveState(paths.state, *state); err != nil {
+		if err := clearPromiseLines(pair.ProgressPath); err != nil {
 			return err
 		}
 
-		fmt.Fprintf(os.Stderr, "Ralph iteration %d/%d\n", state.Iteration, state.MaxIterations)
-		harnessFeedback := strings.TrimSpace(readOptionalFile(paths.harnessFeedback))
-		prompt := buildImplementationPrompt(*state, harnessFeedback)
-		if harnessFeedback != "" {
-			if err := clearHarnessFeedback(paths.harnessFeedback); err != nil {
-				return err
-			}
-		}
-		result, runErr := runEphemeralPrompt(ctx, state.RepoRoot, prompt, os.Stdout, os.Stderr)
-		if err := writePromptLog(filepath.Join(paths.logsDir, fmt.Sprintf("iter-%d.txt", state.Iteration)), result, runErr); err != nil {
-			return err
-		}
-
-		promise := detectPromise(result.Stdout)
-		state.LastPromise = promise
-
+		onCompleteHook := progressPromiseHook(pair.ProgressPath)
+		result, runErr := runEphemeralPrompt(ctx, repoRoot, EphemeralPromptOptions{
+			Prompt:         buildImplementationPrompt(repoRoot, pair),
+			OnCompleteHook: onCompleteHook,
+		}, os.Stdout, os.Stderr)
 		if runErr != nil {
-			state.LastStatus = "iteration_failed"
-			state.LastError = summarizePromptFailure("implementation iteration", result, runErr)
-			if err := writeHarnessFeedback(paths.harnessFeedback, state.LastError); err != nil {
-				return err
-			}
-			if err := saveState(paths.state, *state); err != nil {
-				return err
+			if noteErr := writeControllerNote(pair.ProgressPath, summarizePromptFailure("implementation iteration", result, runErr)); noteErr != nil {
+				return noteErr
 			}
 			continue
 		}
 
-		hasOpenTasks, err := planHasUncheckedTasks(paths.plan)
+		promise, err := readProgressPromise(pair.ProgressPath)
 		if err != nil {
-			state.LastStatus = "iteration_failed"
-			state.LastError = fmt.Sprintf("Ralph could not read %s after iteration %d: %v", relPath(paths.root, paths.plan), state.Iteration, err)
-			if writeErr := writeHarnessFeedback(paths.harnessFeedback, state.LastError); writeErr != nil {
-				return writeErr
-			}
-			if saveErr := saveState(paths.state, *state); saveErr != nil {
-				return saveErr
+			if noteErr := writeControllerNote(pair.ProgressPath, fmt.Sprintf("Controller note: Ralph could not validate %s after iteration %d: %v", relPath(repoRoot, pair.ProgressPath), iteration, err)); noteErr != nil {
+				return noteErr
 			}
 			continue
 		}
-
-		if promise == "DONE" && !hasOpenTasks {
-			state.LastStatus = "completed"
-			state.LastError = ""
-			if err := saveState(paths.state, *state); err != nil {
-				return err
-			}
+		if promise == promiseDone {
 			fmt.Fprintln(os.Stderr, "Ralph completed successfully")
 			return nil
 		}
-
-		state.LastStatus = "continue"
-		switch {
-		case promise == "DONE" && hasOpenTasks:
-			state.LastError = fmt.Sprintf("The agent emitted <promise>DONE</promise>, but %s still contains unchecked tasks. Pick the highest-priority unchecked task, complete it, update the plan, and only emit DONE when no unchecked tasks remain.", relPath(paths.root, paths.plan))
-		case promise != "DONE" && !hasOpenTasks:
-			state.LastError = fmt.Sprintf("%s has no unchecked tasks, but the agent did not emit <promise>DONE</promise>. Re-read the plan, confirm the work is complete, and emit DONE if no tasks remain.", relPath(paths.root, paths.plan))
-		case promise == "":
-			state.LastError = "The agent did not emit a required completion marker. Emit exactly one of <promise>CONTINUE</promise> or <promise>DONE</promise> at the end of the response."
-		default:
-			state.LastError = ""
-		}
-		if state.LastError != "" {
-			if err := writeHarnessFeedback(paths.harnessFeedback, state.LastError); err != nil {
-				return err
-			}
-		}
-		if err := saveState(paths.state, *state); err != nil {
-			return err
-		}
 	}
 }
 
-func runPlanning(ctx context.Context, paths loopPaths, state *State, planningRequest string) error {
-	state.Iteration = 0
-	state.LastStatus = "planning"
-	state.LastPromise = ""
-	state.LastError = ""
-	if err := saveState(paths.state, *state); err != nil {
+func runPlanning(ctx context.Context, repoRoot string, pair SpecPair, planningRequest string) error {
+	if strings.TrimSpace(planningRequest) == "" {
+		return errors.New("ralph: goal is required; use /plan <goal> first")
+	}
+	if err := os.MkdirAll(filepath.Dir(pair.SpecPath), 0o755); err != nil {
 		return err
 	}
+	if runEphemeralPrompt == nil {
+		return errors.New("ralph: no ephemeral runner registered")
+	}
+	questionTool, err := newPlanningQuestionTool()
+	if err != nil {
+		return err
+	}
+	initialSpec := readOptionalFile(pair.SpecPath)
 
-	fmt.Fprintln(os.Stderr, "Ralph planning...")
-	result, runErr := runEphemeralPrompt(ctx, state.RepoRoot, buildPlanningPrompt(*state, planningRequest), os.Stdout, os.Stderr)
-	if err := writePromptLog(filepath.Join(paths.logsDir, "plan.txt"), result, runErr); err != nil {
-		return err
-	}
+	result, runErr := runEphemeralPrompt(ctx, repoRoot, EphemeralPromptOptions{
+		Prompt:         buildPlanningPrompt(repoRoot, pair, planningRequest),
+		OnCompleteHook: planningSpecChangedHook(repoRoot, pair.SpecPath, initialSpec),
+		ExtraTools:     []libagent.Tool{questionTool},
+	}, os.Stdout, os.Stderr)
 	if runErr != nil {
-		state.LastStatus = "planning_failed"
-		state.LastError = summarizePromptFailure("planning iteration", result, runErr)
-		if err := saveState(paths.state, *state); err != nil {
-			return err
+		if errors.Is(runErr, context.Canceled) {
+			fmt.Fprintln(os.Stderr, "Ralph planning interrupted")
+			return nil
 		}
 		return runErr
 	}
-	if !fileExists(paths.plan) {
-		state.LastStatus = "planning_failed"
-		state.LastError = fmt.Sprintf("Ralph planning did not create %s", relPath(paths.root, paths.plan))
-		if err := saveState(paths.state, *state); err != nil {
-			return err
-		}
-		return errors.New(state.LastError)
+	spec := strings.TrimSpace(readOptionalFile(pair.SpecPath))
+	if spec == "" {
+		return fmt.Errorf("ralph planning did not create %s", relPath(repoRoot, pair.SpecPath))
 	}
-	if !fileExists(paths.goal) {
-		state.LastStatus = "planning_failed"
-		state.LastError = fmt.Sprintf("Ralph planning did not create %s", relPath(paths.root, paths.goal))
-		if err := saveState(paths.state, *state); err != nil {
-			return err
-		}
-		return errors.New(state.LastError)
-	}
-
-	revisedGoal := strings.TrimSpace(readOptionalFile(paths.goal))
-	if revisedGoal == "" {
-		state.LastStatus = "planning_failed"
-		state.LastError = fmt.Sprintf("Ralph planning left %s empty", relPath(paths.root, paths.goal))
-		if err := saveState(paths.state, *state); err != nil {
-			return err
-		}
-		return errors.New(state.LastError)
-	}
-
-	state.Goal = revisedGoal
-	state.LastStatus = "planned"
-	state.LastError = ""
-	return saveState(paths.state, *state)
+	_ = result
+	return nil
 }
 
-func prepareState(repoRoot string, paths loopPaths, opts Options) (State, bool, error) {
-	existing, _ := loadState(paths.state)
-	goalFromFile := strings.TrimSpace(readOptionalFile(paths.goal))
+func prepareRun(repoRoot string, paths basePaths, opts Options) (SpecPair, string, int, error) {
+	maxIterations := firstPositive(opts.MaxIterations, defaultMaxIterations)
 
-	state := existing
-	state.RepoRoot = repoRoot
-	state.MaxIterations = firstPositive(opts.MaxIterations, existing.MaxIterations, defaultMaxIterations)
-
-	explicitGoal := strings.TrimSpace(opts.Goal)
-	planningRequest := strings.TrimSpace(opts.PlanningRequest)
-	currentGoal := strings.TrimSpace(existing.Goal)
-	if currentGoal == "" {
-		currentGoal = goalFromFile
-	}
-
-	reset := opts.Mode == ModeAuto && explicitGoal != "" && currentGoal != "" && explicitGoal != currentGoal
-
-	if opts.Mode == ModePlan {
-		switch {
-		case planningRequest != "":
-			state.Goal = ""
-		default:
-			return State{}, false, errors.New("ralph: goal is required; use /plan <goal> first")
+	switch opts.Mode {
+	case ModePlan:
+		request := strings.TrimSpace(opts.PlanningRequest)
+		if request == "" {
+			request = strings.TrimSpace(opts.Goal)
 		}
-	} else {
-		switch {
-		case explicitGoal != "":
-			state.Goal = explicitGoal
-		case strings.TrimSpace(state.Goal) != "":
-			state.Goal = strings.TrimSpace(state.Goal)
-		case goalFromFile != "":
-			state.Goal = goalFromFile
-		default:
-			return State{}, false, errors.New("ralph: goal is required; use /plan <goal> first")
+		pair, err := resolvePlanningPair(repoRoot, paths, strings.TrimSpace(opts.SpecPath))
+		if err != nil {
+			return SpecPair{}, "", 0, err
 		}
+		return pair, request, maxIterations, nil
+	case ModeAuto:
+		pair, err := resolveAutoPair(context.Background(), repoRoot, strings.TrimSpace(opts.SpecPath))
+		if err != nil {
+			return SpecPair{}, "", 0, err
+		}
+		return pair, "", maxIterations, nil
+	default:
+		return SpecPair{}, "", 0, fmt.Errorf("ralph: unsupported mode %q", opts.Mode)
 	}
-
-	return state, reset, nil
 }
 
-func buildPlanningPrompt(state State, planningRequest string) string {
+func resolvePlanningPair(repoRoot string, paths basePaths, specTarget string) (SpecPair, error) {
+	if specTarget != "" {
+		resolved, found, err := resolveSpecTarget(context.Background(), repoRoot, specTarget)
+		if err != nil {
+			return SpecPair{}, err
+		}
+		if found {
+			return resolved, nil
+		}
+		specPath, err := filepath.Abs(specTarget)
+		if err != nil {
+			return SpecPair{}, err
+		}
+		return newSpecPair(specPath), nil
+	}
+	return newNamedSpecPair(paths)
+}
+
+func resolveAutoPair(ctx context.Context, repoRoot, specTarget string) (SpecPair, error) {
+	if specTarget != "" {
+		pair, found, err := resolveSpecTarget(ctx, repoRoot, specTarget)
+		if err != nil {
+			return SpecPair{}, err
+		}
+		if found {
+			return pair, nil
+		}
+		return SpecPair{}, fmt.Errorf("ralph: spec not found: %s", specTarget)
+	}
+
+	pairs, err := ListSpecPairs(ctx, repoRoot)
+	if err != nil {
+		return SpecPair{}, err
+	}
+	switch len(pairs) {
+	case 0:
+		return SpecPair{}, fmt.Errorf("ralph: no specs found in %s; run /plan <request> first", relPath(repoRoot, newBasePaths(repoRoot).baseDir))
+	case 1:
+		return pairs[0], nil
+	default:
+		return SpecPair{}, errors.New("ralph: multiple specs exist; select one explicitly by path or slug")
+	}
+}
+
+func resolveSnapshotPair(ctx context.Context, repoRoot, specTarget string) (SpecPair, error) {
+	if strings.TrimSpace(specTarget) != "" {
+		pair, found, err := resolveSpecTarget(ctx, repoRoot, specTarget)
+		if err != nil {
+			return SpecPair{}, err
+		}
+		if found {
+			return pair, nil
+		}
+		return SpecPair{}, fmt.Errorf("ralph: spec not found: %s", specTarget)
+	}
+	return resolveAutoPair(ctx, repoRoot, "")
+}
+
+func buildPlanningPrompt(repoRoot string, pair SpecPair, planningRequest string) string {
 	return fmt.Sprintf(strings.TrimSpace(`
 You are running inside a Ralph planning iteration for this repository.
 
-This is a fresh ephemeral run. The durable memory for this loop is on disk.
+This is a fresh ephemeral run. The durable user/planner-owned specification lives on disk.
 
 Read these files first if they exist:
-- .raijin/ralph/goal.md
-- .raijin/ralph/plan.md
+- %s
+- %s
 - AGENTS.md
 - specs/
 - README.md
-- existing implementation files relevant to the goal
-- .raijin/ralph/feedback.md
+- existing implementation files relevant to the request
 
-Your task is to revise .raijin/ralph/goal.md and .raijin/ralph/plan.md in place. Do not throw the existing plan away unless it is clearly obsolete for the current goal.
+Your task is to create or revise %s in place. This file is the durable user/planner specification. It must stay builder-readable and progress-free.
+
+Keep %s as a single Markdown document with these sections in order:
+
+# Goal
+<durable project goal>
+
+# User Specification
+<durable user requirements, constraints, and exclusions>
+
+# Plan
+<durable implementation plan or checklist>
+
+Requirements:
+1. Treat %s as planner-owned durable state. Do not use it for progress tracking, completion tracking, or builder handoff notes.
+2. If %s already exists, treat it as canonical and revise it surgically against the new planning request instead of replacing it wholesale.
+3. If %s does not exist yet, create it from the planning request.
+4. Keep the result technical, concise, stable across builder iterations, and limited to durable facts that are already established.
+5. If uncertainty would materially change the goal, scope boundaries, constraints, acceptance criteria, or sequencing, ask clarifying questions instead of guessing.
+6. Use the question tool for those clarifications. Ask only 1-3 focused high-leverage questions before waiting for answers.
+7. Free-form answers are always allowed. After answers arrive, continue planning in the same session.
+8. You may write a partial draft of %s as you learn durable facts, but do not write interview transcript, open questions, temporary notes, or planner progress tracking into it.
+9. Planning mode must never execute the plan, must not create or modify %s, and must not edit implementation files.
+10. Do not run verification commands, builds, tests, or migrations in planning mode.
+11. The builder Ralph will treat %s as read-only and will manage its own progress in %s.
 
 New planning request from /plan:
 %s
-
-Requirements:
-1. Read .raijin/ralph/goal.md yourself if it exists, and compare the repository against that current goal plus the new planning request from /plan.
-2. If .raijin/ralph/goal.md already exists, treat it as canonical and treat the new /plan request as revision instructions against it, not as an automatic replacement. Revise .raijin/ralph/goal.md if the new planning request changes intent, scope, constraints, or exclusions. If .raijin/ralph/goal.md does not exist yet, create it from the planning request. Do not blindly replace .raijin/ralph/goal.md with the raw /plan request text.
-3. If .raijin/ralph/plan.md already exists, treat it as the starting point and revise it to match the revised goal. Keep the result as a prioritized Markdown checklist in .raijin/ralph/plan.md, preserve still-relevant unchecked tasks instead of replacing them wholesale, and reorder, merge, split, or rewrite tasks only when that improves correctness for the current goal.
-4. If .raijin/ralph/feedback.md exists, decide whether it still matters for planning. If it is still useful, incorporate it into the revised plan. If it is obsolete after the revision, delete it.
-5. Remove completed items or completed phases that no longer need tracking, especially when the plan is already completed and needs a clean next-step view.
-6. Be surgical and technical. Base tasks on the actual codebase structure, existing abstractions, and likely edit points you inspected. Prefer narrow implementation steps over broad phases. A good task usually names a package, file, subsystem, or concrete behavior to change.
-7. Avoid roadmap-style items such as "foundation", "architecture", "polish", or "improve quality" unless they are rewritten into specific engineering work.
-8. Each task must be actionable, concrete, testable, and small enough that one implementation iteration can plausibly complete it. When useful, include specifics such as target files, APIs, invariants, edge cases, or verification expectations directly in the task text. Include acceptance criteria directly in task wording where useful.
-9. Use Markdown checkbox items in priority order:
-   - [ ] for remaining work
-   - [x] only for work that is still useful to keep visible in the revised plan
-10. The plan should read like a careful engineer's execution checklist, not a product roadmap or status document.
-11. Planning mode must never execute the plan. Do not edit implementation files, do not run project changes, and do not perform the tasks in the plan. Planning mode is read-only except for revising .raijin/ralph/goal.md, revising .raijin/ralph/plan.md, and optionally deleting .raijin/ralph/feedback.md if it is obsolete.
-12. Do not run verification commands, builds, tests, or migrations in planning mode. Keep the plan concise. Avoid prose-heavy essays. Do not emit <promise>DONE</promise> in planning mode.
-`), renderPromptBlock(planningRequest))
+`),
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.ProgressPath),
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.ProgressPath),
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.ProgressPath),
+		renderPromptBlock(planningRequest),
+	)
 }
 
-func buildImplementationPrompt(state State, harnessFeedback string) string {
-	return fmt.Sprintf(strings.TrimSpace(`
-You are running inside a Ralph implementation iteration for this repository.
+type planningQuestionToolInput struct {
+	Question string                   `json:"question" description:"Clarifying question the planner needs answered"`
+	Options  []PlanningQuestionOption `json:"options" description:"One to three suggested answer options"`
+}
 
-This is a fresh ephemeral run. The repository files are the memory between iterations.
+func newPlanningQuestionTool() (libagent.Tool, error) {
+	if askPlanningQuestion == nil {
+		return nil, errors.New("ralph: no planning question asker registered")
+	}
+	return libagent.NewTypedTool("question", "Ask the user a structured clarifying question during Ralph planning. Supports one to three suggested answer options and always allows a free-form answer.", func(ctx context.Context, input planningQuestionToolInput, _ libagent.ToolCall) (libagent.ToolResponse, error) {
+		question := strings.TrimSpace(input.Question)
+		if question == "" {
+			return libagent.NewTextErrorResponse("question is required"), nil
+		}
+		if len(input.Options) == 0 {
+			return libagent.NewTextErrorResponse("at least one option is required"), nil
+		}
+		if len(input.Options) > 3 {
+			return libagent.NewTextErrorResponse("at most three options are allowed"), nil
+		}
+		options := make([]PlanningQuestionOption, 0, len(input.Options))
+		for _, option := range input.Options {
+			label := strings.TrimSpace(option.Label)
+			if label == "" {
+				return libagent.NewTextErrorResponse("option labels must not be empty"), nil
+			}
+			options = append(options, PlanningQuestionOption{
+				Label:       label,
+				Description: strings.TrimSpace(option.Description),
+			})
+		}
+		answer, err := askPlanningQuestion(ctx, PlanningQuestionPrompt{
+			Question: question,
+			Options:  options,
+		})
+		if err != nil {
+			return libagent.ToolResponse{}, err
+		}
+		return libagent.NewTextResponse(strings.TrimSpace(answer)), nil
+	}), nil
+}
+
+func planningSpecChangedHook(repoRoot, specPath, initialSpec string) libagent.OnCompleteHook {
+	return func(context.Context, *libagent.AssistantMessage, []libagent.Message) (string, bool, error) {
+		currentSpec := readOptionalFile(specPath)
+		if currentSpec != initialSpec {
+			return "", true, nil
+		}
+		return fmt.Sprintf(
+			"Your task is to bidirectionally create or revise the durable Ralph specification with the user and save it in %s. The file still matches what existed at the start of this planning session. Continue the planning interview if needed, ask clarifying questions when in doubt, and persist the updated spec to %s before ending.",
+			relPath(repoRoot, specPath),
+			relPath(repoRoot, specPath),
+		), false, nil
+	}
+}
+
+func buildImplementationPrompt(repoRoot string, pair SpecPair) string {
+	return fmt.Sprintf(strings.TrimSpace(`
+You are running inside a Ralph builder iteration for this repository.
+
+This is a fresh ephemeral run. The durable planner specification and your mutable progress file live on disk.
 
 Read these files first if they exist:
-- .raijin/ralph/goal.md
-- .raijin/ralph/plan.md
-- .raijin/ralph/feedback.md
+- %s
+- %s
 - AGENTS.md
 - relevant source files, tests, and specs
 
-Harness feedback from the previous iteration:
-%s
-
 Rules:
-1. Pick exactly one highest-priority unchecked task from .raijin/ralph/plan.md.
-2. Implement only that task in this iteration. Do not opportunistically start a second unchecked task, even if the first task finishes early.
-3. Keep the iteration scoped to one coherent slice of work. If the task is larger than expected, stop after one technically coherent increment and leave the remaining work for a later iteration.
-4. Update .raijin/ralph/plan.md to reflect progress before you finish. Do not mark a task complete if the remaining wiring, edge cases, or verification work means it is still not actually done.
-5. If .raijin/ralph/feedback.md exists, read it before choosing work. Treat it as agent-authored handoff context from the previous iteration.
-6. Treat the harness feedback section above as harness-authored blocker, regression, or verification feedback that may be higher priority than the next unchecked task.
-7. Judge whether .raijin/ralph/feedback.md is still needed after your changes:
-   - If it is still useful for the next fresh iteration, rewrite it as a short actionable note.
-   - If you fully addressed it or it no longer helps, delete it.
-   - If no feedback is needed, do not keep the file around.
-8. If you leave unfinished wiring, partial integration, follow-up edge cases, or any other technical handoff for the next iteration, write that note into .raijin/ralph/feedback.md explicitly. Be concrete about what is incomplete, where it lives, and what must happen next.
-9. Run relevant checks inside the repo before finishing.
-10. Re-read the files you need before making decisions.
-11. Do not emit <promise>DONE</promise> unless .raijin/ralph/plan.md has no unchecked tasks remaining.
-12. Emit exactly one terminal marker at the end of your response:
-   - <promise>CONTINUE</promise> if more tasks remain
-   - <promise>DONE</promise> only if all tasks are complete
-
-Current goal:
-%s
-`), renderPromptBlock(harnessFeedback), state.Goal)
+1. Treat %s as read-only durable input. Do not modify it.
+2. Use %s as your mutable current-view progress file. Update it surgically to track your task breakdown, current progress, controller notes that still matter, and next-iteration notes.
+3. Preserve still-relevant progress content, remaining work, and controller notes in %s. Do not wipe or drastically shrink the file unless the old content is obsolete and you replace it with an equally complete current view.
+4. If %s does not exist yet, create it before finishing.
+5. Keep exactly one whole-line canonical promise in %s before the iteration ends:
+   - %s
+   - %s
+6. You must choose exactly one of those two promise lines and persist it in %s before the iteration is allowed to end.
+7. Write %s only if the entire current specification is complete, verified, and there is no important remaining work. Otherwise write %s.
+8. Finishing your single chosen task is not enough for %s unless that task also completes the entire current specification.
+9. Do not rely on %s for progress tracking or completion tracking.
+10. Run relevant checks inside the repo before finishing.
+11. Re-read the files you need before making decisions.
+12. At the start of the iteration, choose exactly one single most high-leverage task from %s to work on.
+13. Prefer the most important foundational item that unlocks or de-risks later work, while still keeping the chosen task concrete and finishable within one iteration.
+14. Do that single chosen task, update %s to reflect the result, and then stop.
+15. Do not try to push progress across the whole specification in one iteration.
+`),
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.ProgressPath),
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.ProgressPath),
+		relPath(repoRoot, pair.ProgressPath),
+		relPath(repoRoot, pair.ProgressPath),
+		relPath(repoRoot, pair.ProgressPath),
+		promiseDone,
+		promiseContinue,
+		relPath(repoRoot, pair.ProgressPath),
+		promiseDone,
+		promiseContinue,
+		promiseDone,
+		relPath(repoRoot, pair.SpecPath),
+		relPath(repoRoot, pair.ProgressPath),
+		relPath(repoRoot, pair.ProgressPath),
+	)
 }
 
-func defaultRunEphemeralPrompt(ctx context.Context, repoRoot, prompt string, stdout, stderr io.Writer) (promptResult, error) {
-	exePath, err := os.Executable()
-	if err != nil {
-		return promptResult{}, fmt.Errorf("ralph: resolve executable path: %w", err)
-	}
-
-	if term.IsTerminal(int(os.Stdout.Fd())) && term.IsTerminal(int(os.Stderr.Fd())) {
-		captureFile, tempErr := os.CreateTemp("", "raijin-ralph-assistant-*.txt")
-		if tempErr == nil {
-			capturePath := captureFile.Name()
-			_ = captureFile.Close()
-			defer func() { _ = os.Remove(capturePath) }()
-
-			runErr := shell.Run(ctx, shell.ExecSpec{
-				Path:  exePath,
-				Args:  []string{"--ephemeral", prompt},
-				Dir:   repoRoot,
-				Env:   upsertEnv(os.Environ(), assistantCaptureEnv, capturePath),
-				Stdin: os.Stdin,
-			}, stdout, stderr)
-
-			captured, readErr := os.ReadFile(capturePath)
-			if readErr != nil && !os.IsNotExist(readErr) {
-				return promptResult{}, fmt.Errorf("ralph: read assistant capture: %w", readErr)
-			}
-			return promptResult{Stdout: string(captured)}, runErr
+func progressPromiseHook(progressPath string) libagent.OnCompleteHook {
+	return func(_ context.Context, _ *libagent.AssistantMessage, _ []libagent.Message) (string, bool, error) {
+		promise, err := readProgressPromise(progressPath)
+		if err == nil && (promise == promiseDone || promise == promiseContinue) {
+			return "", true, nil
 		}
+		if err != nil && !os.IsNotExist(err) && !looksLikePromiseValidationError(err) {
+			return "", false, err
+		}
+		return fmt.Sprintf(
+			"Before ending this builder iteration, reopen %s and update it coherently with the builder rules. Preserve still-relevant progress, remaining work, and controller notes. Add exactly one whole-line promise: %s or %s. Write %s only if the entire current specification is complete, verified, and there is no important remaining work. Finishing only the current task is not enough for %s. Then respond again.",
+			progressPath,
+			promiseDone,
+			promiseContinue,
+			promiseDone,
+			promiseDone,
+		), false, nil
 	}
-
-	var stdoutBuf bytes.Buffer
-	var stderrBuf bytes.Buffer
-	stdoutWriter := io.MultiWriter(stdout, &stdoutBuf)
-	stderrWriter := io.MultiWriter(stderr, &stderrBuf)
-
-	err = shell.Run(ctx, shell.ExecSpec{
-		Path: exePath,
-		Args: []string{"--ephemeral", prompt},
-		Dir:  repoRoot,
-		Env:  ralphEphemeralEnv(),
-	}, stdoutWriter, stderrWriter)
-
-	return promptResult{
-		Stdout: stdoutBuf.String(),
-		Stderr: stderrBuf.String(),
-	}, err
 }
 
-func ralphEphemeralEnv() []string {
-	env := append([]string(nil), os.Environ()...)
-	if !term.IsTerminal(int(os.Stdout.Fd())) && !term.IsTerminal(int(os.Stderr.Fd())) {
-		return env
+func looksLikePromiseValidationError(err error) bool {
+	if err == nil {
+		return false
 	}
-	return upsertEnv(env, forceANSIEnv, "1")
+	msg := err.Error()
+	return strings.Contains(msg, "promise line")
 }
 
 func defaultResolveRepoRoot(ctx context.Context, requested string) (string, error) {
@@ -574,35 +710,71 @@ func defaultResolveRepoRoot(ctx context.Context, requested string) (string, erro
 	return filepath.Abs(cwd)
 }
 
-func newLoopPaths(repoRoot string) loopPaths {
-	baseDir := filepath.Join(repoRoot, ".raijin", "ralph")
-	return loopPaths{
-		root:            repoRoot,
-		baseDir:         baseDir,
-		logsDir:         filepath.Join(baseDir, "logs"),
-		goal:            filepath.Join(baseDir, "goal.md"),
-		plan:            filepath.Join(baseDir, "plan.md"),
-		state:           filepath.Join(baseDir, "state.json"),
-		feedback:        filepath.Join(baseDir, "feedback.md"),
-		harnessFeedback: filepath.Join(baseDir, "harness_feedback.md"),
+func newBasePaths(repoRoot string) basePaths {
+	return basePaths{
+		root:    repoRoot,
+		baseDir: filepath.Join(repoRoot, ".raijin", "ralph"),
 	}
 }
 
-func ensureDirs(paths loopPaths) error {
-	if err := os.MkdirAll(paths.logsDir, 0o755); err != nil {
-		return fmt.Errorf("ralph: create logs dir: %w", err)
-	}
-	return nil
+func ensureDirs(paths basePaths) error {
+	return os.MkdirAll(paths.baseDir, 0o755)
 }
 
-func resetWorkspace(paths loopPaths) error {
-	if err := os.RemoveAll(paths.logsDir); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("ralph: reset logs dir: %w", err)
+func newNamedSpecPair(paths basePaths) (SpecPair, error) {
+	for i := 0; i < 64; i++ {
+		slug := generateSpecSlug()
+		specPath := filepath.Join(paths.baseDir, "spec-"+slug+".md")
+		if fileExists(specPath) {
+			continue
+		}
+		return SpecPair{
+			SpecPath:     specPath,
+			ProgressPath: deriveProgressPath(specPath),
+			Slug:         slug,
+		}, nil
 	}
-	if err := os.MkdirAll(paths.logsDir, 0o755); err != nil {
-		return fmt.Errorf("ralph: recreate logs dir: %w", err)
+	return SpecPair{}, errors.New("ralph: could not allocate a unique spec name")
+}
+
+func newSpecPair(specPath string) SpecPair {
+	specPath, _ = filepath.Abs(specPath)
+	return SpecPair{
+		SpecPath:     specPath,
+		ProgressPath: deriveProgressPath(specPath),
+		Slug:         slugFromSpecPath(specPath),
 	}
-	for _, path := range []string{paths.plan, paths.feedback, paths.harnessFeedback} {
+}
+
+func deriveProgressPath(specPath string) string {
+	dir := filepath.Dir(specPath)
+	base := filepath.Base(specPath)
+	if slug, ok := specSlugFromName(base); ok {
+		return filepath.Join(dir, "progress-"+slug+".txt")
+	}
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	return filepath.Join(dir, stem+".progress.txt")
+}
+
+func specSlugFromName(name string) (string, bool) {
+	if !strings.HasPrefix(name, "spec-") || !strings.HasSuffix(name, ".md") {
+		return "", false
+	}
+	slug := strings.TrimSuffix(strings.TrimPrefix(name, "spec-"), ".md")
+	if strings.TrimSpace(slug) == "" {
+		return "", false
+	}
+	return slug, true
+}
+
+func slugFromSpecPath(specPath string) string {
+	slug, _ := specSlugFromName(filepath.Base(specPath))
+	return slug
+}
+
+func resetPair(pair SpecPair) error {
+	for _, path := range []string{pair.SpecPath, pair.ProgressPath} {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -610,61 +782,80 @@ func resetWorkspace(paths loopPaths) error {
 	return nil
 }
 
-func resetPlanningWorkspace(paths loopPaths) error {
-	if err := resetWorkspace(paths); err != nil {
-		return err
-	}
-	for _, path := range []string{paths.goal, paths.state} {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
-	return nil
-}
-
-func saveState(path string, state State) error {
-	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("ralph: marshal state: %w", err)
-	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o644)
-}
-
-func loadState(path string) (State, error) {
+func readProgressPromise(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return State{}, err
+		return "", err
 	}
-	var state State
-	if err := json.Unmarshal(data, &state); err != nil {
-		return State{}, fmt.Errorf("ralph: decode state: %w", err)
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	var found []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch trimmed {
+		case "":
+			continue
+		case promiseDone, promiseContinue:
+			found = append(found, trimmed)
+		default:
+			if strings.HasPrefix(trimmed, "PROMISE:") {
+				return "", fmt.Errorf("invalid promise line in %s: %q", path, trimmed)
+			}
+		}
 	}
-	return state, nil
+	if len(found) == 0 {
+		return "", fmt.Errorf("missing promise line in %s", path)
+	}
+	if len(found) > 1 {
+		return "", fmt.Errorf("multiple promise lines in %s", path)
+	}
+	return found[0], nil
 }
 
-func writeGoal(path, goal string) error {
-	goal = strings.TrimSpace(goal)
-	if goal == "" {
-		return errors.New("ralph: goal cannot be empty")
+func readProgressPromiseForState(path string) (string, error) {
+	promise, err := readProgressPromise(path)
+	if err != nil && strings.Contains(err.Error(), "missing promise line") {
+		return promiseContinue, nil
 	}
-	return os.WriteFile(path, []byte(goal+"\n"), 0o644)
+	return promise, err
 }
 
-func writeHarnessFeedback(path, content string) error {
-	content = strings.TrimSpace(content)
+func clearPromiseLines(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "PROMISE:") {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	content := strings.TrimRight(strings.Join(filtered, "\n"), "\n")
 	if content == "" {
-		return clearHarnessFeedback(path)
+		return os.WriteFile(path, nil, 0o644)
 	}
 	return os.WriteFile(path, []byte(content+"\n"), 0o644)
 }
 
-func clearHarnessFeedback(path string) error {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+func writeControllerNote(path, note string) error {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return nil
+	content := strings.TrimSpace(readOptionalFile(path))
+	block := "Controller note:\n" + note
+	if content == "" {
+		return os.WriteFile(path, []byte(block+"\n"), 0o644)
+	}
+	return os.WriteFile(path, []byte(content+"\n\n"+block+"\n"), 0o644)
 }
 
 func renderPromptBlock(content string) string {
@@ -673,49 +864,6 @@ func renderPromptBlock(content string) string {
 		return "(none)"
 	}
 	return content
-}
-
-func writePromptLog(path string, result promptResult, runErr error) error {
-	var b strings.Builder
-	b.WriteString("STDOUT\n")
-	b.WriteString(result.Stdout)
-	if !strings.HasSuffix(result.Stdout, "\n") && strings.TrimSpace(result.Stdout) != "" {
-		b.WriteByte('\n')
-	}
-	b.WriteString("\nSTDERR\n")
-	b.WriteString(result.Stderr)
-	if !strings.HasSuffix(result.Stderr, "\n") && strings.TrimSpace(result.Stderr) != "" {
-		b.WriteByte('\n')
-	}
-	if runErr != nil {
-		fmt.Fprintf(&b, "\nERROR\n%s\n", runErr.Error())
-	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
-}
-
-func planHasUncheckedTasks(path string) (bool, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false, err
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "- [ ]") || strings.HasPrefix(trimmed, "* [ ]") {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func detectPromise(output string) string {
-	switch {
-	case strings.Contains(output, "<promise>DONE</promise>"):
-		return "DONE"
-	case strings.Contains(output, "<promise>CONTINUE</promise>"):
-		return "CONTINUE"
-	default:
-		return ""
-	}
 }
 
 func summarizePromptFailure(stage string, result promptResult, runErr error) string {
@@ -771,14 +919,23 @@ func relPath(root, path string) string {
 	return rel
 }
 
-func upsertEnv(env []string, key, value string) []string {
-	prefix := key + "="
-	out := append([]string(nil), env...)
-	for i, entry := range out {
-		if strings.HasPrefix(entry, prefix) {
-			out[i] = prefix + value
-			return out
-		}
-	}
-	return append(out, prefix+value)
+func looksLikePath(target string) bool {
+	return strings.Contains(target, string(os.PathSeparator)) || strings.HasPrefix(target, ".") || strings.HasSuffix(target, ".md")
+}
+
+func defaultGenerateSpecSlug() string {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return specAnimals[r.Intn(len(specAnimals))] + "-" + specActions[r.Intn(len(specActions))] + "-" + specPlants[r.Intn(len(specPlants))]
+}
+
+var specAnimals = []string{
+	"otter", "falcon", "badger", "lynx", "heron", "beaver", "wren", "fox",
+}
+
+var specActions = []string{
+	"refactor", "stabilize", "thread", "shape", "tune", "align", "harden", "simplify",
+}
+
+var specPlants = []string{
+	"mint", "cedar", "fern", "olive", "clover", "maple", "thistle", "sage",
 }
