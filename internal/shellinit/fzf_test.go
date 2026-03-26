@@ -101,6 +101,19 @@ func TestFZFArgsIncludePreviewConfiguration(t *testing.T) {
 	}
 }
 
+func TestFZFArgsAllowFullscreenAndCustomHeader(t *testing.T) {
+	args := strings.Join(fzfArgs("default", "", RunFZFOptions{
+		Header:        "Which baseline matters?",
+		UseFullscreen: true,
+	}), " ")
+	if strings.Contains(args, "--height=80%") {
+		t.Fatalf("fullscreen args should not force dialog height, got %q", args)
+	}
+	if !strings.Contains(args, "--header=Which baseline matters?") {
+		t.Fatalf("args missing question header, got %q", args)
+	}
+}
+
 func TestSplitExpectOutputEnterWithEmptyFirstLine(t *testing.T) {
 	key, selected := splitExpectOutput([]string{"", "model-a"}, []string{"ctrl-x"})
 	if key != "" {

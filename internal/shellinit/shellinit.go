@@ -269,7 +269,9 @@ type RunFZFOptions struct {
 	DisableSelectOne        bool
 	DisableSort             bool
 	Header                  string
+	Prompt                  string
 	InitialPosition         int
+	UseFullscreen           bool
 	WithNth                 string
 	Delimiter               string
 	PreviewCommand          string
@@ -400,18 +402,23 @@ func fzfArgs(mode, query string, cfg RunFZFOptions) []string {
 	}
 	switch mode {
 	case "paths":
-		args = append(args, "--scheme=path", "--prompt=@ ")
+		args = append(args, "--scheme=path")
+		args = append(args, "--prompt="+coalesceFZFPrompt(cfg.Prompt, "@ "))
 		args = append(args, "--bind=tab:accept")
 	case "complete":
-		args = append(args, "--height=80%")
-		args = append(args, "--prompt=Raijin > ")
+		if !cfg.UseFullscreen {
+			args = append(args, "--height=80%")
+		}
+		args = append(args, "--prompt="+coalesceFZFPrompt(cfg.Prompt, "Raijin > "))
 		args = append(args, "--bind=tab:accept")
 	case "repl-complete":
-		args = append(args, "--prompt=Raijin > ")
+		args = append(args, "--prompt="+coalesceFZFPrompt(cfg.Prompt, "Raijin > "))
 		args = append(args, "--bind=tab:accept")
 	default:
-		args = append(args, "--height=80%")
-		args = append(args, "--prompt=> ")
+		if !cfg.UseFullscreen {
+			args = append(args, "--height=80%")
+		}
+		args = append(args, "--prompt="+coalesceFZFPrompt(cfg.Prompt, "> "))
 	}
 	if query != "" {
 		args = append(args, "--query="+query)
@@ -458,6 +465,14 @@ func fzfArgs(mode, query string, cfg RunFZFOptions) []string {
 		args = append(args, "--preview-label="+previewLabel)
 	}
 	return args
+}
+
+func coalesceFZFPrompt(prompt, fallback string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return fallback
+	}
+	return prompt
 }
 
 func fzfItems(mode string, stdin io.Reader) ([]string, error) {
