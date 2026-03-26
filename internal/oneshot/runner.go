@@ -393,21 +393,21 @@ func handleCompact(opts Options, instructions string, forceNew bool) error {
 
 func handlePlan(rawArgs string) error {
 	ctx := context.Background()
-	request := strings.TrimSpace(rawArgs)
+	target := strings.TrimSpace(rawArgs)
 
-	resolvedPair, resolvedExplicitly, err := resolvePlanTarget(ctx, request)
+	resolvedPair, resolvedExplicitly, err := resolvePlanTarget(ctx, target)
 	if err != nil {
 		return err
 	}
 	if resolvedExplicitly {
-		return handleScopedPlanFlow(ctx, resolvedPair, planScopedActionRun)
-	}
-	if request != "" {
-		request, err = expandPlanRequest(request)
-		if err != nil {
-			return err
+		initialAction := planScopedActionRun
+		if _, statErr := os.Stat(resolvedPair.SpecPath); statErr != nil {
+			initialAction = planScopedActionRevise
 		}
-		return handlePlanRequestFlow(ctx, request)
+		return handleScopedPlanFlow(ctx, resolvedPair, initialAction)
+	}
+	if target != "" {
+		return errors.New("one-off /plan prompts are no longer supported; use /plan and choose create or revise, or pass a spec slug/path like /plan custom.md")
 	}
 	return handlePlanRootFlow(ctx)
 }
@@ -421,13 +421,6 @@ const (
 	planRootActionReview   planRootAction = "review"
 	planRootActionRevise   planRootAction = "revise"
 	planRootActionRun      planRootAction = "run"
-)
-
-type planRequestAction string
-
-const (
-	planRequestActionCreate planRequestAction = "create"
-	planRequestActionRevise planRequestAction = "revise"
 )
 
 type planScopedAction string
@@ -459,11 +452,10 @@ type planSpecListEntry struct {
 }
 
 var (
-	runPlanRootPicker          = defaultRunPlanRootPicker
-	runPlanRequestActionPicker = defaultRunPlanRequestActionPicker
-	runPlanScopedActionPicker  = defaultRunPlanScopedActionPicker
-	runPlanSpecPicker          = defaultRunPlanSpecPicker
-	editPlanSpec               = defaultEditPlanSpec
+	runPlanRootPicker         = defaultRunPlanRootPicker
+	runPlanScopedActionPicker = defaultRunPlanScopedActionPicker
+	runPlanSpecPicker         = defaultRunPlanSpecPicker
+	editPlanSpec              = defaultEditPlanSpec
 )
 
 func handlePlanRootFlow(ctx context.Context) error {
@@ -479,45 +471,6 @@ func handlePlanRootFlow(ctx context.Context) error {
 		return nil
 	}
 	return executePlanRootAction(ctx, action, "")
-}
-
-func handlePlanRequestFlow(ctx context.Context, request string) error {
-	pairs, err := ralph.ListSpecPairs(ctx, "")
-	if err != nil {
-		return err
-	}
-	if len(pairs) == 0 {
-		return createNewPlanFromRequest(ctx, request)
-	}
-
-	action, ok, err := runPlanRequestActionPicker(request, true)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return nil
-	}
-	switch action {
-	case planRequestActionCreate:
-		return createNewPlanFromRequest(ctx, request)
-	case planRequestActionRevise:
-		pair, ok, err := runPlanSpecPicker(ctx, pairs, planSpecPickerPurposeRevise)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
-		if err := runPlanningRequest(request, pair.SpecPath, false); err != nil {
-			return err
-		}
-		if !canUseEmbeddedFZF() {
-			return nil
-		}
-		return handleScopedPlanFlow(ctx, pair, planScopedActionRun)
-	default:
-		return nil
-	}
 }
 
 func executePlanRootAction(ctx context.Context, action planRootAction, request string) error {
@@ -731,29 +684,6 @@ func defaultRunPlanRootPicker(hasSpecs bool) (planRootAction, bool, error) {
 	return planRootAction(chosen), ok, err
 }
 
-func defaultRunPlanRequestActionPicker(_ string, hasSpecs bool) (planRequestAction, bool, error) {
-	if !canUseEmbeddedFZFForTest() {
-		return "", false, errors.New("interactive Ralph request menu requires a TTY")
-	}
-
-	items := []fzfPickerItem{
-		{
-			key:     string(planRequestActionCreate),
-			label:   "Create new spec from request",
-			preview: "Use the provided /plan request to create a brand new Ralph spec.",
-		},
-	}
-	if hasSpecs {
-		items = append(items, fzfPickerItem{
-			key:     string(planRequestActionRevise),
-			label:   "Revise existing spec with request",
-			preview: "Select one existing spec and use the provided /plan request to revise it in place.",
-		})
-	}
-	chosen, ok, err := pickPlanFZFKey(items, string(planRequestActionCreate), "Ralph request")
-	return planRequestAction(chosen), ok, err
-}
-
 func defaultRunPlanScopedActionPicker(pair ralph.SpecPair, status ralph.PlanningStatus, initialAction planScopedAction) (planScopedAction, bool, error) {
 	if !canUseEmbeddedFZFForTest() {
 		return "", false, errors.New("interactive Ralph action menu requires a TTY")
@@ -951,32 +881,6 @@ func readOptionalPlanFile(path string) string {
 		return ""
 	}
 	return string(data)
-}
-
-func expandPlanRequest(request string) (string, error) {
-	text, files, err := input.ParseAndLoadResources(request)
-	if err != nil {
-		return "", err
-	}
-	if len(files) == 0 {
-		return strings.TrimSpace(text), nil
-	}
-
-	var b strings.Builder
-	b.WriteString(strings.TrimSpace(text))
-	b.WriteString("\n\nAttached file contents:\n")
-	for _, f := range files {
-		b.WriteString("\n")
-		fmt.Fprintf(&b, "@%s", f.Path)
-		if strings.HasPrefix(f.MediaType, "image/") {
-			b.WriteString(" (image attachment; content not inlined)\n")
-			continue
-		}
-		b.WriteString("\n```text\n")
-		b.Write(bytes.TrimRight(f.Data, "\n"))
-		b.WriteString("\n```\n")
-	}
-	return strings.TrimSpace(b.String()), nil
 }
 
 func defaultEditPlanSpec(path string) error {

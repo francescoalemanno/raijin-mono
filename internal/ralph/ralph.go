@@ -306,14 +306,15 @@ func ResolveSpecSelection(ctx context.Context, repoRoot, target string) (SpecPai
 	}
 
 	if looksLikePath(target) {
-		specPath, err := filepath.Abs(target)
+		specPath := target
+		if !filepath.IsAbs(specPath) {
+			specPath = filepath.Join(resolvedRoot, specPath)
+		}
+		specPath, err := filepath.Abs(specPath)
 		if err != nil {
 			return SpecPair{}, false, err
 		}
-		if fileExists(specPath) {
-			return newSpecPair(specPath), true, nil
-		}
-		return SpecPair{}, false, nil
+		return newSpecPair(specPath), true, nil
 	}
 
 	pairs, err := ListSpecPairs(ctx, resolvedRoot)

@@ -341,9 +341,23 @@ func TestRunPlanBuiltinDoesNotRequireBoundContext(t *testing.T) {
 	t.Setenv(persist.SessionBindingOwnerPIDEnv, "")
 	repo := t.TempDir()
 	t.Chdir(repo)
+	editorPath := filepath.Join(repo, "fake-editor-plan.sh")
+	editorScript := "#!/bin/sh\ncat <<'EOF' > \"$1\"\ndesign the loop\nEOF\n"
+	if err := os.WriteFile(editorPath, []byte(editorScript), 0o755); err != nil {
+		t.Fatalf("write fake editor: %v", err)
+	}
+	t.Setenv("EDITOR", editorPath)
 
 	origRunRalph := runRalph
-	t.Cleanup(func() { runRalph = origRunRalph })
+	origRootPicker := runPlanRootPicker
+	t.Cleanup(func() {
+		runRalph = origRunRalph
+		runPlanRootPicker = origRootPicker
+	})
+
+	runPlanRootPicker = func(bool) (planRootAction, bool, error) {
+		return planRootActionCreate, true, nil
+	}
 
 	called := false
 	runRalph = func(_ context.Context, opts ralph.Options) error {
@@ -364,7 +378,7 @@ func TestRunPlanBuiltinDoesNotRequireBoundContext(t *testing.T) {
 		return nil
 	}
 
-	if err := Run(Options{}, "/plan design the loop"); err != nil {
+	if err := Run(Options{}, "/plan"); err != nil {
 		t.Fatalf("Run(/plan): %v", err)
 	}
 	if !called {
@@ -718,143 +732,47 @@ func TestHandlePlanExplicitPathScopesToExactSpec(t *testing.T) {
 	}
 }
 
-func TestHandlePlanFreeTextAsksCreateVsRevise(t *testing.T) {
+func TestHandlePlanFreeTextIsRejected(t *testing.T) {
 	repo := t.TempDir()
 	t.Chdir(repo)
-	pair := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), "# Goal\n\nexisting goal\n\n# User Specification\n\nKeep it clear.\n\n# Plan\n\n1. Existing step.\n", "")
 
-	origRunRalph := runRalph
-	origRequestPicker := runPlanRequestActionPicker
-	origSpecPicker := runPlanSpecPicker
-	origScopedPicker := runPlanScopedActionPicker
-	t.Cleanup(func() {
-		runRalph = origRunRalph
-		runPlanRequestActionPicker = origRequestPicker
-		runPlanSpecPicker = origSpecPicker
-		runPlanScopedActionPicker = origScopedPicker
-	})
-
-	runPlanRequestActionPicker = func(request string, hasSpecs bool) (planRequestAction, bool, error) {
-		if request != "revise this plan" {
-			t.Fatalf("request = %q", request)
-		}
-		if !hasSpecs {
-			t.Fatalf("hasSpecs = false, want true")
-		}
-		return planRequestActionRevise, true, nil
+	err := handlePlan("revise this plan")
+	if err == nil {
+		t.Fatalf("expected one-off /plan prompt to be rejected")
 	}
-	runPlanSpecPicker = func(_ context.Context, pairs []ralph.SpecPair, purpose planSpecPickerPurpose) (ralph.SpecPair, bool, error) {
-		if len(pairs) != 1 {
-			t.Fatalf("pairs len = %d, want 1", len(pairs))
-		}
-		if purpose != planSpecPickerPurposeRevise {
-			t.Fatalf("purpose = %q, want revise", purpose)
-		}
-		return pair, true, nil
-	}
-	runPlanScopedActionPicker = func(got ralph.SpecPair, _ ralph.PlanningStatus, _ planScopedAction) (planScopedAction, bool, error) {
-		if got.SpecPath != pair.SpecPath {
-			t.Fatalf("SpecPath = %q, want %q", got.SpecPath, pair.SpecPath)
-		}
-		return planScopedActionClose, true, nil
-	}
-
-	called := false
-	runRalph = func(_ context.Context, opts ralph.Options) error {
-		called = true
-		if opts.Mode != ralph.ModePlan {
-			t.Fatalf("Mode = %q, want plan", opts.Mode)
-		}
-		if opts.PlanningRequest != "revise this plan" {
-			t.Fatalf("PlanningRequest = %q", opts.PlanningRequest)
-		}
-		if opts.ResetPlan {
-			t.Fatalf("ResetPlan = true, want false")
-		}
-		writeRalphSpecPair(t, opts.SpecPath, "# Goal\n\nexisting goal revised\n\n# User Specification\n\nKeep it clear.\n\n# Plan\n\n1. Revised step.\n", "")
-		return nil
-	}
-
-	if err := handlePlan("revise this plan"); err != nil {
-		t.Fatalf("handlePlan(request revise): %v", err)
-	}
-	if !called {
-		t.Fatalf("expected revise flow to call Ralph plan mode")
+	if !strings.Contains(err.Error(), "one-off /plan prompts are no longer supported") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestHandlePlanExpandsTextAttachmentIntoPlanningRequest(t *testing.T) {
+func TestHandlePlanCustomMarkdownPathWithoutDotSlashOpensScopedFlow(t *testing.T) {
 	repo := t.TempDir()
 	t.Chdir(repo)
-	pair := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), "# Goal\n\nexisting goal\n\n# User Specification\n\nKeep it clear.\n\n# Plan\n\n1. Existing step.\n", "")
-	notesPath := filepath.Join(repo, "notes.txt")
-	if err := os.WriteFile(notesPath, []byte("first line\nsecond line\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(notes): %v", err)
-	}
+	customSpec := filepath.Join(repo, "custom.md")
 
 	origRunRalph := runRalph
-	origRequestPicker := runPlanRequestActionPicker
-	origSpecPicker := runPlanSpecPicker
 	origScopedPicker := runPlanScopedActionPicker
 	t.Cleanup(func() {
 		runRalph = origRunRalph
-		runPlanRequestActionPicker = origRequestPicker
-		runPlanSpecPicker = origSpecPicker
 		runPlanScopedActionPicker = origScopedPicker
 	})
 
-	runPlanRequestActionPicker = func(request string, hasSpecs bool) (planRequestAction, bool, error) {
-		if !hasSpecs {
-			t.Fatalf("hasSpecs = false, want true")
+	runPlanScopedActionPicker = func(got ralph.SpecPair, _ ralph.PlanningStatus, initialAction planScopedAction) (planScopedAction, bool, error) {
+		if got.SpecPath != customSpec {
+			t.Fatalf("SpecPath = %q, want %q", got.SpecPath, customSpec)
 		}
-		if !strings.Contains(request, "use this context") {
-			t.Fatalf("request missing prompt text: %q", request)
-		}
-		if !strings.Contains(request, "@notes.txt") {
-			t.Fatalf("request missing attachment marker: %q", request)
-		}
-		if !strings.Contains(request, "first line\nsecond line") {
-			t.Fatalf("request missing attachment contents: %q", request)
-		}
-		return planRequestActionRevise, true, nil
-	}
-	runPlanSpecPicker = func(_ context.Context, pairs []ralph.SpecPair, purpose planSpecPickerPurpose) (ralph.SpecPair, bool, error) {
-		if len(pairs) != 1 {
-			t.Fatalf("pairs len = %d, want 1", len(pairs))
-		}
-		if purpose != planSpecPickerPurposeRevise {
-			t.Fatalf("purpose = %q, want revise", purpose)
-		}
-		return pair, true, nil
-	}
-	runPlanScopedActionPicker = func(got ralph.SpecPair, _ ralph.PlanningStatus, _ planScopedAction) (planScopedAction, bool, error) {
-		if got.SpecPath != pair.SpecPath {
-			t.Fatalf("SpecPath = %q, want %q", got.SpecPath, pair.SpecPath)
+		if initialAction != planScopedActionRevise {
+			t.Fatalf("initialAction = %q, want %q", initialAction, planScopedActionRevise)
 		}
 		return planScopedActionClose, true, nil
 	}
-
-	called := false
-	runRalph = func(_ context.Context, opts ralph.Options) error {
-		called = true
-		if !strings.Contains(opts.PlanningRequest, "use this context") {
-			t.Fatalf("PlanningRequest missing prompt text: %q", opts.PlanningRequest)
-		}
-		if !strings.Contains(opts.PlanningRequest, "@notes.txt") {
-			t.Fatalf("PlanningRequest missing attachment marker: %q", opts.PlanningRequest)
-		}
-		if !strings.Contains(opts.PlanningRequest, "first line\nsecond line") {
-			t.Fatalf("PlanningRequest missing attachment contents: %q", opts.PlanningRequest)
-		}
-		writeRalphSpecPair(t, opts.SpecPath, "# Goal\n\nexisting goal revised\n\n# User Specification\n\nKeep it clear.\n\n# Plan\n\n1. Revised step.\n", "")
+	runRalph = func(_ context.Context, _ ralph.Options) error {
+		t.Fatalf("runRalph should not be called when scoped menu closes immediately")
 		return nil
 	}
 
-	if err := handlePlan("use this context @notes.txt"); err != nil {
-		t.Fatalf("handlePlan(attachment expansion): %v", err)
-	}
-	if !called {
-		t.Fatalf("expected attachment-driven revise flow to call Ralph plan mode")
+	if err := handlePlan("custom.md"); err != nil {
+		t.Fatalf("handlePlan(custom.md): %v", err)
 	}
 }
 

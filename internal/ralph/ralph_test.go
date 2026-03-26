@@ -108,6 +108,20 @@ func TestResolveSpecSelectionSupportsSlugPathAndCustomSpecPaths(t *testing.T) {
 	if got.ProgressPath != wantProgress {
 		t.Fatalf("ProgressPath = %q, want %q", got.ProgressPath, wantProgress)
 	}
+
+	got, found, err = ResolveSpecSelection(context.Background(), repo, "custom.md")
+	if err != nil {
+		t.Fatalf("ResolveSpecSelection(missing custom path): %v", err)
+	}
+	if !found {
+		t.Fatalf("ResolveSpecSelection(missing custom path) found = false, want true")
+	}
+	if got.SpecPath != filepath.Join(repo, "custom.md") {
+		t.Fatalf("SpecPath = %q, want %q", got.SpecPath, filepath.Join(repo, "custom.md"))
+	}
+	if got.ProgressPath != filepath.Join(repo, "custom.progress.txt") {
+		t.Fatalf("ProgressPath = %q, want %q", got.ProgressPath, filepath.Join(repo, "custom.progress.txt"))
+	}
 }
 
 func TestInspectPlanningStateUsesProgressPromise(t *testing.T) {
