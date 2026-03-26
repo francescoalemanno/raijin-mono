@@ -28,12 +28,21 @@ const (
 
 var errFZFPickerUnavailable = errors.New("fzf picker unavailable")
 
+var (
+	runEmbeddedFZFWithOptions = shellinit.RunFZFWithOptions
+	canUseEmbeddedFZFForTest  = canUseEmbeddedFZF
+)
+
 func pickWithEmbeddedFZF(items []fzfPickerItem, query string, allowDelete bool, preserveOrder bool) (string, fzfPickerAction, error) {
 	return pickWithEmbeddedFZFInitial(items, query, allowDelete, preserveOrder, "")
 }
 
 func pickWithEmbeddedFZFInitial(items []fzfPickerItem, query string, allowDelete bool, preserveOrder bool, initialKey string) (string, fzfPickerAction, error) {
-	if !canUseEmbeddedFZF() {
+	return pickWithEmbeddedFZFConfig(items, query, allowDelete, preserveOrder, initialKey, "default", shellinit.RunFZFOptions{})
+}
+
+func pickWithEmbeddedFZFConfig(items []fzfPickerItem, query string, allowDelete bool, preserveOrder bool, initialKey string, mode string, cfg shellinit.RunFZFOptions) (string, fzfPickerAction, error) {
+	if !canUseEmbeddedFZFForTest() {
 		return "", fzfPickerActionCancel, errFZFPickerUnavailable
 	}
 
@@ -48,7 +57,6 @@ func pickWithEmbeddedFZFInitial(items []fzfPickerItem, query string, allowDelete
 		stdin.WriteByte('\n')
 	}
 
-	cfg := shellinit.RunFZFOptions{}
 	cfg.DisableSort = preserveOrder
 	cfg.InitialPosition = pickerLinePosition(lines, lineToKey, initialKey)
 	if previewEnabled {
@@ -65,7 +73,7 @@ func pickWithEmbeddedFZFInitial(items []fzfPickerItem, query string, allowDelete
 		cfg.DisableSelectOne = true
 		cfg.Header = ">>> ENTER = SELECT | CTRL+X = DELETE <<<"
 	}
-	result, err := shellinit.RunFZFWithOptions("default", strings.TrimSpace(query), &stdin, cfg)
+	result, err := runEmbeddedFZFWithOptions(mode, strings.TrimSpace(query), &stdin, cfg)
 	if err != nil {
 		return "", fzfPickerActionCancel, err
 	}
