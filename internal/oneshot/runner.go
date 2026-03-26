@@ -5,6 +5,7 @@
 package oneshot
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,9 +13,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"strings"
-
-	tea "github.com/charmbracelet/bubbletea"
+	"sync"
 
 	"github.com/francescoalemanno/raijin-mono/internal/compaction"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -28,6 +30,7 @@ import (
 	"github.com/francescoalemanno/raijin-mono/internal/prompts"
 	"github.com/francescoalemanno/raijin-mono/internal/ralph"
 	"github.com/francescoalemanno/raijin-mono/internal/session"
+	"github.com/francescoalemanno/raijin-mono/internal/shellinit"
 	"github.com/francescoalemanno/raijin-mono/internal/skills"
 	"github.com/francescoalemanno/raijin-mono/internal/substitution"
 )
@@ -50,6 +53,13 @@ type Options struct {
 }
 
 const assistantCaptureEnv = "RAIJIN_ASSISTANT_CAPTURE_FILE"
+
+var ralphEphemeralRunMu sync.Mutex
+
+func init() {
+	ralph.SetEphemeralPromptRunner(runRalphEphemeralPrompt)
+	ralph.SetPlanningQuestionAsker(runPlanningQuestionPrompt)
+}
 
 // Run executes a single prompt in non-interactive CLI mode.
 // Slash commands are supported: non-interactive ones run inline,
@@ -382,24 +392,240 @@ func handleCompact(opts Options, instructions string, forceNew bool) error {
 }
 
 func handlePlan(rawArgs string) error {
-	status, err := ralph.InspectPlanningState(context.Background(), "")
+	ctx := context.Background()
+	request := strings.TrimSpace(rawArgs)
+
+	resolvedPair, resolvedExplicitly, err := resolvePlanTarget(ctx, request)
+	if err != nil {
+		return err
+	}
+	if resolvedExplicitly {
+		return handleScopedPlanFlow(ctx, resolvedPair, planScopedActionRun)
+	}
+	if request != "" {
+		request, err = expandPlanRequest(request)
+		if err != nil {
+			return err
+		}
+		return handlePlanRequestFlow(ctx, request)
+	}
+	return handlePlanRootFlow(ctx)
+}
+
+type planRootAction string
+
+const (
+	planRootActionContinue planRootAction = "continue"
+	planRootActionCreate   planRootAction = "create"
+	planRootActionEdit     planRootAction = "edit"
+	planRootActionReview   planRootAction = "review"
+	planRootActionRevise   planRootAction = "revise"
+	planRootActionRun      planRootAction = "run"
+)
+
+type planRequestAction string
+
+const (
+	planRequestActionCreate planRequestAction = "create"
+	planRequestActionRevise planRequestAction = "revise"
+)
+
+type planScopedAction string
+
+const (
+	planScopedActionRun     planScopedAction = "run"
+	planScopedActionEdit    planScopedAction = "edit"
+	planScopedActionReview  planScopedAction = "review"
+	planScopedActionRevise  planScopedAction = "revise"
+	planScopedActionScratch planScopedAction = "scratch"
+	planScopedActionClose   planScopedAction = "close"
+)
+
+type planSpecPickerPurpose string
+
+const (
+	planSpecPickerPurposeContinue planSpecPickerPurpose = "continue"
+	planSpecPickerPurposeEdit     planSpecPickerPurpose = "edit"
+	planSpecPickerPurposeReview   planSpecPickerPurpose = "review"
+	planSpecPickerPurposeRevise   planSpecPickerPurpose = "revise"
+	planSpecPickerPurposeRun      planSpecPickerPurpose = "run"
+)
+
+type planSpecListEntry struct {
+	Pair    ralph.SpecPair
+	Status  ralph.PlanningStatus
+	Label   string
+	Preview string
+}
+
+var (
+	runPlanRootPicker          = defaultRunPlanRootPicker
+	runPlanRequestActionPicker = defaultRunPlanRequestActionPicker
+	runPlanScopedActionPicker  = defaultRunPlanScopedActionPicker
+	runPlanSpecPicker          = defaultRunPlanSpecPicker
+	editPlanSpec               = defaultEditPlanSpec
+)
+
+func handlePlanRootFlow(ctx context.Context) error {
+	pairs, err := ralph.ListSpecPairs(ctx, "")
+	if err != nil {
+		return err
+	}
+	action, ok, err := runPlanRootPicker(len(pairs) > 0)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	return executePlanRootAction(ctx, action, "")
+}
+
+func handlePlanRequestFlow(ctx context.Context, request string) error {
+	pairs, err := ralph.ListSpecPairs(ctx, "")
+	if err != nil {
+		return err
+	}
+	if len(pairs) == 0 {
+		return createNewPlanFromRequest(ctx, request)
+	}
+
+	action, ok, err := runPlanRequestActionPicker(request, true)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	switch action {
+	case planRequestActionCreate:
+		return createNewPlanFromRequest(ctx, request)
+	case planRequestActionRevise:
+		pair, ok, err := runPlanSpecPicker(ctx, pairs, planSpecPickerPurposeRevise)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		if err := runPlanningRequest(request, pair.SpecPath, false); err != nil {
+			return err
+		}
+		if !canUseEmbeddedFZF() {
+			return nil
+		}
+		return handleScopedPlanFlow(ctx, pair, planScopedActionRun)
+	default:
+		return nil
+	}
+}
+
+func executePlanRootAction(ctx context.Context, action planRootAction, request string) error {
+	pairs, err := ralph.ListSpecPairs(ctx, "")
 	if err != nil {
 		return err
 	}
 
-	request := strings.TrimSpace(rawArgs)
-	if status.State == ralph.PlanningStateEmpty {
-		request, err = resolvePlanningRequest(request)
+	switch action {
+	case planRootActionCreate:
+		return createNewPlanFromRequest(ctx, request)
+	case planRootActionContinue:
+		pair, ok, err := runPlanSpecPicker(ctx, pairs, planSpecPickerPurposeContinue)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		return handleScopedPlanFlow(ctx, pair, planScopedActionRun)
+	case planRootActionEdit:
+		pair, ok, err := runPlanSpecPicker(ctx, pairs, planSpecPickerPurposeEdit)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		if err := editPlanSpec(pair.SpecPath); err != nil {
+			return err
+		}
+		if !canUseEmbeddedFZF() {
+			return nil
+		}
+		return handleScopedPlanFlow(ctx, pair, planScopedActionRun)
+	case planRootActionReview:
+		pair, ok, err := runPlanSpecPicker(ctx, pairs, planSpecPickerPurposeReview)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		return renderCurrentPlan(pair.SpecPath)
+	case planRootActionRevise:
+		pair, ok, err := runPlanSpecPicker(ctx, pairs, planSpecPickerPurposeRevise)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		revisionRequest := request
+		if strings.TrimSpace(revisionRequest) == "" {
+			revisionRequest, err = resolvePlanningRequest("")
+			if err != nil || revisionRequest == "" {
+				return err
+			}
+		}
+		if err := runPlanningRequest(revisionRequest, pair.SpecPath, false); err != nil {
+			return err
+		}
+		if !canUseEmbeddedFZF() {
+			return nil
+		}
+		return handleScopedPlanFlow(ctx, pair, planScopedActionRun)
+	case planRootActionRun:
+		pair, ok, err := runPlanSpecPicker(ctx, pairs, planSpecPickerPurposeRun)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		return runExistingPlan(pair.SpecPath)
+	default:
+		return nil
+	}
+}
+
+func createNewPlanFromRequest(ctx context.Context, request string) error {
+	var err error
+	request = strings.TrimSpace(request)
+	if request == "" {
+		request, err = resolvePlanningRequest("")
 		if err != nil || request == "" {
 			return err
 		}
-		if err := runPlanningRequest(request, true); err != nil {
-			return err
-		}
-		return handlePostPlanFlow()
 	}
+	pair, err := ralph.AllocateNamedSpecPair(ctx, "")
+	if err != nil {
+		return err
+	}
+	if err := runPlanningRequest(request, pair.SpecPath, true); err != nil {
+		return err
+	}
+	if !canUseEmbeddedFZF() {
+		return nil
+	}
+	return handleScopedPlanFlow(ctx, pair, planScopedActionRun)
+}
 
-	action, ok, err := runPlanActionPicker(status.State, request != "")
+func handleScopedPlanFlow(ctx context.Context, pair ralph.SpecPair, initialAction planScopedAction) error {
+	status, err := ralph.InspectPlanningState(ctx, "", pair.SpecPath)
+	if err != nil {
+		return err
+	}
+	action, ok, err := runPlanScopedActionPicker(pair, status, initialAction)
 	if err != nil {
 		return err
 	}
@@ -408,180 +634,367 @@ func handlePlan(rawArgs string) error {
 	}
 
 	switch action {
-	case planActionReview:
-		return renderCurrentPlan()
-	case planActionRevise:
-		request, err = resolvePlanningRequest(request)
+	case planScopedActionRun:
+		return runExistingPlan(pair.SpecPath)
+	case planScopedActionEdit:
+		if err := editPlanSpec(pair.SpecPath); err != nil {
+			return err
+		}
+		if !canUseEmbeddedFZF() {
+			return nil
+		}
+		return handleScopedPlanFlow(ctx, pair, planScopedActionRun)
+	case planScopedActionReview:
+		return renderCurrentPlan(pair.SpecPath)
+	case planScopedActionRevise:
+		request, err := resolvePlanningRequest("")
 		if err != nil || request == "" {
 			return err
 		}
-		if err := runPlanningRequest(request, false); err != nil {
+		if err := runPlanningRequest(request, pair.SpecPath, false); err != nil {
 			return err
 		}
-		return handlePostPlanFlow()
-	case planActionRun:
-		return runExistingPlan()
-	case planActionScratch:
-		request, err = resolvePlanningRequest(request)
+		if !canUseEmbeddedFZF() {
+			return nil
+		}
+		return handleScopedPlanFlow(ctx, pair, planScopedActionRun)
+	case planScopedActionScratch:
+		request, err := resolvePlanningRequest("")
 		if err != nil || request == "" {
 			return err
 		}
-		if err := runPlanningRequest(request, true); err != nil {
+		if err := runPlanningRequest(request, pair.SpecPath, true); err != nil {
 			return err
 		}
-		return handlePostPlanFlow()
+		if !canUseEmbeddedFZF() {
+			return nil
+		}
+		return handleScopedPlanFlow(ctx, pair, planScopedActionRun)
 	default:
 		return nil
 	}
 }
 
-type planAction string
+func resolvePlanTarget(ctx context.Context, request string) (ralph.SpecPair, bool, error) {
+	pair, found, err := ralph.ResolveSpecSelection(ctx, "", request)
+	if err != nil {
+		return ralph.SpecPair{}, false, err
+	}
+	if found {
+		return pair, true, nil
+	}
+	return ralph.SpecPair{}, false, nil
+}
 
-const (
-	planActionReview  planAction = "review"
-	planActionRevise  planAction = "revise"
-	planActionRun     planAction = "run"
-	planActionScratch planAction = "scratch"
-	planActionCancel  planAction = "cancel"
-)
-
-type postPlanAction string
-
-const (
-	postPlanActionReview postPlanAction = "review"
-	postPlanActionRun    postPlanAction = "run"
-	postPlanActionRevise postPlanAction = "revise"
-	postPlanActionClose  postPlanAction = "close"
-)
-
-var (
-	runPlanActionPicker     = defaultRunPlanActionPicker
-	runPostPlanActionPicker = defaultRunPostPlanActionPicker
-)
-
-func defaultRunPlanActionPicker(state ralph.PlanningState, hasRequest bool) (planAction, bool, error) {
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-		return "", false, fmt.Errorf("interactive picker requires a TTY")
+func defaultRunPlanRootPicker(hasSpecs bool) (planRootAction, bool, error) {
+	if !canUseEmbeddedFZFForTest() {
+		return "", false, errors.New("interactive Ralph dashboard requires a TTY")
 	}
 
-	items := []planActionItem{
-		{action: planActionReview, label: "Review current goal and plan", desc: "Render the saved goal and checklist"},
-		{action: planActionRevise, label: "Revise current plan", desc: "Adjust the current goal and plan in place"},
-		{action: planActionRun, label: "Run current plan", desc: "Start Ralph execution from the saved plan"},
-		{action: planActionScratch, label: "Start a new plan from scratch", desc: "Discard saved Ralph state and replan"},
-		{action: planActionCancel, label: "Cancel", desc: "Leave Ralph unchanged"},
+	items := []fzfPickerItem{
+		{
+			key:     string(planRootActionCreate),
+			label:   "Create new spec",
+			preview: "Create a brand new Ralph spec from a planning request.\n\nThis allocates a new spec file, runs planning mode, and then returns to a scoped Ralph menu for that new spec.",
+		},
+	}
+	if hasSpecs {
+		items = append([]fzfPickerItem{
+			{
+				key:     string(planRootActionContinue),
+				label:   "Continue existing spec",
+				preview: "Select an existing spec, inspect its full spec/progress preview, and then choose the next action from a spec-scoped Ralph menu.\n\nThis is the primary entrypoint for ongoing multi-plan work.",
+			},
+			{
+				key:     string(planRootActionEdit),
+				label:   "Edit spec",
+				preview: "Select an existing spec and open it directly in your editor.\n\nThis is the manual alternative to AI-guided revise, and returns to a scoped Ralph menu for the edited spec.",
+			},
+			{
+				key:     string(planRootActionReview),
+				label:   "Review spec",
+				preview: "Select an existing spec and render its current spec and progress files without running Ralph.",
+			},
+			{
+				key:     string(planRootActionRevise),
+				label:   "Revise spec",
+				preview: "Select an existing spec, provide a planning request, and revise that spec in place.",
+			},
+			{
+				key:     string(planRootActionRun),
+				label:   "Run spec",
+				preview: "Select an existing spec and immediately run Ralph builder mode for it.",
+			},
+		}, items...)
+	}
+	chosen, ok, err := pickPlanFZFKey(items, string(planRootActionContinue), "Ralph")
+	return planRootAction(chosen), ok, err
+}
+
+func defaultRunPlanRequestActionPicker(_ string, hasSpecs bool) (planRequestAction, bool, error) {
+	if !canUseEmbeddedFZFForTest() {
+		return "", false, errors.New("interactive Ralph request menu requires a TTY")
 	}
 
-	initialAction := planActionRun
-	switch {
-	case hasRequest:
-		initialAction = planActionRevise
-	case state == ralph.PlanningStateCompleted:
-		initialAction = planActionReview
+	items := []fzfPickerItem{
+		{
+			key:     string(planRequestActionCreate),
+			label:   "Create new spec from request",
+			preview: "Use the provided /plan request to create a brand new Ralph spec.",
+		},
+	}
+	if hasSpecs {
+		items = append(items, fzfPickerItem{
+			key:     string(planRequestActionRevise),
+			label:   "Revise existing spec with request",
+			preview: "Select one existing spec and use the provided /plan request to revise it in place.",
+		})
+	}
+	chosen, ok, err := pickPlanFZFKey(items, string(planRequestActionCreate), "Ralph request")
+	return planRequestAction(chosen), ok, err
+}
+
+func defaultRunPlanScopedActionPicker(pair ralph.SpecPair, status ralph.PlanningStatus, initialAction planScopedAction) (planScopedAction, bool, error) {
+	if !canUseEmbeddedFZFForTest() {
+		return "", false, errors.New("interactive Ralph action menu requires a TTY")
 	}
 
-	cursor := 0
-	for i, item := range items {
-		if item.action == initialAction {
-			cursor = i
-			break
+	preview := buildPlanSpecPreview(pair, status, "")
+	items := []fzfPickerItem{
+		{
+			key:     string(planScopedActionRun),
+			label:   "Run spec",
+			preview: "Run Ralph builder mode for this spec.\n\n" + preview,
+		},
+		{
+			key:     string(planScopedActionEdit),
+			label:   "Edit spec",
+			preview: "Open this spec directly in your editor for manual changes.\n\n" + preview,
+		},
+		{
+			key:     string(planScopedActionReview),
+			label:   "Review spec",
+			preview: "Render the current spec and progress without modifying anything.\n\n" + preview,
+		},
+		{
+			key:     string(planScopedActionRevise),
+			label:   "Revise spec",
+			preview: "Open a planning iteration and revise this spec in place.\n\n" + preview,
+		},
+		{
+			key:     string(planScopedActionScratch),
+			label:   "Replan from scratch",
+			preview: "Reset this spec/progress pair and rebuild the spec from a new planning request.\n\n" + preview,
+		},
+		{
+			key:     string(planScopedActionClose),
+			label:   "Close",
+			preview: "Exit the scoped Ralph menu without taking action.\n\n" + preview,
+		},
+	}
+	chosen, ok, err := pickPlanFZFKey(items, string(initialAction), buildPlanScopedMenuHeader(pair))
+	return planScopedAction(chosen), ok, err
+}
+
+func defaultRunPlanSpecPicker(ctx context.Context, pairs []ralph.SpecPair, purpose planSpecPickerPurpose) (ralph.SpecPair, bool, error) {
+	if !canUseEmbeddedFZFForTest() {
+		return ralph.SpecPair{}, false, errors.New("interactive Ralph spec selection requires a TTY")
+	}
+
+	items, keyToPair, err := buildPlanSpecPickerItems(ctx, pairs)
+	if err != nil {
+		return ralph.SpecPair{}, false, err
+	}
+	if len(items) == 0 {
+		return ralph.SpecPair{}, false, nil
+	}
+
+	chosenKey, action, err := pickWithEmbeddedFZFConfig(items, "", false, true, "", "default", shellinit.RunFZFOptions{
+		Header:        buildPlanSpecPickerHeader(purpose),
+		UseFullscreen: true,
+	})
+	if err != nil {
+		return ralph.SpecPair{}, false, err
+	}
+	if action != fzfPickerActionSelect {
+		return ralph.SpecPair{}, false, nil
+	}
+	pair, ok := keyToPair[chosenKey]
+	if !ok {
+		return ralph.SpecPair{}, false, fmt.Errorf("unknown Ralph spec selection: %s", chosenKey)
+	}
+	_ = purpose
+	return pair, true, nil
+}
+
+func pickPlanFZFKey(items []fzfPickerItem, initialKey, header string) (string, bool, error) {
+	chosenKey, action, err := pickWithEmbeddedFZFConfig(items, "", false, true, initialKey, "default", shellinit.RunFZFOptions{
+		Header:        header,
+		UseFullscreen: true,
+	})
+	if err != nil {
+		return "", false, err
+	}
+	if action != fzfPickerActionSelect {
+		return "", false, nil
+	}
+	return chosenKey, true, nil
+}
+
+func buildPlanScopedMenuHeader(pair ralph.SpecPair) string {
+	name := pair.Slug
+	if strings.TrimSpace(name) == "" {
+		name = filepath.Base(pair.SpecPath)
+	}
+	return "Ralph: " + name
+}
+
+func buildPlanSpecPickerHeader(purpose planSpecPickerPurpose) string {
+	switch purpose {
+	case planSpecPickerPurposeContinue:
+		return "Select spec to continue"
+	case planSpecPickerPurposeEdit:
+		return "Select spec to edit"
+	case planSpecPickerPurposeReview:
+		return "Select spec to review"
+	case planSpecPickerPurposeRevise:
+		return "Select spec to revise"
+	case planSpecPickerPurposeRun:
+		return "Select spec to run"
+	default:
+		return "Select Ralph spec"
+	}
+}
+
+func buildPlanSpecPickerItems(ctx context.Context, pairs []ralph.SpecPair) ([]fzfPickerItem, map[string]ralph.SpecPair, error) {
+	entries := make([]planSpecListEntry, 0, len(pairs))
+	for _, pair := range pairs {
+		status, err := ralph.InspectPlanningState(ctx, "", pair.SpecPath)
+		if err != nil {
+			return nil, nil, err
 		}
+		entries = append(entries, planSpecListEntry{
+			Pair:    pair,
+			Status:  status,
+			Label:   buildPlanSpecLabel(pair, status),
+			Preview: buildPlanSpecPreview(pair, status, readOptionalPlanFile(pair.ProgressPath)),
+		})
 	}
 
-	fl := newFilterList(
-		"RALPH ACTIONS",
-		items,
-		cursor,
-		0,
-		func(item planActionItem) string {
-			return string(item.action) + " " + item.label + " " + item.desc
-		},
-		func(item planActionItem, selected bool) string {
-			label := item.label
-			if item.desc != "" {
-				label += " — " + item.desc
-			}
-			pointer := "  "
-			if selected {
-				pointer = "→ "
-				return oneshotAccentStyle.Bold(true).Render(pointer + label)
-			}
-			if item.action == planActionCancel {
-				return oneshotMutedStyle.Render(pointer + label)
-			}
-			return oneshotNormalStyle.Render(pointer + label)
-		},
-	)
+	sort.Slice(entries, func(i, j int) bool {
+		iCompleted := entries[i].Status.State == ralph.PlanningStateCompleted
+		jCompleted := entries[j].Status.State == ralph.PlanningStateCompleted
+		if iCompleted != jCompleted {
+			return !iCompleted
+		}
+		return entries[i].Label < entries[j].Label
+	})
 
-	final, err := tea.NewProgram(fl, tea.WithAltScreen()).Run()
+	items := make([]fzfPickerItem, 0, len(entries))
+	keyToPair := make(map[string]ralph.SpecPair, len(entries))
+	for _, entry := range entries {
+		key := entry.Pair.SpecPath
+		items = append(items, fzfPickerItem{
+			key:     key,
+			label:   entry.Label,
+			preview: entry.Preview,
+		})
+		keyToPair[key] = entry.Pair
+	}
+	return items, keyToPair, nil
+}
+
+func buildPlanSpecLabel(pair ralph.SpecPair, status ralph.PlanningStatus) string {
+	stateLabel := "active"
+	if status.State == ralph.PlanningStateCompleted {
+		stateLabel = "completed"
+	}
+	name := pair.Slug
+	if strings.TrimSpace(name) == "" {
+		name = filepath.Base(pair.SpecPath)
+	}
+	return fmt.Sprintf("[%s] %s — %s", stateLabel, name, relativePlanPath(status.RepoRoot, pair.SpecPath))
+}
+
+func buildPlanSpecPreview(pair ralph.SpecPair, status ralph.PlanningStatus, progress string) string {
+	if progress == "" {
+		progress = readOptionalPlanFile(pair.ProgressPath)
+	}
+	repoRoot := status.RepoRoot
+	if strings.TrimSpace(repoRoot) == "" {
+		repoRoot, _ = os.Getwd()
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Status: %s\nSpec: %s\nProgress: %s\n\n", status.State, relativePlanPath(repoRoot, pair.SpecPath), relativePlanPath(repoRoot, pair.ProgressPath))
+	b.WriteString("=== spec ===\n")
+	spec := strings.TrimRight(readOptionalPlanFile(pair.SpecPath), "\n")
+	if spec == "" {
+		b.WriteString("(empty)\n")
+	} else {
+		b.WriteString(spec)
+		b.WriteString("\n")
+	}
+	b.WriteString("\n=== progress ===\n")
+	progress = strings.TrimRight(progress, "\n")
+	if progress == "" {
+		b.WriteString("(empty)\n")
+	} else {
+		b.WriteString(progress)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func readOptionalPlanFile(path string) string {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", false, err
+		return ""
 	}
-	result := final.(filterList[planActionItem])
-	if result.quitting || result.chosen == nil || result.chosen.action == planActionCancel {
-		return "", false, nil
-	}
-	return result.chosen.action, true, nil
+	return string(data)
 }
 
-func defaultRunPostPlanActionPicker() (postPlanAction, bool, error) {
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-		return "", false, fmt.Errorf("interactive picker requires a TTY")
-	}
-
-	items := []postPlanActionItem{
-		{action: postPlanActionReview, label: "Review current goal and plan", desc: "Render the saved goal and checklist"},
-		{action: postPlanActionRun, label: "Run now", desc: "Start the freshly reviewed plan"},
-		{action: postPlanActionRevise, label: "Revise again", desc: "Open another planning iteration"},
-		{action: postPlanActionClose, label: "Close", desc: "Leave the current plan as is"},
-	}
-
-	fl := newFilterList(
-		"NEXT STEP",
-		items,
-		0,
-		0,
-		func(item postPlanActionItem) string {
-			return string(item.action) + " " + item.label + " " + item.desc
-		},
-		func(item postPlanActionItem, selected bool) string {
-			label := item.label
-			if item.desc != "" {
-				label += " — " + item.desc
-			}
-			pointer := "  "
-			if selected {
-				pointer = "→ "
-				return oneshotAccentStyle.Bold(true).Render(pointer + label)
-			}
-			if item.action == postPlanActionClose {
-				return oneshotMutedStyle.Render(pointer + label)
-			}
-			return oneshotNormalStyle.Render(pointer + label)
-		},
-	)
-
-	final, err := tea.NewProgram(fl, tea.WithAltScreen()).Run()
+func expandPlanRequest(request string) (string, error) {
+	text, files, err := input.ParseAndLoadResources(request)
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
-	result := final.(filterList[postPlanActionItem])
-	if result.quitting || result.chosen == nil || result.chosen.action == postPlanActionClose {
-		return "", false, nil
+	if len(files) == 0 {
+		return strings.TrimSpace(text), nil
 	}
-	return result.chosen.action, true, nil
+
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(text))
+	b.WriteString("\n\nAttached file contents:\n")
+	for _, f := range files {
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "@%s", f.Path)
+		if strings.HasPrefix(f.MediaType, "image/") {
+			b.WriteString(" (image attachment; content not inlined)\n")
+			continue
+		}
+		b.WriteString("\n```text\n")
+		b.Write(bytes.TrimRight(f.Data, "\n"))
+		b.WriteString("\n```\n")
+	}
+	return strings.TrimSpace(b.String()), nil
 }
 
-type planActionItem struct {
-	action planAction
-	label  string
-	desc   string
-}
+func defaultEditPlanSpec(path string) error {
+	editor, err := resolveEditorCommand(os.Getenv, exec.LookPath)
+	if err != nil {
+		return err
+	}
 
-type postPlanActionItem struct {
-	action postPlanAction
-	label  string
-	desc   string
+	args := append(append([]string{}, editor.args...), path)
+	cmd := exec.Command(editor.path, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run editor command: %w", err)
+	}
+	return nil
 }
 
 func resolvePlanningRequest(request string) (string, error) {
@@ -601,7 +1014,7 @@ func resolvePlanningRequest(request string) (string, error) {
 	return strings.TrimSpace(prompt), nil
 }
 
-func runPlanningRequest(request string, reset bool) error {
+func runPlanningRequest(request, specPath string, reset bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -609,6 +1022,7 @@ func runPlanningRequest(request string, reset bool) error {
 		PlanningRequest: request,
 		Mode:            ralph.ModePlan,
 		ResetPlan:       reset,
+		SpecPath:        specPath,
 	})
 	if errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "Ralph interrupted")
@@ -617,12 +1031,13 @@ func runPlanningRequest(request string, reset bool) error {
 	return err
 }
 
-func runExistingPlan() error {
+func runExistingPlan(specPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
 	err := runRalph(ctx, ralph.Options{
-		Mode: ralph.ModeAuto,
+		Mode:     ralph.ModeAuto,
+		SpecPath: specPath,
 	})
 	if errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "Ralph interrupted")
@@ -631,52 +1046,39 @@ func runExistingPlan() error {
 	return err
 }
 
-func renderCurrentPlan() error {
-	snapshot, err := ralph.ReadSnapshot(context.Background(), "")
+func renderCurrentPlan(specPath string) error {
+	snapshot, err := ralph.ReadSnapshot(context.Background(), "", specPath)
 	if err != nil {
 		return err
 	}
 
 	var doc strings.Builder
-	doc.WriteString("# Goal\n\n")
-	doc.WriteString(snapshot.Goal)
-	doc.WriteString("\n\n# Plan\n\n")
-	doc.WriteString(snapshot.Plan)
-	doc.WriteString("\n")
+	doc.WriteString("# Ralph Spec\n\n")
+	doc.WriteString("Path: `")
+	doc.WriteString(relativePlanPath(snapshot.RepoRoot, snapshot.SpecPath))
+	doc.WriteString("`\n\n")
+	doc.WriteString(strings.TrimSpace(snapshot.Spec))
+	doc.WriteString("\n\n# Ralph Progress\n\n")
+	doc.WriteString("Path: `")
+	doc.WriteString(relativePlanPath(snapshot.RepoRoot, snapshot.ProgressPath))
+	doc.WriteString("`\n\n")
+	if strings.TrimSpace(snapshot.Progress) == "" {
+		doc.WriteString("_No progress yet._\n")
+	} else {
+		doc.WriteString("```text\n")
+		doc.WriteString(strings.TrimRight(snapshot.Progress, "\n"))
+		doc.WriteString("\n```\n")
+	}
 
 	renderMarkdownDocument(os.Stdout, doc.String())
 	return nil
 }
 
-func handlePostPlanFlow() error {
-	for {
-		if err := renderCurrentPlan(); err != nil {
-			return err
-		}
-		action, ok, err := runPostPlanActionPicker()
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
-		switch action {
-		case postPlanActionReview:
-			return renderCurrentPlan()
-		case postPlanActionRun:
-			return runExistingPlan()
-		case postPlanActionRevise:
-			request, err := resolvePlanningRequest("")
-			if err != nil || request == "" {
-				return err
-			}
-			if err := runPlanningRequest(request, false); err != nil {
-				return err
-			}
-		default:
-			return nil
-		}
+func relativePlanPath(repoRoot, path string) string {
+	if rel, err := filepath.Rel(repoRoot, path); err == nil {
+		return rel
 	}
+	return path
 }
 
 func handleSessions(opts Options) error {
@@ -1141,24 +1543,6 @@ func runPromptWithSession(opts Options, sess *session.Session, promptText string
 		return errors.New("no model configured; use /add-model to set up")
 	}
 
-	msgs, err := sess.ListMessages(context.Background())
-	if err != nil {
-		return err
-	}
-
-	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
-	r := newRendererWithOptions(os.Stderr, os.Stdout, sess.Tools(), isTTY, rendererOptions{
-		persistentSpinner: true,
-		modelLabel:        statusModelLabel(opts),
-		contextWindow:     opts.RuntimeModel.EffectiveContextWindow(),
-		initialMessages:   msgs,
-	})
-	if r.contextWindow <= 0 {
-		r.contextWindow = opts.ModelCfg.ContextWindow
-	}
-	r.startPersistentSpinner()
-	defer r.stopPersistentSpinner()
-
 	// Parse file attachments from the prompt.
 	text, files, err := input.ParseAndLoadResources(promptText)
 	if err != nil {
@@ -1178,24 +1562,134 @@ func runPromptWithSession(opts Options, sess *session.Session, promptText string
 		maxTokens = libagent.DefaultMaxTokens
 	}
 
-	sess.SetEventCallback(func(event libagent.AgentEvent) {
-		r.handleEvent(event)
-	})
-
-	runErr := sess.Agent().Run(context.Background(), agent.SessionAgentCall{
+	finalText, runErr := runSessionAgentCallWithRenderer(context.Background(), opts, sess, agent.SessionAgentCall{
 		SessionID:       sess.ID(),
 		Prompt:          text,
 		Attachments:     attachments,
 		MaxOutputTokens: maxTokens,
-	})
+	}, os.Stdout, os.Stderr)
 	if capturePath := strings.TrimSpace(os.Getenv(assistantCaptureEnv)); capturePath != "" {
-		_ = os.WriteFile(capturePath, []byte(r.FinalText()), 0o644)
+		_ = os.WriteFile(capturePath, []byte(finalText), 0o644)
 	}
 	// Always sync the binding even when the run is interrupted (e.g. Ctrl+C).
 	if !opts.Ephemeral {
 		_ = sess.EnsurePersisted()
 	}
 	return runErr
+}
+
+func runSessionAgentCallWithRenderer(ctx context.Context, opts Options, sess *session.Session, call agent.SessionAgentCall, stdout, stderr io.Writer) (string, error) {
+	msgs, err := sess.ListMessages(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
+	r := newRendererWithOptions(stderr, stdout, sess.Tools(), isTTY, rendererOptions{
+		persistentSpinner: true,
+		modelLabel:        statusModelLabel(opts),
+		contextWindow:     opts.RuntimeModel.EffectiveContextWindow(),
+		initialMessages:   msgs,
+	})
+	if r.contextWindow <= 0 {
+		r.contextWindow = opts.ModelCfg.ContextWindow
+	}
+	popRenderer := pushActiveRenderer(r)
+	defer popRenderer()
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	sess.SetEventCallback(func(event libagent.AgentEvent) {
+		r.handleEvent(event)
+	})
+
+	if call.SessionID == "" {
+		call.SessionID = sess.ID()
+	}
+	runErr := sess.Agent().Run(ctx, call)
+	return r.FinalText(), runErr
+}
+
+func runRalphEphemeralPrompt(ctx context.Context, repoRoot string, opts ralph.EphemeralPromptOptions, stdout, stderr io.Writer) (string, string, error) {
+	runtimeModel, err := loadDefaultRuntimeModelFromStore(ctx)
+	if err != nil {
+		return "", "", err
+	}
+
+	ralphEphemeralRunMu.Lock()
+	defer ralphEphemeralRunMu.Unlock()
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		return "", "", err
+	}
+	defer func() { _ = os.Chdir(origWD) }()
+
+	sess, err := session.NewEphemeral(runtimeModel)
+	if err != nil {
+		return "", "", err
+	}
+	if err := sess.StartEphemeral(ctx); err != nil {
+		return "", "", err
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	outWriter := io.Writer(&stdoutBuf)
+	errWriter := io.Writer(&stderrBuf)
+	if stdout != nil {
+		outWriter = io.MultiWriter(stdout, &stdoutBuf)
+	}
+	if stderr != nil {
+		errWriter = io.MultiWriter(stderr, &stderrBuf)
+	}
+
+	_, runErr := runSessionAgentCallWithRenderer(ctx, Options{
+		Ephemeral:    true,
+		RuntimeModel: runtimeModel,
+		ModelCfg:     runtimeModel.ModelCfg,
+	}, sess, agent.SessionAgentCall{
+		SessionID:      sess.ID(),
+		Prompt:         opts.Prompt,
+		OnCompleteHook: opts.OnCompleteHook,
+		ExtraTools:     append([]libagent.Tool(nil), opts.ExtraTools...),
+	}, outWriter, errWriter)
+	return stdoutBuf.String(), stderrBuf.String(), runErr
+}
+
+func loadDefaultRuntimeModelFromStore(ctx context.Context) (libagent.RuntimeModel, error) {
+	store, err := modelconfig.LoadModelStore()
+	if err != nil {
+		return libagent.RuntimeModel{}, err
+	}
+	if store == nil {
+		return libagent.RuntimeModel{}, errors.New("no model store available")
+	}
+	cfg, ok := store.GetDefault()
+	if !ok {
+		return libagent.RuntimeModel{}, errors.New("no default model configured")
+	}
+	cfg = cfg.Normalize()
+	apiKey := cfg.APIKey
+	if after, ok := strings.CutPrefix(apiKey, "$"); ok {
+		apiKey = os.Getenv(after)
+	}
+	cat := libagent.DefaultCatalog()
+	model, err := cat.NewModel(ctx, cfg.Provider, cfg.Model, apiKey)
+	if err != nil {
+		return libagent.RuntimeModel{}, fmt.Errorf("build default runtime model %s/%s: %w", cfg.Provider, cfg.Model, err)
+	}
+	info, _, _ := cat.FindModel(cfg.Provider, cfg.Model)
+	providerType, catalogOpts := cat.FindModelOptions(cfg.Provider, cfg.Model)
+	return libagent.RuntimeModel{
+		Model:                  model,
+		ModelInfo:              info,
+		ModelCfg:               cfg,
+		ProviderType:           providerType,
+		CatalogProviderOptions: catalogOpts,
+	}, nil
 }
 
 // stderrWriter is a helper to write status messages to stderr.
