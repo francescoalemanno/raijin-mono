@@ -29,6 +29,7 @@ const (
 	TokenCommands            // / prefix - builtin commands and templates
 	TokenSkills              // + prefix - skills
 	TokenUniversal           // no prefix - everything combined
+	TokenFilePath            // ./ or dir/ prefix - cwd-relative file path completion
 )
 
 // Token represents the token being completed.
@@ -119,10 +120,16 @@ func Parse(line string, pos int) Token {
 			token.Query = afterColon
 		}
 	default:
-		// Bare tokens without prefix autocomplete among all candidates
-		token.Type = TokenUniversal
-		token.Query = raw
-		token.HasPrefix = false
+		if looksLikeFilePath(raw) {
+			token.Type = TokenFilePath
+			token.Query = raw
+			token.HasPrefix = false
+		} else {
+			// Bare tokens without prefix autocomplete among all candidates
+			token.Type = TokenUniversal
+			token.Query = raw
+			token.HasPrefix = false
+		}
 	}
 
 	return token
@@ -168,6 +175,8 @@ func GetCandidates(token Token) []Candidate {
 		return skillCandidates()
 	case TokenUniversal:
 		return universalCandidates()
+	case TokenFilePath:
+		return filePathCandidates(token.Query)
 	default:
 		return nil
 	}
@@ -337,6 +346,59 @@ func tokenBounds(line string, pos int) (start, end int) {
 
 func isSpace(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
+}
+
+// looksLikeFilePath returns true if the token looks like a relative file path
+// (starts with "./" or "../", or contains a "/" suggesting directory traversal).
+func looksLikeFilePath(raw string) bool {
+	return strings.HasPrefix(raw, "./") || strings.HasPrefix(raw, "../")
+}
+
+// filePathCandidates returns candidates for cwd-relative file path completion.
+// The token query is the raw path typed so far (e.g., "./", "./src/", "../").
+func filePathCandidates(query string) []Candidate {
+	// Determine the directory to list and the prefix typed so far.
+	dir := query
+	if !strings.HasSuffix(dir, "/") {
+		dir = filepath.Dir(dir)
+		if dir == "." && !strings.HasPrefix(query, "./") {
+			dir = "./"
+		}
+		if !strings.HasSuffix(dir, "/") {
+			dir += "/"
+		}
+	}
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil
+	}
+
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return nil
+	}
+
+	candidates := make([]Candidate, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		if e.IsDir() {
+			if fsutil.ShouldSkipMentionDir(name) {
+				continue
+			}
+			name += "/"
+		}
+		value := dir + name
+		candidates = append(candidates, Candidate{
+			Value:     value,
+			Display:   value,
+			QueryText: value,
+		})
+	}
+	return candidates
 }
 
 func fileCandidates() []Candidate {
@@ -638,6 +700,9 @@ func fzfArgs(token Token, picker *FZFPicker, cfg fzfPreviewConfig) []string {
 		args = append(args, "--prompt=/ ")
 	case TokenSkills:
 		args = append(args, "--prompt=+ ")
+	case TokenFilePath:
+		args = append(args, "--scheme=path")
+		args = append(args, "--prompt=./ ")
 	case TokenUniversal:
 		args = append(args, "--prompt=> ")
 	default:

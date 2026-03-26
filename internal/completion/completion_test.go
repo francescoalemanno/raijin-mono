@@ -483,6 +483,70 @@ func TestCompletionTokenBounds(t *testing.T) {
 	}
 }
 
+func TestParseFilePath(t *testing.T) {
+	tests := []struct {
+		name      string
+		line      string
+		pos       int
+		wantType  TokenType
+		wantQuery string
+	}{
+		{
+			name:      "dot slash",
+			line:      "./",
+			pos:       2,
+			wantType:  TokenFilePath,
+			wantQuery: "./",
+		},
+		{
+			name:      "dot slash partial",
+			line:      "./src",
+			pos:       5,
+			wantType:  TokenFilePath,
+			wantQuery: "./src",
+		},
+		{
+			name:      "dot dot slash",
+			line:      "../",
+			pos:       3,
+			wantType:  TokenFilePath,
+			wantQuery: "../",
+		},
+		{
+			name:      "dot slash in context",
+			line:      "read ./foo",
+			pos:       10,
+			wantType:  TokenFilePath,
+			wantQuery: "./foo",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			token := Parse(tc.line, tc.pos)
+			if token.Type != tc.wantType {
+				t.Errorf("Type = %v, want %v", token.Type, tc.wantType)
+			}
+			if token.Query != tc.wantQuery {
+				t.Errorf("Query = %q, want %q", token.Query, tc.wantQuery)
+			}
+		})
+	}
+}
+
+func TestFilePathCandidates(t *testing.T) {
+	// ./  should produce candidates from cwd — at least some entries
+	candidates := filePathCandidates("./")
+	if len(candidates) == 0 {
+		t.Fatal("expected non-empty file path candidates for ./")
+	}
+	for _, c := range candidates {
+		if !strings.HasPrefix(c.Value, "./") {
+			t.Errorf("candidate %q should start with ./", c.Value)
+		}
+	}
+}
+
 func TestPrefixNotStripped(t *testing.T) {
 	// Ensure that the prefix is preserved in the returned value
 	candidates := commandCandidates()
