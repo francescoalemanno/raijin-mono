@@ -32,6 +32,7 @@ type Agent struct {
 	sessionID        string
 	providerOptions  fantasy.ProviderOptions
 	maxOutputTokens  int64
+	onCompleteHook   OnCompleteHook
 
 	// event subscribers (subMu protects subscribers slice)
 	subMu       sync.RWMutex
@@ -69,6 +70,10 @@ type AgentOptions struct {
 	// MaxOutputTokens caps each LLM response. When nil or 0 no limit is sent.
 	// Set to 0 for providers like Codex that reject this field.
 	MaxOutputTokens int64
+
+	// OnCompleteHook optionally validates final assistant responses and may
+	// inject a user follow-up to continue the same run.
+	OnCompleteHook OnCompleteHook
 }
 
 // NewAgent creates a new Agent with the given options.
@@ -87,6 +92,7 @@ func NewAgent(opts AgentOptions) *Agent {
 		sessionID:        opts.SessionID,
 		providerOptions:  opts.ProviderOptions,
 		maxOutputTokens:  opts.MaxOutputTokens,
+		onCompleteHook:   opts.OnCompleteHook,
 		pendingCalls:     make(map[string]struct{}),
 	}
 	return a
@@ -454,6 +460,7 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message) error {
 		TransformContext: transformContext,
 		ProviderOptions:  a.providerOptions,
 		MaxOutputTokens:  maxOut,
+		OnCompleteHook:   a.onCompleteHook,
 	}
 
 	// Event channel: we read events from it and update state + emit to subscribers.

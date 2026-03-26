@@ -102,9 +102,8 @@ func runLoop(
 	firstTurn bool,
 ) ([]Message, error) {
 	newMessages := make([]Message, 0, 8)
-	hasMoreToolCalls := true
 
-	for hasMoreToolCalls {
+	for {
 		if !firstTurn {
 			sendEvent(eventCh, AgentEvent{Type: AgentEventTypeTurnStart})
 		} else {
@@ -156,10 +155,10 @@ func runLoop(
 			}
 		}
 
-		hasMoreToolCalls = len(plannedCalls) > 0
+		continueLoop := len(plannedCalls) > 0
 
 		var toolResults []*ToolResultMessage
-		if hasMoreToolCalls {
+		if continueLoop {
 			produced, results, err := executeToolCalls(ctx, currentCtx.Tools, plannedCalls, eventCh)
 			if err != nil {
 				return newMessages, err
@@ -171,6 +170,29 @@ func runLoop(
 			}
 		}
 
+		if !continueLoop && turnErr == nil && cfg.OnCompleteHook != nil {
+			inject, ok, err := cfg.OnCompleteHook(ctx, assistantMsg, append([]Message{}, currentCtx.Messages...))
+			if err != nil {
+				return newMessages, err
+			}
+			if !ok {
+				inject = strings.TrimSpace(inject)
+				if inject == "" {
+					return newMessages, fmt.Errorf("onCompleteHook requested continuation without an injected user message")
+				}
+				userMsg := &UserMessage{
+					Role:      "user",
+					Content:   inject,
+					Timestamp: time.Now(),
+				}
+				currentCtx.Messages = append(currentCtx.Messages, userMsg)
+				newMessages = append(newMessages, userMsg)
+				sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageStart, Message: userMsg})
+				sendEvent(eventCh, AgentEvent{Type: AgentEventTypeMessageEnd, Message: userMsg})
+				continueLoop = true
+			}
+		}
+
 		sendEvent(eventCh, AgentEvent{
 			Type:        AgentEventTypeTurnEnd,
 			TurnMessage: assistantMsg,
@@ -178,6 +200,9 @@ func runLoop(
 		})
 		if turnErr != nil {
 			return newMessages, turnErr
+		}
+		if !continueLoop {
+			break
 		}
 	}
 

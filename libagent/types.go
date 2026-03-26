@@ -292,6 +292,11 @@ type ConvertToLLMFn func(ctx context.Context, messages []Message) ([]fantasy.Mes
 // Use it for context-window pruning or injecting external context.
 type TransformContextFn func(ctx context.Context, messages []Message) ([]Message, error)
 
+// OnCompleteHook runs after a final assistant response is produced for a turn
+// with no pending tool calls. It can accept the response or inject a user
+// follow-up and request another turn in the same run.
+type OnCompleteHook func(ctx context.Context, final *AssistantMessage, messages []Message) (injectUserMessage string, ok bool, err error)
+
 // AgentLoopConfig is the configuration for agentLoop / agentLoopContinue.
 type AgentLoopConfig struct {
 	Model fantasy.LanguageModel
@@ -312,6 +317,10 @@ type AgentLoopConfig struct {
 
 	// MaxOutputTokens caps each LLM response. When nil no limit is sent.
 	MaxOutputTokens *int64
+
+	// OnCompleteHook optionally validates a final assistant response before the
+	// loop returns. Returning ok=false injects a user follow-up and continues.
+	OnCompleteHook OnCompleteHook
 }
 
 // AgentState holds the full runtime state of an Agent.

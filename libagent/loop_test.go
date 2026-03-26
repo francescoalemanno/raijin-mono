@@ -289,3 +289,133 @@ func TestAgentLoop_RetriesTextWithoutFinish(t *testing.T) {
 	}
 	assert.Equal(t, 1, retryEvents)
 }
+
+type sequentialTextModel struct {
+	responses []string
+	calls     int
+}
+
+func (m *sequentialTextModel) Stream(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
+	idx := m.calls
+	m.calls++
+	if idx >= len(m.responses) {
+		idx = len(m.responses) - 1
+	}
+	text := m.responses[idx]
+	return func(yield func(fantasy.StreamPart) bool) {
+		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "0"})
+		if text != "" {
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "0", Delta: text})
+		}
+		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "0"})
+		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+	}, nil
+}
+
+func (m *sequentialTextModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *sequentialTextModel) GenerateObject(context.Context, fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *sequentialTextModel) StreamObject(context.Context, fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *sequentialTextModel) Provider() string { return "mock" }
+func (m *sequentialTextModel) Model() string    { return "mock-model" }
+
+func TestAgentLoop_OnCompleteHookAcceptsImmediately(t *testing.T) {
+	model := &sequentialTextModel{responses: []string{"hello"}}
+	eventCh := make(chan AgentEvent, 64)
+	hookCalls := 0
+	cfg := AgentLoopConfig{
+		Model: model,
+		OnCompleteHook: func(_ context.Context, final *AssistantMessage, messages []Message) (string, bool, error) {
+			hookCalls++
+			if AssistantText(final) != "hello" {
+				t.Fatalf("final text = %q, want hello", AssistantText(final))
+			}
+			if len(messages) != 2 {
+				t.Fatalf("messages len = %d, want 2", len(messages))
+			}
+			return "", true, nil
+		},
+	}
+	agentCtx := &AgentContext{}
+	prompts := []Message{&UserMessage{Role: "user", Content: "hi", Timestamp: time.Now()}}
+
+	msgs, err := AgentLoop(context.Background(), prompts, agentCtx, cfg, eventCh)
+	close(eventCh)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, 1, hookCalls)
+	assert.Equal(t, 1, model.calls)
+}
+
+func TestAgentLoop_OnCompleteHookInjectsUserTurnAndContinues(t *testing.T) {
+	model := &sequentialTextModel{responses: []string{"draft", "final"}}
+	eventCh := make(chan AgentEvent, 64)
+	hookCalls := 0
+	cfg := AgentLoopConfig{
+		Model: model,
+		OnCompleteHook: func(_ context.Context, final *AssistantMessage, messages []Message) (string, bool, error) {
+			hookCalls++
+			switch hookCalls {
+			case 1:
+				if AssistantText(final) != "draft" {
+					t.Fatalf("final text = %q, want draft", AssistantText(final))
+				}
+				if len(messages) != 2 {
+					t.Fatalf("messages len on first hook = %d, want 2", len(messages))
+				}
+				return "rewrite progress and answer again", false, nil
+			case 2:
+				if AssistantText(final) != "final" {
+					t.Fatalf("final text = %q, want final", AssistantText(final))
+				}
+				if len(messages) != 4 {
+					t.Fatalf("messages len on second hook = %d, want 4", len(messages))
+				}
+				return "", true, nil
+			default:
+				t.Fatalf("unexpected hook call %d", hookCalls)
+				return "", false, nil
+			}
+		},
+	}
+	agentCtx := &AgentContext{}
+	prompts := []Message{&UserMessage{Role: "user", Content: "hi", Timestamp: time.Now()}}
+
+	msgs, err := AgentLoop(context.Background(), prompts, agentCtx, cfg, eventCh)
+	close(eventCh)
+	require.NoError(t, err)
+	require.Len(t, msgs, 4)
+	assert.Equal(t, "assistant", msgs[1].GetRole())
+	assert.Equal(t, "user", msgs[2].GetRole())
+	assert.Equal(t, "assistant", msgs[3].GetRole())
+	assert.Equal(t, 2, hookCalls)
+	assert.Equal(t, 2, model.calls)
+}
+
+func TestAgentLoop_OnCompleteHookErrorFailsRun(t *testing.T) {
+	model := &sequentialTextModel{responses: []string{"hello"}}
+	eventCh := make(chan AgentEvent, 64)
+	wantErr := errors.New("hook failed")
+	cfg := AgentLoopConfig{
+		Model: model,
+		OnCompleteHook: func(context.Context, *AssistantMessage, []Message) (string, bool, error) {
+			return "", false, wantErr
+		},
+	}
+	agentCtx := &AgentContext{}
+	prompts := []Message{&UserMessage{Role: "user", Content: "hi", Timestamp: time.Now()}}
+
+	msgs, err := AgentLoop(context.Background(), prompts, agentCtx, cfg, eventCh)
+	close(eventCh)
+	require.ErrorIs(t, err, wantErr)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, 1, model.calls)
+}
