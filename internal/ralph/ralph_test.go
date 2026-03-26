@@ -213,7 +213,7 @@ func TestClearPromiseLinesRemovesNonAlphabeticPrefixPromise(t *testing.T) {
 	}
 }
 
-func TestRunPlanCreatesNamedSpecWithoutProgress(t *testing.T) {
+func TestRunPlanCreatesNamedSpecAndInitializesProgress(t *testing.T) {
 	repo := t.TempDir()
 
 	origPrompt := runEphemeralPrompt
@@ -249,8 +249,11 @@ func TestRunPlanCreatesNamedSpecWithoutProgress(t *testing.T) {
 		if !strings.Contains(prompt, ".raijin/ralph/progress-otter-thread-sage.txt") {
 			t.Fatalf("planning prompt missing progress path: %q", prompt)
 		}
-		if !strings.Contains(prompt, "must not create or modify .raijin/ralph/progress-otter-thread-sage.txt") {
-			t.Fatalf("planning prompt should forbid progress writes: %q", prompt)
+		if !strings.Contains(prompt, "Initialize or revise .raijin/ralph/progress-otter-thread-sage.txt") {
+			t.Fatalf("planning prompt should require progress initialization: %q", prompt)
+		}
+		if !strings.Contains(prompt, "must never leave PROMISE: DONE or PROMISE: CONTINUE") {
+			t.Fatalf("planning prompt should forbid promise lines in progress: %q", prompt)
 		}
 		if !strings.Contains(prompt, "ask clarifying questions instead of guessing") {
 			t.Fatalf("planning prompt should require clarifications: %q", prompt)
@@ -265,6 +268,7 @@ func TestRunPlanCreatesNamedSpecWithoutProgress(t *testing.T) {
 			t.Fatalf("planning prompt should not reference legacy plan.md: %q", prompt)
 		}
 		writeSpecFile(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), testSpecContent("Design the loop"))
+		writeProgressFile(t, filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt"), "Initial task breakdown\n- Implement the loop scaffold\n")
 		inject, ok, err := opts.OnCompleteHook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
 		if err != nil {
 			t.Fatalf("planning onCompleteHook: %v", err)
@@ -286,18 +290,21 @@ func TestRunPlanCreatesNamedSpecWithoutProgress(t *testing.T) {
 	if !fileExists(filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md")) {
 		t.Fatalf("expected spec file to be created")
 	}
-	if fileExists(filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")) {
-		t.Fatalf("progress file should not be created during planning")
+	if !fileExists(filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")) {
+		t.Fatalf("progress file should be initialized during planning")
 	}
 }
 
-func TestPlanningSpecChangedHookReinjectsWhenSpecDidNotChange(t *testing.T) {
+func TestPlanningArtifactsChangedHookReinjectsWhenSpecOrProgressDidNotChange(t *testing.T) {
 	repo := t.TempDir()
 	specPath := filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md")
+	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
 	initialSpec := testSpecContent("Initial spec")
 	writeSpecFile(t, specPath, initialSpec)
+	initialProgress := "Initial tasks\n- First step\n"
+	writeProgressFile(t, progressPath, initialProgress)
 
-	hook := planningSpecChangedHook(repo, specPath, readOptionalFile(specPath))
+	hook := planningArtifactsChangedHook(repo, specPath, progressPath, readOptionalFile(specPath), readOptionalFile(progressPath))
 	inject, ok, err := hook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
 	if err != nil {
 		t.Fatalf("hook unchanged: %v", err)
@@ -315,10 +322,34 @@ func TestPlanningSpecChangedHookReinjectsWhenSpecDidNotChange(t *testing.T) {
 	writeSpecFile(t, specPath, testSpecContent("Updated spec"))
 	inject, ok, err = hook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
 	if err != nil {
+		t.Fatalf("hook unchanged progress: %v", err)
+	}
+	if ok {
+		t.Fatalf("hook unchanged progress ok = true, want false")
+	}
+	if !strings.Contains(inject, ".raijin/ralph/progress-otter-thread-sage.txt") {
+		t.Fatalf("inject = %q, want progress path", inject)
+	}
+
+	writeProgressFile(t, progressPath, "Initialized builder tasks\n- First implementation slice\n")
+	inject, ok, err = hook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
+	if err != nil {
 		t.Fatalf("hook changed: %v", err)
 	}
 	if !ok || inject != "" {
 		t.Fatalf("hook changed = %q, %v, want accept", inject, ok)
+	}
+
+	writeProgressFile(t, progressPath, "Initialized builder tasks\nPROMISE: CONTINUE\n")
+	inject, ok, err = hook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
+	if err != nil {
+		t.Fatalf("hook promise present: %v", err)
+	}
+	if ok {
+		t.Fatalf("hook promise present ok = true, want false")
+	}
+	if !strings.Contains(inject, "must not leave a promise line") {
+		t.Fatalf("inject = %q, want promise removal reminder", inject)
 	}
 }
 
@@ -423,6 +454,7 @@ func TestRunPlanKeepsPartialDraftWhenClarificationIsCanceled(t *testing.T) {
 			t.Fatalf("expected planning question tool, got %#v", opts.ExtraTools)
 		}
 		writeSpecFile(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), "# Goal\n\nPartial draft\n\n# User Specification\n\nKnown facts only.\n\n# Plan\n\n1. Initial draft.\n")
+		writeProgressFile(t, filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt"), "Partial task breakdown\n- Clarify deployment target before implementation\n")
 		_, err := opts.ExtraTools[0].Run(context.Background(), libagent.ToolCall{
 			Name:  "question",
 			Input: `{"question":"Which deployment target matters most?","options":[{"label":"CLI","description":"Interactive users first."}]}`,
@@ -445,8 +477,12 @@ func TestRunPlanKeepsPartialDraftWhenClarificationIsCanceled(t *testing.T) {
 	if !strings.Contains(readOptionalFile(specPath), "Partial draft") {
 		t.Fatalf("partial spec draft was not preserved")
 	}
-	if fileExists(filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")) {
-		t.Fatalf("progress file should not be created during interrupted planning")
+	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
+	if !fileExists(progressPath) {
+		t.Fatalf("expected partial progress draft to remain on disk")
+	}
+	if !strings.Contains(readOptionalFile(progressPath), "Partial task breakdown") {
+		t.Fatalf("partial progress draft was not preserved")
 	}
 }
 

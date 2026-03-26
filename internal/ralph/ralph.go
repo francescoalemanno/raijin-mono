@@ -392,10 +392,11 @@ func runPlanning(ctx context.Context, repoRoot string, pair SpecPair, planningRe
 		return err
 	}
 	initialSpec := readOptionalFile(pair.SpecPath)
+	initialProgress := readOptionalFile(pair.ProgressPath)
 
 	result, runErr := runEphemeralPrompt(ctx, repoRoot, EphemeralPromptOptions{
 		Prompt:         buildPlanningPrompt(repoRoot, pair, planningRequest),
-		OnCompleteHook: planningSpecChangedHook(repoRoot, pair.SpecPath, initialSpec),
+		OnCompleteHook: planningArtifactsChangedHook(repoRoot, pair.SpecPath, pair.ProgressPath, initialSpec, initialProgress),
 		ExtraTools:     []libagent.Tool{questionTool},
 	}, os.Stdout, os.Stderr)
 	if runErr != nil {
@@ -408,6 +409,10 @@ func runPlanning(ctx context.Context, repoRoot string, pair SpecPair, planningRe
 	spec := strings.TrimSpace(readOptionalFile(pair.SpecPath))
 	if spec == "" {
 		return fmt.Errorf("ralph planning did not create %s", relPath(repoRoot, pair.SpecPath))
+	}
+	progress := strings.TrimSpace(readOptionalFile(pair.ProgressPath))
+	if progress == "" {
+		return fmt.Errorf("ralph planning did not initialize %s", relPath(repoRoot, pair.ProgressPath))
 	}
 	_ = result
 	return nil
@@ -500,7 +505,7 @@ func buildPlanningPrompt(repoRoot string, pair SpecPair, planningRequest string)
 	return fmt.Sprintf(strings.TrimSpace(`
 You are running inside a Ralph planning iteration for this repository.
 
-This is a fresh ephemeral run. The durable user/planner-owned specification lives on disk.
+This is a fresh ephemeral run. The durable user/planner-owned specification and the planner-initialized progress file live on disk.
 
 Read these files first if they exist:
 - %s
@@ -510,7 +515,7 @@ Read these files first if they exist:
 - README.md
 - existing implementation files relevant to the request
 
-Your task is to create or revise %s in place. This file is the durable user/planner specification. It must stay builder-readable and progress-free.
+Your task is to create or revise %s in place and initialize or revise %s in place. The spec is the durable user/planner specification. It must stay builder-readable and progress-free.
 
 Keep %s as a single Markdown document with these sections in order:
 
@@ -527,30 +532,36 @@ Requirements:
 1. Treat %s as planner-owned durable state. Do not use it for progress tracking, completion tracking, or builder handoff notes.
 2. If %s already exists, treat it as canonical and revise it surgically against the new planning request instead of replacing it wholesale.
 3. If %s does not exist yet, create it from the planning request.
-4. Keep the result technical, concise, stable across builder iterations, and limited to durable facts that are already established.
-5. If uncertainty would materially change the goal, scope boundaries, constraints, acceptance criteria, or sequencing, ask clarifying questions instead of guessing.
-6. Use the question tool for those clarifications. Ask only 1-3 focused high-leverage questions before waiting for answers.
-7. Free-form answers are always allowed. After answers arrive, continue planning in the same session.
-8. You may write a partial draft of %s as you learn durable facts, but do not write interview transcript, open questions, temporary notes, or planner progress tracking into it.
-9. Planning mode must never execute the plan, must not create or modify %s, and must not edit implementation files.
-10. Do not run verification commands, builds, tests, or migrations in planning mode.
-11. The builder Ralph will treat %s as read-only and will manage its own progress in %s.
+4. Initialize or revise %s so the builder Ralph can immediately pick up the next highest-leverage task from it.
+5. Use %s for concrete task breakdown, sequencing, remaining work, and short builder-facing notes that are still relevant.
+6. do not write interview transcript, open questions, or temporary planning scratch notes into %s. Planning mode must never leave PROMISE: DONE or PROMISE: CONTINUE in it.
+7. Keep both files technical, concise, stable across builder iterations, and limited to durable facts that are already established.
+8. If uncertainty would materially change the goal, scope boundaries, constraints, acceptance criteria, or sequencing, ask clarifying questions instead of guessing.
+9. Use the question tool for those clarifications. Ask only 1-3 focused high-leverage questions before waiting for answers.
+10. Free-form answers are always allowed. After answers arrive, continue planning in the same session.
+11. You may write partial drafts of %s and %s as you learn durable facts, but keep them clean and builder-usable.
+12. Planning mode must never execute the plan, must not edit implementation files, and must not run verification commands, builds, tests, or migrations.
+13. The builder Ralph will treat %s as read-only and continue execution from %s.
 
 New planning request from /plan:
 %s
 `),
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.ProgressPath),
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.ProgressPath),
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.ProgressPath),
-		renderPromptBlock(planningRequest),
+		relPath(repoRoot, pair.SpecPath),     // read spec
+		relPath(repoRoot, pair.ProgressPath), // read progress
+		relPath(repoRoot, pair.SpecPath),     // task spec
+		relPath(repoRoot, pair.ProgressPath), // task progress
+		relPath(repoRoot, pair.SpecPath),     // keep spec
+		relPath(repoRoot, pair.SpecPath),     // req 1
+		relPath(repoRoot, pair.SpecPath),     // req 2
+		relPath(repoRoot, pair.SpecPath),     // req 3
+		relPath(repoRoot, pair.ProgressPath), // req 4
+		relPath(repoRoot, pair.ProgressPath), // req 5
+		relPath(repoRoot, pair.ProgressPath), // req 6
+		relPath(repoRoot, pair.SpecPath),     // req 11 first
+		relPath(repoRoot, pair.ProgressPath), // req 11 second
+		relPath(repoRoot, pair.SpecPath),     // req 13 spec
+		relPath(repoRoot, pair.ProgressPath), // req 13 progress
+		renderPromptBlock(planningRequest),   // request
 	)
 }
 
@@ -596,17 +607,32 @@ func newPlanningQuestionTool() (libagent.Tool, error) {
 	}), nil
 }
 
-func planningSpecChangedHook(repoRoot, specPath, initialSpec string) libagent.OnCompleteHook {
+func planningArtifactsChangedHook(repoRoot, specPath, progressPath, initialSpec, initialProgress string) libagent.OnCompleteHook {
 	return func(context.Context, *libagent.AssistantMessage, []libagent.Message) (string, bool, error) {
 		currentSpec := readOptionalFile(specPath)
-		if currentSpec != initialSpec {
-			return "", true, nil
+		currentProgress := readOptionalFile(progressPath)
+		if currentSpec == initialSpec || strings.TrimSpace(currentSpec) == "" {
+			return fmt.Sprintf(
+				"Your task is to bidirectionally create or revise the durable Ralph specification with the user and save it in %s. The spec file still matches what existed at the start of this planning session. Continue the planning interview if needed, ask clarifying questions when in doubt, and persist the updated spec to %s before ending.",
+				relPath(repoRoot, specPath),
+				relPath(repoRoot, specPath),
+			), false, nil
 		}
-		return fmt.Sprintf(
-			"Your task is to bidirectionally create or revise the durable Ralph specification with the user and save it in %s. The file still matches what existed at the start of this planning session. Continue the planning interview if needed, ask clarifying questions when in doubt, and persist the updated spec to %s before ending.",
-			relPath(repoRoot, specPath),
-			relPath(repoRoot, specPath),
-		), false, nil
+		if strings.TrimSpace(currentProgress) == "" || currentProgress == initialProgress {
+			return fmt.Sprintf(
+				"Before ending planning, initialize or revise %s so the builder Ralph can pick up concrete tasks from it. Remove any promise line, keep only durable builder-facing task breakdown and next-step context, and save the updated progress file to %s.",
+				relPath(repoRoot, progressPath),
+				relPath(repoRoot, progressPath),
+			), false, nil
+		}
+		if _, promiseLike := extractPromiseLineFromContent(currentProgress); promiseLike {
+			return fmt.Sprintf(
+				"Planning must not leave a promise line in %s. Reopen it, remove any PROMISE line, keep the initialized task breakdown for the builder, and save %s again before ending.",
+				relPath(repoRoot, progressPath),
+				relPath(repoRoot, progressPath),
+			), false, nil
+		}
+		return "", true, nil
 	}
 }
 
@@ -789,23 +815,9 @@ func readProgressPromise(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	var found []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case trimmed == "":
-			continue
-		default:
-			promise, promiseLike := extractPromiseLine(trimmed)
-			if promise != "" {
-				found = append(found, promise)
-				continue
-			}
-			if promiseLike {
-				return "", fmt.Errorf("invalid promise line in %s: %q", path, trimmed)
-			}
-		}
+	found, invalid := collectPromiseLines(string(data))
+	if invalid != "" {
+		return "", fmt.Errorf("invalid promise line in %s: %q", path, invalid)
 	}
 	if len(found) == 0 {
 		return "", fmt.Errorf("missing promise line in %s", path)
@@ -822,6 +834,36 @@ func readProgressPromiseForState(path string) (string, error) {
 		return promiseContinue, nil
 	}
 	return promise, err
+}
+
+func extractPromiseLineFromContent(content string) (promise string, promiseLike bool) {
+	found, invalid := collectPromiseLines(content)
+	if invalid != "" {
+		return "", true
+	}
+	if len(found) > 0 {
+		return found[0], true
+	}
+	return "", false
+}
+
+func collectPromiseLines(content string) (found []string, invalid string) {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		promise, promiseLike := extractPromiseLine(trimmed)
+		if promise != "" {
+			found = append(found, promise)
+			continue
+		}
+		if promiseLike {
+			return nil, trimmed
+		}
+	}
+	return found, ""
 }
 
 func clearPromiseLines(path string) error {
