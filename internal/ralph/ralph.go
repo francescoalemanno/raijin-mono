@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/francescoalemanno/raijin-mono/internal/shell"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -791,13 +792,16 @@ func readProgressPromise(path string) (string, error) {
 	var found []string
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		switch trimmed {
-		case "":
+		switch {
+		case trimmed == "":
 			continue
-		case promiseDone, promiseContinue:
-			found = append(found, trimmed)
 		default:
-			if strings.HasPrefix(trimmed, "PROMISE:") {
+			promise, promiseLike := extractPromiseLine(trimmed)
+			if promise != "" {
+				found = append(found, promise)
+				continue
+			}
+			if promiseLike {
 				return "", fmt.Errorf("invalid promise line in %s: %q", path, trimmed)
 			}
 		}
@@ -830,7 +834,7 @@ func clearPromiseLines(path string) error {
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	filtered := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "PROMISE:") {
+		if _, promiseLike := extractPromiseLine(strings.TrimSpace(line)); promiseLike {
 			continue
 		}
 		filtered = append(filtered, line)
@@ -840,6 +844,40 @@ func clearPromiseLines(path string) error {
 		return os.WriteFile(path, nil, 0o644)
 	}
 	return os.WriteFile(path, []byte(content+"\n"), 0o644)
+}
+
+func extractPromiseLine(trimmed string) (promise string, promiseLike bool) {
+	trimmed = strings.TrimSpace(trimmed)
+	if trimmed == "" {
+		return "", false
+	}
+	idx := strings.Index(trimmed, "PROMISE:")
+	if idx < 0 {
+		return "", false
+	}
+	prefix := trimmed[:idx]
+	if containsAlphabetic(prefix) {
+		return "", false
+	}
+	remainder := strings.TrimSpace(trimmed[idx:])
+	switch remainder {
+	case promiseDone, promiseContinue:
+		return remainder, true
+	default:
+		if strings.HasPrefix(remainder, "PROMISE:") {
+			return "", true
+		}
+		return "", false
+	}
+}
+
+func containsAlphabetic(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeControllerNote(path, note string) error {

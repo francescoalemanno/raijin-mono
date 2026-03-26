@@ -167,6 +167,38 @@ func TestInspectPlanningStateUsesProgressPromise(t *testing.T) {
 	}
 }
 
+func TestReadProgressPromiseAcceptsNonAlphabeticPrefix(t *testing.T) {
+	repo := t.TempDir()
+	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
+	writeProgressFile(t, progressPath, "working\n> PROMISE: DONE\n")
+
+	promise, err := readProgressPromise(progressPath)
+	if err != nil {
+		t.Fatalf("readProgressPromise(prefixed): %v", err)
+	}
+	if promise != promiseDone {
+		t.Fatalf("promise = %q, want %q", promise, promiseDone)
+	}
+}
+
+func TestClearPromiseLinesRemovesNonAlphabeticPrefixPromise(t *testing.T) {
+	repo := t.TempDir()
+	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
+	writeProgressFile(t, progressPath, "keep me\n> PROMISE: CONTINUE\nand me\n")
+
+	if err := clearPromiseLines(progressPath); err != nil {
+		t.Fatalf("clearPromiseLines: %v", err)
+	}
+
+	got := readOptionalFile(progressPath)
+	if strings.Contains(got, "PROMISE:") {
+		t.Fatalf("progress still contains promise line: %q", got)
+	}
+	if !strings.Contains(got, "keep me") || !strings.Contains(got, "and me") {
+		t.Fatalf("progress lost non-promise content: %q", got)
+	}
+}
+
 func TestRunPlanCreatesNamedSpecWithoutProgress(t *testing.T) {
 	repo := t.TempDir()
 
