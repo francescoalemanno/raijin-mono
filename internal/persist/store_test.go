@@ -542,6 +542,61 @@ func TestGetTree_AllVisibleEntriesNavigateToBijectiveToolCoupling(t *testing.T) 
 	}
 }
 
+func TestMessagesList_SanitizesDanglingAssistantToolCallAndRewindsLeaf(t *testing.T) {
+	t.Parallel()
+
+	st, sess := newEphemeralTestStore(t)
+	ctx := context.Background()
+	ms := st.Messages()
+
+	if _, err := ms.Create(ctx, sess.ID, &libagent.UserMessage{Role: "user", Content: "start"}); err != nil {
+		t.Fatalf("Create user: %v", err)
+	}
+	if _, err := ms.Create(ctx, sess.ID, testAssistant("tool turn", []libagent.ToolCallItem{{
+		ID:    "call-1",
+		Name:  "read",
+		Input: `{"path":"file.txt"}`,
+	}})); err != nil {
+		t.Fatalf("Create assistant: %v", err)
+	}
+	tr, err := ms.Create(ctx, sess.ID, &libagent.ToolResultMessage{
+		Role:       "toolResult",
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		Content:    "ok",
+	})
+	if err != nil {
+		t.Fatalf("Create tool result: %v", err)
+	}
+	dangling, err := ms.Create(ctx, sess.ID, testAssistant("", []libagent.ToolCallItem{{
+		ID:    "call-2",
+		Name:  "bash",
+		Input: `{"command":"pwd"}`,
+	}}))
+	if err != nil {
+		t.Fatalf("Create dangling assistant: %v", err)
+	}
+	if st.leafID != libagent.MessageID(dangling) {
+		t.Fatalf("leaf before sanitize = %q, want %q", st.leafID, libagent.MessageID(dangling))
+	}
+
+	got, err := ms.List(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len(got)=%d want 3", len(got))
+	}
+	if st.leafID != libagent.MessageID(tr) {
+		t.Fatalf("leaf after sanitize = %q, want %q", st.leafID, libagent.MessageID(tr))
+	}
+	for _, msg := range got {
+		if libagent.MessageID(msg) == libagent.MessageID(dangling) {
+			t.Fatalf("dangling assistant tool-call should be removed from active history")
+		}
+	}
+}
+
 func TestNavigate_ReplayRoundTrip_UserSelectionRestoresParentLeaf(t *testing.T) {
 	t.Parallel()
 

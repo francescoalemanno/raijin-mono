@@ -467,7 +467,7 @@ func TestHandlePlanRootContinueOpensScopedMenu(t *testing.T) {
 	repo := t.TempDir()
 	t.Chdir(repo)
 	first := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), "# Goal\n\nfirst goal\n\n# User Specification\n\nA.\n\n# Plan\n\n1. First.\n", "")
-	second := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-fox-align-cedar.md"), "# Goal\n\nsecond goal\n\n# User Specification\n\nB.\n\n# Plan\n\n1. Second.\n", "picked progress\nPROMISE: CONTINUE\n")
+	second := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-fox-align-cedar.md"), "# Goal\n\nsecond goal\n\n# User Specification\n\nB.\n\n# Plan\n\n1. Second.\n", "picked progress\n")
 
 	origRunRalph := runRalph
 	origRootPicker := runPlanRootPicker
@@ -592,7 +592,7 @@ func TestHandlePlanExplicitSlugScopesToSpec(t *testing.T) {
 	repo := t.TempDir()
 	t.Chdir(repo)
 	writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), "# Goal\n\nfirst goal\n\n# User Specification\n\nA.\n\n# Plan\n\n1. First.\n", "")
-	second := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-fox-align-cedar.md"), "# Goal\n\nsecond goal\n\n# User Specification\n\nB.\n\n# Plan\n\n1. Second.\n", "picked progress\nPROMISE: CONTINUE\n")
+	second := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-fox-align-cedar.md"), "# Goal\n\nsecond goal\n\n# User Specification\n\nB.\n\n# Plan\n\n1. Second.\n", "picked progress\n")
 
 	origRunRalph := runRalph
 	origRootPicker := runPlanRootPicker
@@ -970,7 +970,7 @@ func TestDefaultRunPlanRootPickerUsesFullscreenFZF(t *testing.T) {
 func TestDefaultRunPlanSpecPickerUsesFullscreenFZF(t *testing.T) {
 	repo := t.TempDir()
 	t.Chdir(repo)
-	pair := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-fox-align-cedar.md"), "# Goal\n\nsecond goal\n\n# User Specification\n\nB.\n\n# Plan\n\n1. Second.\n", "picked progress\nPROMISE: CONTINUE\n")
+	pair := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-fox-align-cedar.md"), "# Goal\n\nsecond goal\n\n# User Specification\n\nB.\n\n# Plan\n\n1. Second.\n", "picked progress\n")
 
 	origRunner := runEmbeddedFZFWithOptions
 	origCanUse := canUseEmbeddedFZFForTest
@@ -1085,7 +1085,7 @@ func TestRunSessionAgentCallWithRendererSupportsPlanningQuestionExtraTool(t *tes
 func TestHandlePlanRootReviewActionRendersSpec(t *testing.T) {
 	repo := t.TempDir()
 	t.Chdir(repo)
-	pair := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), "# Goal\n\nexisting goal\n\n# User Specification\n\nKeep it clear.\n\n# Plan\n\n1. Existing step.\n", "current slice\nPROMISE: CONTINUE\n")
+	pair := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), "# Goal\n\nexisting goal\n\n# User Specification\n\nKeep it clear.\n\n# Plan\n\n1. Existing step.\n", "current slice\n")
 
 	origRunRalph := runRalph
 	origRootPicker := runPlanRootPicker
@@ -1126,8 +1126,8 @@ func TestHandlePlanRootReviewActionRendersSpec(t *testing.T) {
 func TestBuildPlanSpecPickerItemsSortsActiveBeforeCompletedAndIncludesRawPreview(t *testing.T) {
 	repo := t.TempDir()
 	t.Chdir(repo)
-	active := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), "# Goal\n\nactive goal\n\n# User Specification\n\nA.\n\n# Plan\n\n1. First.\n", "active progress\nPROMISE: CONTINUE\n")
-	completed := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-fox-align-cedar.md"), "# Goal\n\ncompleted goal\n\n# User Specification\n\nB.\n\n# Plan\n\n1. Second.\n", "done\nPROMISE: DONE\n")
+	active := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), "# Goal\n\nactive goal\n\n# User Specification\n\nA.\n\n# Plan\n\n1. First.\n", "active progress\n")
+	completed := writeRalphSpecPair(t, filepath.Join(repo, ".raijin", "ralph", "spec-fox-align-cedar.md"), "# Goal\n\ncompleted goal\n\n# User Specification\n\nB.\n\n# Plan\n\n1. Second.\n", "done\n<promise>DONE</promise>\n")
 
 	items, keyToPair, err := buildPlanSpecPickerItems(context.Background(), []ralph.SpecPair{completed, active})
 	if err != nil {
@@ -1148,7 +1148,7 @@ func TestBuildPlanSpecPickerItemsSortsActiveBeforeCompletedAndIncludesRawPreview
 	if !strings.Contains(items[0].preview, "◉ Ralph snapshot") || !strings.Contains(items[0].preview, "# Goal\n\nactive goal") || !strings.Contains(items[0].preview, "active progress") {
 		t.Fatalf("active preview missing raw contents: %q", items[0].preview)
 	}
-	if !strings.Contains(items[1].preview, "✓ Ralph snapshot") || !strings.Contains(items[1].preview, "# Goal\n\ncompleted goal") || !strings.Contains(items[1].preview, "done\nPROMISE: DONE") {
+	if !strings.Contains(items[1].preview, "✓ Ralph snapshot") || !strings.Contains(items[1].preview, "# Goal\n\ncompleted goal") || !strings.Contains(items[1].preview, "done\n<promise>DONE</promise>") {
 		t.Fatalf("completed preview missing raw contents: %q", items[1].preview)
 	}
 }

@@ -963,6 +963,32 @@ func TestAgent_TransformContext(t *testing.T) {
 	assert.Equal(t, 2, transformedLen)
 }
 
+func TestAgent_SanitizesTransformedHistoryBeforeProviderCall(t *testing.T) {
+	model := &libagent.StaticTextModel{Response: "ok"}
+	danglingID := "bash:7"
+
+	a := libagent.NewAgent(libagent.AgentOptions{
+		RuntimeModel: libagent.RuntimeModel{Model: model},
+		TransformContext: func(_ context.Context, msgs []libagent.Message) ([]libagent.Message, error) {
+			out := append([]libagent.Message{}, msgs...)
+			bad := libagent.NewAssistantMessage("", "", []libagent.ToolCallItem{{
+				ID:    danglingID,
+				Name:  "bash",
+				Input: `{"command":"pwd"}`,
+			}}, time.Now())
+			bad.Completed = true
+			out = append(out, bad)
+			return out, nil
+		},
+	})
+
+	err := a.Prompt(context.Background(), "hello")
+	require.NoError(t, err)
+
+	assert.NotContains(t, model.PromptJSON, danglingID)
+	assert.Equal(t, "ok", libagent.AssistantText(a.State().Messages[len(a.State().Messages)-1].(*libagent.AssistantMessage)))
+}
+
 func TestAgent_WaitForIdle(t *testing.T) {
 	done := make(chan struct{})
 	model := newMockModel(func(_ int) fantasy.StreamResponse {
