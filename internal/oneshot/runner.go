@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -183,6 +184,9 @@ func handleBuiltin(opts Options, resolved resolvedPrompt, forceNew bool) error {
 
 	case cmd.name == "reasoning":
 		return handleReasoning(opts, strings.TrimSpace(cmd.args))
+
+	case cmd.name == "max-images":
+		return handleMaxImages(opts, strings.TrimSpace(cmd.args))
 
 	case cmd.name == "edit":
 		return handleEdit(opts, cmd.args, forceNew)
@@ -1337,6 +1341,7 @@ func handleStatus(opts Options, forceNew bool) error {
 
 	fmt.Printf("Model: %s\n", statusModelLabel(opts))
 	fmt.Printf("Reasoning: %s\n", statusReasoningLabel(opts))
+	fmt.Printf("Max images: %s\n", statusMaxImagesLabel(opts))
 	if contextWindow > 0 {
 		pct := float64(usedTokens) / float64(contextWindow) * 100
 		fmt.Printf("Context: %.1f%% (%s/%s)\n", pct, formatStatusTokenCount(usedTokens), formatStatusTokenCount(contextWindow))
@@ -1408,6 +1413,17 @@ func statusReasoningLabel(opts Options) string {
 		level = opts.RuntimeModel.ModelCfg.ThinkingLevel
 	}
 	return string(libagent.NormalizeThinkingLevel(level))
+}
+
+func statusMaxImagesLabel(opts Options) string {
+	cfg := opts.ModelCfg.Normalize()
+	if strings.TrimSpace(cfg.Provider) == "" && strings.TrimSpace(cfg.Model) == "" {
+		cfg = opts.RuntimeModel.ModelCfg.Normalize()
+	}
+	if cfg.MaxImages == nil {
+		return fmt.Sprintf("%d (default)", cfg.EffectiveMaxImages())
+	}
+	return strconv.Itoa(cfg.EffectiveMaxImages())
 }
 
 func formatStatusTokenCount(tokens int64) string {

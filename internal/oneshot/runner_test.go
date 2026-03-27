@@ -196,6 +196,9 @@ func TestRunStatusPrintsModelAndContextFill(t *testing.T) {
 	if !strings.Contains(out, "Reasoning: high") {
 		t.Fatalf("expected reasoning line in output, got %q", out)
 	}
+	if !strings.Contains(out, "Max images: 20 (default)") {
+		t.Fatalf("expected max-images line in output, got %q", out)
+	}
 	if !strings.Contains(out, "Context: 24.0%") {
 		t.Fatalf("expected context percentage in output, got %q", out)
 	}
@@ -1330,6 +1333,73 @@ func TestRunReasoningRejectsInvalidLevel(t *testing.T) {
 		t.Fatalf("expected invalid reasoning level error")
 	}
 	if !strings.Contains(err.Error(), "invalid reasoning level") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunMaxImagesUpdatesDefaultModelLimit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	store, err := modelconfig.LoadModelStore()
+	if err != nil {
+		t.Fatalf("LoadModelStore: %v", err)
+	}
+	model := libagent.ModelConfig{
+		Name:     "moonshot/kimi-k2.5",
+		Provider: "moonshot",
+		Model:    "kimi-k2.5",
+	}
+	if err := store.Add(model); err != nil {
+		t.Fatalf("Add model: %v", err)
+	}
+	if err := store.SetDefault(model.Name); err != nil {
+		t.Fatalf("SetDefault: %v", err)
+	}
+
+	opts := Options{Store: store}
+	if err := Run(opts, "/max-images 8"); err != nil {
+		t.Fatalf("Run(/max-images 8): %v", err)
+	}
+
+	reloaded, err := modelconfig.LoadModelStore()
+	if err != nil {
+		t.Fatalf("Reload model store: %v", err)
+	}
+	got, ok := reloaded.GetDefault()
+	if !ok {
+		t.Fatalf("expected default model after max-images update")
+	}
+	if got.MaxImages == nil || *got.MaxImages != 8 {
+		t.Fatalf("MaxImages = %v, want 8", got.MaxImages)
+	}
+}
+
+func TestRunMaxImagesRejectsInvalidValue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	store, err := modelconfig.LoadModelStore()
+	if err != nil {
+		t.Fatalf("LoadModelStore: %v", err)
+	}
+	model := libagent.ModelConfig{
+		Name:     "moonshot/kimi-k2.5",
+		Provider: "moonshot",
+		Model:    "kimi-k2.5",
+	}
+	if err := store.Add(model); err != nil {
+		t.Fatalf("Add model: %v", err)
+	}
+	if err := store.SetDefault(model.Name); err != nil {
+		t.Fatalf("SetDefault: %v", err)
+	}
+
+	err = Run(Options{Store: store}, "/max-images nope")
+	if err == nil {
+		t.Fatalf("expected invalid max-images error")
+	}
+	if !strings.Contains(err.Error(), "invalid max-images value") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
