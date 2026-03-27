@@ -229,6 +229,8 @@ func streamAssistantResponse(
 		// same loop see the same pruned/compacted history.
 		currentCtx.Messages = append([]Message{}, messages...)
 	}
+	messages = SanitizeHistory(messages)
+	currentCtx.Messages = append([]Message{}, messages...)
 
 	// Convert to fantasy messages.
 	convertFn := cfg.ConvertToLLM
@@ -555,6 +557,14 @@ func streamAssistantResponse(
 	if assistantMsg.FinishReason == fantasy.FinishReasonLength {
 		assistantMsg.FinishReason = fantasy.FinishReasonError
 		assistantMsg.Error = fmt.Errorf("language model response was truncated: output token limit reached")
+	}
+	assistantMsg.Completed = true
+	assistantMsg.Text = AssistantText(assistantMsg)
+	assistantMsg.Reasoning = AssistantReasoning(assistantMsg)
+	assistantMsg.ToolCalls = AssistantToolCalls(assistantMsg)
+	assistantMsg.CompleteReason = string(assistantMsg.FinishReason)
+	if assistantMsg.Error != nil {
+		assistantMsg.CompleteMessage = assistantMsg.Error.Error()
 	}
 
 	if !messageStarted {
@@ -938,11 +948,21 @@ func isRetryableError(err error) bool {
 // errorAssistantMessage wraps an error into an AssistantMessage with FinishReasonError.
 func errorAssistantMessage(err error) *AssistantMessage {
 	return &AssistantMessage{
-		Role:         "assistant",
-		FinishReason: fantasy.FinishReasonError,
-		Error:        err,
-		Timestamp:    time.Now(),
+		Role:            "assistant",
+		Completed:       true,
+		CompleteReason:  string(fantasy.FinishReasonError),
+		CompleteMessage: errorMessage(err),
+		FinishReason:    fantasy.FinishReasonError,
+		Error:           err,
+		Timestamp:       time.Now(),
 	}
+}
+
+func errorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // sendEvent sends an event to eventCh. It is a no-op if eventCh is nil.

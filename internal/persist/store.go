@@ -1371,6 +1371,7 @@ func (ms *messageService) List(_ context.Context, sessionID string) ([]libagent.
 	if ms.store.loaded != sessionID {
 		return nil, nil
 	}
+	ms.store.leafID = sanitizeLoadedLeafPath(ms.store.nodes, ms.store.leafID)
 
 	// Walk from leaf to root.
 	pathNodes := make([]*treeNode, 0, len(ms.store.nodes))
@@ -1425,7 +1426,7 @@ func (ms *messageService) List(_ context.Context, sessionID string) ([]libagent.
 		for _, n := range pathNodes {
 			appendMessage(n)
 		}
-		return path, nil
+		return libagent.SanitizeHistory(path), nil
 	}
 
 	path = append(path, compactionSummaryMessage(latest.summary))
@@ -1447,7 +1448,7 @@ func (ms *messageService) List(_ context.Context, sessionID string) ([]libagent.
 	for i := latest.idx + 1; i < len(pathNodes); i++ {
 		appendMessage(pathNodes[i])
 	}
-	return path, nil
+	return libagent.SanitizeHistory(path), nil
 }
 
 // ListReplayItems returns the active-path replay stream, including compaction events.

@@ -157,6 +157,7 @@ func (a *SessionAgent) run(ctx context.Context, call SessionAgentCall, continueF
 		}
 		history = append(history, libagent.CloneMessage(m))
 	}
+	history = libagent.SanitizeHistory(history)
 
 	// Resolve effective max output tokens.
 	contextWindow := model.EffectiveContextWindow()
