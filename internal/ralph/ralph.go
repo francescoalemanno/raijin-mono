@@ -23,12 +23,24 @@ const (
 	ModeAuto Mode = "auto"
 	ModePlan Mode = "plan"
 
-	defaultMaxIterations = 25
-	promiseDone          = "<promise>DONE</promise>"
-	promiseContinue      = "<promise>CONTINUE</promise>"
+	defaultMaxIterations         = 25
+	defaultPlanningMaxIterations = 8
+	promiseDone                  = "<promise>DONE</promise>"
+	promiseContinue              = "<promise>CONTINUE</promise>"
+	planningPromiseDone          = "<plan-promise>DONE</plan-promise>"
+	planningPromiseContinue      = "<plan-promise>CONTINUE</plan-promise>"
 )
 
 var ErrMaxIterationsReached = errors.New("ralph: maximum iterations reached")
+
+var (
+	builderPromiseMarkers    = []string{promiseDone, promiseContinue}
+	builderPromiseFragments  = []string{"<promise>", "</promise>"}
+	planningPromiseMarkers   = []string{planningPromiseDone, planningPromiseContinue}
+	planningPromiseFragments = []string{"<plan-promise>", "</plan-promise>"}
+	allPromiseMarkers        = []string{promiseDone, promiseContinue, planningPromiseDone, planningPromiseContinue}
+	allPromiseFragments      = []string{"<promise>", "</promise>", "<plan-promise>", "</plan-promise>"}
+)
 
 type Options struct {
 	Goal            string
@@ -156,7 +168,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	switch mode {
 	case ModePlan:
-		return runPlanning(ctx, repoRoot, pair, planningRequest)
+		return runPlanning(ctx, repoRoot, pair, planningRequest, maxIterations)
 	case ModeAuto:
 		return runAutomatic(ctx, repoRoot, pair, maxIterations)
 	default:
@@ -386,7 +398,7 @@ func runAutomatic(ctx context.Context, repoRoot string, pair SpecPair, maxIterat
 	}
 }
 
-func runPlanning(ctx context.Context, repoRoot string, pair SpecPair, planningRequest string) error {
+func runPlanning(ctx context.Context, repoRoot string, pair SpecPair, planningRequest string, maxIterations int) error {
 	if strings.TrimSpace(planningRequest) == "" {
 		return errors.New("ralph: goal is required; use /plan <goal> first")
 	}
@@ -397,44 +409,76 @@ func runPlanning(ctx context.Context, repoRoot string, pair SpecPair, planningRe
 		return errors.New("ralph: no ephemeral runner registered")
 	}
 	renderer := newLoopRenderer(os.Stderr, repoRoot, pair)
-	renderer.planning(planningRequest)
 	questionTool, err := newPlanningQuestionTool()
 	if err != nil {
 		return err
 	}
-	if err := clearProgressPromiseMarkers(pair.ProgressPath); err != nil {
-		return err
-	}
-	initialSpec := readOptionalFile(pair.SpecPath)
-	initialProgress := readOptionalFile(pair.ProgressPath)
 
-	result, runErr := runEphemeralPrompt(ctx, repoRoot, EphemeralPromptOptions{
-		Prompt:         buildPlanningPrompt(repoRoot, pair, planningRequest),
-		OnCompleteHook: planningArtifactsChangedHook(repoRoot, pair.SpecPath, pair.ProgressPath, initialSpec, initialProgress),
-		ExtraTools:     []libagent.Tool{questionTool},
-	}, os.Stdout, os.Stderr)
-	if runErr != nil {
-		if errors.Is(runErr, context.Canceled) {
+	for iteration := 1; ; iteration++ {
+		if err := ctx.Err(); err != nil {
 			renderer.interrupted("planning")
 			return nil
 		}
-		return runErr
+		if iteration > maxIterations {
+			return ErrMaxIterationsReached
+		}
+		renderer.planningIteration(planningRequest, iteration, maxIterations)
+		if err := clearProgressPromiseMarkers(pair.ProgressPath); err != nil {
+			return err
+		}
+		initialSpec := readOptionalFile(pair.SpecPath)
+		initialProgress := readOptionalFile(pair.ProgressPath)
+
+		var acceptedPromise string
+		result, runErr := runEphemeralPrompt(ctx, repoRoot, EphemeralPromptOptions{
+			Prompt: buildPlanningPrompt(repoRoot, pair, planningRequest),
+			OnCompleteHook: planningPromiseHook(
+				repoRoot,
+				pair.SpecPath,
+				pair.ProgressPath,
+				initialSpec,
+				initialProgress,
+				&acceptedPromise,
+			),
+			ExtraTools: []libagent.Tool{questionTool},
+		}, os.Stdout, os.Stderr)
+		if runErr != nil {
+			if errors.Is(runErr, context.Canceled) {
+				renderer.interrupted("planning")
+				return nil
+			}
+			reason := summarizePromptFailure("planning iteration", result, runErr)
+			renderer.planningRetry(iteration, reason)
+			if noteErr := writeControllerNote(pair.ProgressPath, reason); noteErr != nil {
+				return noteErr
+			}
+			continue
+		}
+
+		switch acceptedPromise {
+		case planningPromiseDone:
+			renderer.planningCompleted(iteration)
+			return nil
+		case planningPromiseContinue:
+			renderer.planningContinuing(iteration)
+		default:
+			reason := fmt.Sprintf("Controller could not validate the final planning promise after iteration %d.", iteration)
+			renderer.planningRetry(iteration, reason)
+			if noteErr := writeControllerNote(pair.ProgressPath, reason); noteErr != nil {
+				return noteErr
+			}
+		}
 	}
-	spec := strings.TrimSpace(readOptionalFile(pair.SpecPath))
-	if spec == "" {
-		return fmt.Errorf("ralph planning did not create %s", relPath(repoRoot, pair.SpecPath))
-	}
-	progress := strings.TrimSpace(readOptionalFile(pair.ProgressPath))
-	if progress == "" {
-		return fmt.Errorf("ralph planning did not initialize %s", relPath(repoRoot, pair.ProgressPath))
-	}
-	renderer.planningReady()
-	_ = result
-	return nil
 }
 
 func prepareRun(repoRoot string, paths basePaths, opts Options) (SpecPair, string, int, error) {
-	maxIterations := firstPositive(opts.MaxIterations, defaultMaxIterations)
+	maxIterations := opts.MaxIterations
+	if maxIterations <= 0 {
+		maxIterations = defaultMaxIterations
+		if opts.Mode == ModePlan {
+			maxIterations = defaultPlanningMaxIterations
+		}
+	}
 
 	switch opts.Mode {
 	case ModePlan:
@@ -542,10 +586,14 @@ func buildPlanningPrompt(repoRoot string, pair SpecPair, planningRequest string)
 			"Requirements:\n" +
 			"1. Treat " + specPath + " as planner-owned durable state. Keep it progress-free and revise it surgically when it already exists.\n" +
 			"2. Treat " + progressPath + " as builder-facing mutable state. Keep it limited to concrete next tasks, ordering, remaining work, and short notes that still matter.\n" +
-			"3. Keep both files technical, concise, and limited to durable facts that are already established.\n" +
-			"4. If uncertainty would materially change the goal, scope, constraints, acceptance criteria, or sequencing, use the question tool and ask 1-3 focused clarifying questions before proceeding. Free-form answers are allowed.\n" +
-			"5. Planning mode only. Do not edit implementation files or run builds, tests, migrations, or other verification commands.\n" +
-			"6. The builder Ralph will treat " + specPath + " as read-only durable input and continue execution from " + progressPath + ".\n\n" +
+			"3. At the start of this iteration, choose one highest-leverage planning task that would most improve builder success.\n" +
+			"4. That one planning task may refine scope, tighten acceptance criteria, inspect relevant code for feasibility, reorder implementation work, or de-risk the next builder slice.\n" +
+			"5. Keep both files technical, concise, and limited to durable facts that are already established.\n" +
+			"6. If uncertainty would materially change the goal, scope, constraints, acceptance criteria, or sequencing, use the question tool and ask 1-3 focused clarifying questions before proceeding. Free-form answers are allowed.\n" +
+			"7. Planning mode only. You may inspect relevant implementation files for context, but do not edit implementation files or run builds, tests, migrations, or other verification commands.\n" +
+			"8. Update " + specPath + " and " + progressPath + " surgically to reflect only the planning work completed in this iteration.\n" +
+			"9. End your final response with exactly one whole-line planning promise marker: " + planningPromiseDone + " only if the spec and progress are builder-ready with no material planning ambiguity remaining, otherwise " + planningPromiseContinue + ".\n" +
+			"10. The builder Ralph will treat " + specPath + " as read-only durable input and continue execution from " + progressPath + ".\n\n" +
 			"New planning request from /plan:\n" +
 			request + "\n",
 	)
@@ -597,21 +645,60 @@ func planningArtifactsChangedHook(repoRoot, specPath, progressPath, initialSpec,
 	return func(context.Context, *libagent.AssistantMessage, []libagent.Message) (string, bool, error) {
 		currentSpec := readOptionalFile(specPath)
 		currentProgress := readOptionalFile(progressPath)
-		if currentSpec == initialSpec || strings.TrimSpace(currentSpec) == "" {
+		if strings.TrimSpace(currentSpec) == "" {
 			return fmt.Sprintf(
 				"Your task is to bidirectionally create or revise the durable Ralph specification with the user and save it in %s. The spec file still matches what existed at the start of this planning session. Continue the planning interview if needed, ask clarifying questions when in doubt, and persist the updated spec to %s before ending.",
 				relPath(repoRoot, specPath),
 				relPath(repoRoot, specPath),
 			), false, nil
 		}
-		if strings.TrimSpace(currentProgress) == "" || currentProgress == initialProgress {
+		if strings.TrimSpace(currentProgress) == "" {
 			return fmt.Sprintf(
 				"Before ending planning, initialize or revise %s so the builder Ralph can pick up concrete tasks from it. Keep only durable builder-facing task breakdown and next-step context, and save the updated progress file to %s.",
 				relPath(repoRoot, progressPath),
 				relPath(repoRoot, progressPath),
 			), false, nil
 		}
+		if currentSpec == initialSpec && currentProgress == initialProgress {
+			return fmt.Sprintf(
+				"This planning iteration did not leave any durable change behind. Reopen %s or %s, make at least one meaningful planning update, and then respond again.",
+				relPath(repoRoot, specPath),
+				relPath(repoRoot, progressPath),
+			), false, nil
+		}
 		return "", true, nil
+	}
+}
+
+func planningPromiseHook(repoRoot, specPath, progressPath, initialSpec, initialProgress string, acceptedPromise *string) libagent.OnCompleteHook {
+	artifactsHook := planningArtifactsChangedHook(repoRoot, specPath, progressPath, initialSpec, initialProgress)
+	return func(ctx context.Context, final *libagent.AssistantMessage, messages []libagent.Message) (string, bool, error) {
+		inject, ok, err := artifactsHook(ctx, final, messages)
+		if err != nil {
+			return "", false, err
+		}
+		if !ok {
+			if acceptedPromise != nil {
+				*acceptedPromise = ""
+			}
+			return inject, false, nil
+		}
+
+		promise, err := readRequiredPlanningPromiseMarker(libagent.AssistantText(final), "final planning response")
+		if err == nil {
+			if acceptedPromise != nil {
+				*acceptedPromise = promise
+			}
+			return "", true, nil
+		}
+
+		if acceptedPromise != nil {
+			*acceptedPromise = ""
+		}
+		return "Before ending this planning iteration, reopen " + relPath(repoRoot, specPath) + " and " + relPath(repoRoot, progressPath) +
+			" and update them coherently with the planning rules. Preserve durable scope in the spec and only still-relevant builder-facing work in progress. " +
+			"End your final response with exactly one whole-line planning promise marker: " + planningPromiseDone +
+			" only if the spec and progress are builder-ready with no material planning ambiguity remaining; otherwise use " + planningPromiseContinue + ". Then respond again.", false, nil
 	}
 }
 
@@ -763,7 +850,18 @@ func readPersistedProgressPromise(path string) (string, error) {
 }
 
 func readRequiredPromiseMarker(content, location string) (string, error) {
-	promise, found, err := readOptionalPromiseMarker(content, location)
+	promise, found, err := readOptionalPromiseMarkerSet(content, location, builderPromiseMarkers, builderPromiseFragments)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("missing promise marker in %s", location)
+	}
+	return promise, nil
+}
+
+func readRequiredPlanningPromiseMarker(content, location string) (string, error) {
+	promise, found, err := readOptionalPromiseMarkerSet(content, location, planningPromiseMarkers, planningPromiseFragments)
 	if err != nil {
 		return "", err
 	}
@@ -774,7 +872,11 @@ func readRequiredPromiseMarker(content, location string) (string, error) {
 }
 
 func readOptionalPromiseMarker(content, location string) (promise string, found bool, err error) {
-	promises, invalid := collectPromiseMarkers(content)
+	return readOptionalPromiseMarkerSet(content, location, builderPromiseMarkers, builderPromiseFragments)
+}
+
+func readOptionalPromiseMarkerSet(content, location string, markers, fragments []string) (promise string, found bool, err error) {
+	promises, invalid := collectPromiseMarkers(content, markers, fragments)
 	if invalid != "" {
 		return "", false, fmt.Errorf("invalid promise marker in %s: %q", location, invalid)
 	}
@@ -790,14 +892,14 @@ func readOptionalPromiseMarker(content, location string) (promise string, found 
 	return promises[0], true, nil
 }
 
-func collectPromiseMarkers(content string) (found []string, invalid string) {
+func collectPromiseMarkers(content string, markers, fragments []string) (found []string, invalid string) {
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
 		}
-		promise, promiseLike := extractPromiseMarker(trimmed)
+		promise, promiseLike := extractPromiseMarker(trimmed, markers, fragments)
 		if promise != "" {
 			found = append(found, promise)
 			continue
@@ -817,7 +919,7 @@ func clearProgressPromiseMarkers(path string) error {
 		}
 		return err
 	}
-	content, err := stripPromiseMarkers(string(data))
+	content, err := stripPromiseMarkersSet(string(data), allPromiseMarkers, allPromiseFragments)
 	if err != nil {
 		return fmt.Errorf("strip promise markers from %s: %w", path, err)
 	}
@@ -828,7 +930,7 @@ func clearProgressPromiseMarkers(path string) error {
 }
 
 func appendProgressDonePromise(path string) error {
-	content, err := stripPromiseMarkers(readOptionalFile(path))
+	content, err := stripPromiseMarkersSet(readOptionalFile(path), allPromiseMarkers, allPromiseFragments)
 	if err != nil {
 		return fmt.Errorf("strip promise markers from %s: %w", path, err)
 	}
@@ -841,12 +943,12 @@ func appendProgressDonePromise(path string) error {
 	return os.WriteFile(path, []byte(content+"\n"+promiseDone+"\n"), 0o644)
 }
 
-func stripPromiseMarkers(content string) (string, error) {
+func stripPromiseMarkersSet(content string, markers, fragments []string) (string, error) {
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 	filtered := make([]string, 0, len(lines))
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		promise, promiseLike := extractPromiseMarker(trimmed)
+		promise, promiseLike := extractPromiseMarker(trimmed, markers, fragments)
 		if promise != "" {
 			continue
 		}
@@ -858,20 +960,22 @@ func stripPromiseMarkers(content string) (string, error) {
 	return strings.TrimRight(strings.Join(filtered, "\n"), "\n"), nil
 }
 
-func extractPromiseMarker(trimmed string) (promise string, promiseLike bool) {
+func extractPromiseMarker(trimmed string, markers, fragments []string) (promise string, promiseLike bool) {
 	trimmed = strings.TrimSpace(trimmed)
 	if trimmed == "" {
 		return "", false
 	}
-	switch trimmed {
-	case promiseDone, promiseContinue:
-		return trimmed, true
-	default:
-		if strings.Contains(trimmed, "<promise>") || strings.Contains(trimmed, "</promise>") {
+	for _, marker := range markers {
+		if trimmed == marker {
+			return trimmed, true
+		}
+	}
+	for _, fragment := range fragments {
+		if strings.Contains(trimmed, fragment) {
 			return "", true
 		}
-		return "", false
 	}
+	return "", false
 }
 
 func lastNonEmptyTrimmedLine(content string) string {
@@ -932,15 +1036,6 @@ func readOptionalFile(path string) string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func firstPositive(values ...int) int {
-	for _, v := range values {
-		if v > 0 {
-			return v
-		}
-	}
-	return 0
 }
 
 func tailText(s string, limit int) string {

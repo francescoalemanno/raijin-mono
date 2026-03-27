@@ -246,14 +246,14 @@ func TestReadRequiredPromiseMarkerRequiresFinalExactLine(t *testing.T) {
 func TestClearProgressPromiseMarkersRemovesExactMarkers(t *testing.T) {
 	repo := t.TempDir()
 	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
-	writeProgressFile(t, progressPath, "keep me\n"+promiseContinue+"\nand me\n"+promiseDone+"\n")
+	writeProgressFile(t, progressPath, "keep me\n"+promiseContinue+"\nand me\n"+planningPromiseContinue+"\n"+promiseDone+"\n")
 
 	if err := clearProgressPromiseMarkers(progressPath); err != nil {
 		t.Fatalf("clearProgressPromiseMarkers: %v", err)
 	}
 
 	got := readOptionalFile(progressPath)
-	if strings.Contains(got, "<promise>") {
+	if strings.Contains(got, "<promise>") || strings.Contains(got, "<plan-promise>") {
 		t.Fatalf("progress still contains promise marker: %q", got)
 	}
 	if !strings.Contains(got, "keep me") || !strings.Contains(got, "and me") {
@@ -320,9 +320,12 @@ func TestRunPlanCreatesNamedSpecAndInitializesProgress(t *testing.T) {
 			"# User Specification",
 			"# Plan",
 			"builder-facing mutable state",
+			"one highest-leverage planning task",
 			"question tool",
 			"ask 1-3 focused clarifying questions",
 			"Planning mode only",
+			planningPromiseDone,
+			planningPromiseContinue,
 		)
 		if strings.Contains(prompt, "plan.md") {
 			t.Fatalf("planning prompt should not reference legacy plan.md: %q", prompt)
@@ -333,8 +336,18 @@ func TestRunPlanCreatesNamedSpecAndInitializesProgress(t *testing.T) {
 		if err != nil {
 			t.Fatalf("planning onCompleteHook: %v", err)
 		}
+		if ok {
+			t.Fatalf("planning onCompleteHook without promise ok = true, want false")
+		}
+		if !strings.Contains(inject, planningPromiseDone) || !strings.Contains(inject, planningPromiseContinue) {
+			t.Fatalf("planning inject = %q, want planning promise reminder", inject)
+		}
+		inject, ok, err = opts.OnCompleteHook(context.Background(), libagent.NewAssistantMessage("done\n"+planningPromiseDone, "", nil, time.Now()), nil)
+		if err != nil {
+			t.Fatalf("planning onCompleteHook corrected: %v", err)
+		}
 		if !ok || inject != "" {
-			t.Fatalf("planning onCompleteHook = %q, %v, want accept", inject, ok)
+			t.Fatalf("planning onCompleteHook corrected = %q, %v, want accept", inject, ok)
 		}
 		return promptResult{Stdout: "planned\n"}, nil
 	}
@@ -355,6 +368,75 @@ func TestRunPlanCreatesNamedSpecAndInitializesProgress(t *testing.T) {
 	}
 }
 
+func TestRunPlanContinuesUntilPlanningPromiseDone(t *testing.T) {
+	repo := t.TempDir()
+
+	origPrompt := runEphemeralPrompt
+	origSlug := generateSpecSlug
+	origAsk := askPlanningQuestion
+	t.Cleanup(func() {
+		runEphemeralPrompt = origPrompt
+		generateSpecSlug = origSlug
+		askPlanningQuestion = origAsk
+	})
+
+	generateSpecSlug = func() string { return "otter-thread-sage" }
+	askPlanningQuestion = func(context.Context, PlanningQuestionPrompt) (string, error) {
+		return "answer", nil
+	}
+
+	callCount := 0
+	runEphemeralPrompt = func(_ context.Context, repoRoot string, opts EphemeralPromptOptions, _, _ io.Writer) (promptResult, error) {
+		callCount++
+		if repoRoot != repo {
+			t.Fatalf("repoRoot = %q, want %q", repoRoot, repo)
+		}
+		if opts.OnCompleteHook == nil {
+			t.Fatalf("planning prompt should set onCompleteHook")
+		}
+		if len(opts.ExtraTools) != 1 || opts.ExtraTools[0].Info().Name != "question" {
+			t.Fatalf("expected planning question tool, got %#v", opts.ExtraTools)
+		}
+
+		writeSpecFile(t, filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md"), testSpecContent("Design the loop"))
+		switch callCount {
+		case 1:
+			writeProgressFile(t, filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt"), "Initial task breakdown\n- Audit command surface\n")
+			inject, ok, err := opts.OnCompleteHook(context.Background(), libagent.NewAssistantMessage("iteration one\n"+planningPromiseContinue, "", nil, time.Now()), nil)
+			if err != nil {
+				t.Fatalf("planning onCompleteHook(iteration one): %v", err)
+			}
+			if !ok || inject != "" {
+				t.Fatalf("planning onCompleteHook(iteration one) = %q, %v, want accept", inject, ok)
+			}
+		case 2:
+			writeProgressFile(t, filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt"), "Builder-ready task breakdown\n- Implement command surface\n- Verify help output\n")
+			inject, ok, err := opts.OnCompleteHook(context.Background(), libagent.NewAssistantMessage("iteration two\n"+planningPromiseDone, "", nil, time.Now()), nil)
+			if err != nil {
+				t.Fatalf("planning onCompleteHook(iteration two): %v", err)
+			}
+			if !ok || inject != "" {
+				t.Fatalf("planning onCompleteHook(iteration two) = %q, %v, want accept", inject, ok)
+			}
+		default:
+			t.Fatalf("unexpected planning iteration %d", callCount)
+		}
+		return promptResult{Stdout: "planned\n"}, nil
+	}
+
+	if err := Run(context.Background(), Options{
+		PlanningRequest: "design the loop",
+		Mode:            ModePlan,
+		RepoRoot:        repo,
+	}); err != nil {
+		t.Fatalf("Run(plan loop): %v", err)
+	}
+
+	if callCount != 2 {
+		t.Fatalf("callCount = %d, want 2", callCount)
+	}
+}
+
 func TestPlanningArtifactsChangedHookReinjectsWhenSpecOrProgressDidNotChange(t *testing.T) {
 	repo := t.TempDir()
 	specPath := filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md")
@@ -372,8 +454,8 @@ func TestPlanningArtifactsChangedHookReinjectsWhenSpecOrProgressDidNotChange(t *
 	if ok {
 		t.Fatalf("hook unchanged ok = true, want false")
 	}
-	if !strings.Contains(inject, "bidirectionally create or revise the durable Ralph specification with the user") {
-		t.Fatalf("inject = %q, want bidirectional reminder", inject)
+	if !strings.Contains(inject, "did not leave any durable change behind") {
+		t.Fatalf("inject = %q, want durable-change reminder", inject)
 	}
 	if !strings.Contains(inject, ".raijin/ralph/spec-otter-thread-sage.md") {
 		t.Fatalf("inject = %q, want spec path", inject)
@@ -382,13 +464,10 @@ func TestPlanningArtifactsChangedHookReinjectsWhenSpecOrProgressDidNotChange(t *
 	writeSpecFile(t, specPath, testSpecContent("Updated spec"))
 	inject, ok, err = hook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
 	if err != nil {
-		t.Fatalf("hook unchanged progress: %v", err)
+		t.Fatalf("hook changed spec: %v", err)
 	}
-	if ok {
-		t.Fatalf("hook unchanged progress ok = true, want false")
-	}
-	if !strings.Contains(inject, ".raijin/ralph/progress-otter-thread-sage.txt") {
-		t.Fatalf("inject = %q, want progress path", inject)
+	if !ok || inject != "" {
+		t.Fatalf("hook changed spec = %q, %v, want accept", inject, ok)
 	}
 
 	writeProgressFile(t, progressPath, "Initialized builder tasks\n- First implementation slice\n")
@@ -398,6 +477,43 @@ func TestPlanningArtifactsChangedHookReinjectsWhenSpecOrProgressDidNotChange(t *
 	}
 	if !ok || inject != "" {
 		t.Fatalf("hook changed = %q, %v, want accept", inject, ok)
+	}
+}
+
+func TestPlanningPromiseHookRequiresPlanningPromiseMarker(t *testing.T) {
+	repo := t.TempDir()
+	specPath := filepath.Join(repo, ".raijin", "ralph", "spec-otter-thread-sage.md")
+	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
+	writeSpecFile(t, specPath, testSpecContent("Initial spec"))
+	writeProgressFile(t, progressPath, "Initial tasks\n- First step\n")
+
+	initialSpec := readOptionalFile(specPath)
+	initialProgress := readOptionalFile(progressPath)
+	writeSpecFile(t, specPath, testSpecContent("Updated spec"))
+	writeProgressFile(t, progressPath, "Builder-ready tasks\n- Implement it\n")
+
+	accepted := ""
+	hook := planningPromiseHook(repo, specPath, progressPath, initialSpec, initialProgress, &accepted)
+	inject, ok, err := hook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
+	if err != nil {
+		t.Fatalf("hook missing promise: %v", err)
+	}
+	if ok {
+		t.Fatalf("hook missing promise ok = true, want false")
+	}
+	if !strings.Contains(inject, planningPromiseDone) || !strings.Contains(inject, planningPromiseContinue) {
+		t.Fatalf("inject = %q, want planning promise reminder", inject)
+	}
+
+	inject, ok, err = hook(context.Background(), libagent.NewAssistantMessage("done\n"+planningPromiseContinue, "", nil, time.Now()), nil)
+	if err != nil {
+		t.Fatalf("hook planning continue: %v", err)
+	}
+	if !ok || inject != "" {
+		t.Fatalf("hook planning continue = %q, %v, want accept", inject, ok)
+	}
+	if accepted != planningPromiseContinue {
+		t.Fatalf("accepted = %q, want %q", accepted, planningPromiseContinue)
 	}
 }
 

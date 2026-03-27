@@ -40,14 +40,10 @@ func runPlanningQuestionPrompt(ctx context.Context, prompt ralph.PlanningQuestio
 			return "", errors.New("planning question option label is empty")
 		}
 		key := fmt.Sprintf("option-%d", idx)
-		preview := strings.TrimSpace(option.Description)
-		if preview == "" {
-			preview = "Select this answer."
-		}
 		items = append(items, fzfPickerItem{
 			key:     key,
 			label:   label,
-			preview: preview,
+			preview: planningQuestionOptionPreview(question, label, option.Description),
 		})
 		keyToAnswer[key] = label
 	}
@@ -87,7 +83,7 @@ func defaultPickPlanningQuestionChoice(question string, items []fzfPickerItem) (
 	items = append(items, fzfPickerItem{
 		key:     planningQuestionOtherKey,
 		label:   "Other",
-		preview: "Provide a free-form answer inline.",
+		preview: planningQuestionOtherPreview(question),
 	})
 	chosenKey, action, err := pickWithEmbeddedFZFConfig(items, "", false, true, "", "default", shellinit.RunFZFOptions{
 		Header:        question,
@@ -103,6 +99,33 @@ func defaultPickPlanningQuestionChoice(question string, items []fzfPickerItem) (
 		return "", context.Canceled
 	}
 	return chosenKey, nil
+}
+
+func planningQuestionOptionPreview(question, label, description string) string {
+	var b strings.Builder
+	b.WriteString("Question:\n")
+	b.WriteString(strings.TrimSpace(question))
+	b.WriteString("\n\n")
+	b.WriteString("Answer:\n")
+	b.WriteString(strings.TrimSpace(label))
+
+	description = strings.TrimSpace(description)
+	if description == "" {
+		b.WriteString("\n\nSelect this answer.")
+		return b.String()
+	}
+
+	b.WriteString("\n\nDetails:\n")
+	b.WriteString(description)
+	return b.String()
+}
+
+func planningQuestionOtherPreview(question string) string {
+	var b strings.Builder
+	b.WriteString("Question:\n")
+	b.WriteString(strings.TrimSpace(question))
+	b.WriteString("\n\nAnswer:\nOther\n\nType a free-form answer inline.")
+	return b.String()
 }
 
 func withInteractiveQuestionDialog(fn func() error) error {

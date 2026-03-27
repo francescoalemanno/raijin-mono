@@ -797,6 +797,15 @@ func TestRunPlanningQuestionPromptSelectsOptionLabel(t *testing.T) {
 		if items[0].label != "CLI-first" || items[1].label != "Library-first" {
 			t.Fatalf("unexpected items = %#v", items)
 		}
+		if !strings.Contains(items[0].preview, "Question:\nWhich baseline matters?") {
+			t.Fatalf("preview missing question: %q", items[0].preview)
+		}
+		if !strings.Contains(items[0].preview, "Answer:\nCLI-first") {
+			t.Fatalf("preview missing answer label: %q", items[0].preview)
+		}
+		if !strings.Contains(items[0].preview, "Details:\nPrefer the CLI.") {
+			t.Fatalf("preview missing description: %q", items[0].preview)
+		}
 		return items[1].key, nil
 	}
 	readPlanningInlineAnswer = func(string) (string, error) {
@@ -900,20 +909,63 @@ func TestDefaultPickPlanningQuestionChoiceUsesQuestionHeaderAndFullscreen(t *tes
 		if !strings.Contains(text, "CLI-first") || !strings.Contains(text, "Other") {
 			t.Fatalf("stdin missing picker items: %q", text)
 		}
-		return shellinit.RunFZFResult{Code: 0, Selected: []string{"CLI-first\tPrefer the CLI."}}, nil
+		selected := ""
+		for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+			if strings.HasPrefix(line, "CLI-first\t") {
+				selected = line
+				break
+			}
+		}
+		if !strings.Contains(selected, "Question:\\nWhich baseline matters?") {
+			t.Fatalf("selected line missing encoded question preview: %q", selected)
+		}
+		if !strings.Contains(selected, "Answer:\\nCLI-first") {
+			t.Fatalf("selected line missing encoded answer preview: %q", selected)
+		}
+		return shellinit.RunFZFResult{Code: 0, Selected: []string{selected}}, nil
 	}
 	canUseEmbeddedFZFForTest = func() bool { return true }
 
 	chosen, err := defaultPickPlanningQuestionChoice("Which baseline matters?", []fzfPickerItem{{
 		key:     "option-0",
 		label:   "CLI-first",
-		preview: "Prefer the CLI.",
+		preview: planningQuestionOptionPreview("Which baseline matters?", "CLI-first", "Prefer the CLI."),
 	}})
 	if err != nil {
 		t.Fatalf("defaultPickPlanningQuestionChoice: %v", err)
 	}
 	if chosen != "option-0" {
 		t.Fatalf("chosen = %q, want option-0", chosen)
+	}
+}
+
+func TestPlanningQuestionOptionPreviewIncludesQuestionAnswerAndDetails(t *testing.T) {
+	t.Parallel()
+
+	got := planningQuestionOptionPreview("Which baseline matters?", "CLI-first", "Prefer the CLI.")
+	want := "Question:\nWhich baseline matters?\n\nAnswer:\nCLI-first\n\nDetails:\nPrefer the CLI."
+	if got != want {
+		t.Fatalf("planningQuestionOptionPreview(...) = %q, want %q", got, want)
+	}
+}
+
+func TestPlanningQuestionOptionPreviewFallsBackWhenDescriptionMissing(t *testing.T) {
+	t.Parallel()
+
+	got := planningQuestionOptionPreview("Which baseline matters?", "CLI-first", "")
+	want := "Question:\nWhich baseline matters?\n\nAnswer:\nCLI-first\n\nSelect this answer."
+	if got != want {
+		t.Fatalf("planningQuestionOptionPreview(...) = %q, want %q", got, want)
+	}
+}
+
+func TestPlanningQuestionOtherPreviewIncludesQuestionAndFreeFormHint(t *testing.T) {
+	t.Parallel()
+
+	got := planningQuestionOtherPreview("What environment matters most?")
+	want := "Question:\nWhat environment matters most?\n\nAnswer:\nOther\n\nType a free-form answer inline."
+	if got != want {
+		t.Fatalf("planningQuestionOtherPreview(...) = %q, want %q", got, want)
 	}
 }
 

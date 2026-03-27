@@ -26,10 +26,15 @@ func newLoopRenderer(w io.Writer, repoRoot string, pair SpecPair) loopRenderer {
 	return loopRenderer{w: w, repoRoot: repoRoot, pair: pair}
 }
 
-func (r loopRenderer) planning(request string) {
+func (r loopRenderer) planningIteration(request string, iteration, maxIterations int) {
+	total := fmt.Sprintf("%d", maxIterations)
+	if maxIterations <= 0 {
+		total = "∞"
+	}
 	r.panel("✦", "Ralph planning", []string{
 		r.field("Spec", relPath(r.repoRoot, r.pair.SpecPath)),
 		r.field("Progress", relPath(r.repoRoot, r.pair.ProgressPath)),
+		r.field("Iteration", fmt.Sprintf("%d/%s", iteration, total)),
 		r.field("Request", summarizeLoopText(request, 88)),
 	}, "Updating the durable plan before implementation.")
 }
@@ -50,11 +55,24 @@ func (r loopRenderer) continuing(iteration int) {
 	r.status(ansiBlue, "→", fmt.Sprintf("Ralph continuing after iteration %d", iteration), "The builder response requested another pass.")
 }
 
+func (r loopRenderer) planningContinuing(iteration int) {
+	r.status(ansiBlue, "→", fmt.Sprintf("Ralph planning continues after iteration %d", iteration), "The planner requested another fresh pass before builder handoff.")
+}
+
 func (r loopRenderer) retry(iteration int, reason string) {
 	message := fmt.Sprintf("Ralph will retry after iteration %d", iteration)
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "The builder response still needs a valid promise marker."
+	}
+	r.status(ansiYellow, "↺", message, summarizeLoopText(reason, 120))
+}
+
+func (r loopRenderer) planningRetry(iteration int, reason string) {
+	message := fmt.Sprintf("Ralph planning will retry after iteration %d", iteration)
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "The planning response still needs a valid planning promise marker."
 	}
 	r.status(ansiYellow, "↺", message, summarizeLoopText(reason, 120))
 }
@@ -71,16 +89,24 @@ func (r loopRenderer) completed(iteration int) {
 	r.status(ansiGreen, "✓", "Ralph completed successfully", detail)
 }
 
+func (r loopRenderer) planningCompleted(iteration int) {
+	detail := "The planning response marked this spec as builder-ready."
+	if iteration > 0 {
+		detail = fmt.Sprintf("Planning converged in %d iteration", iteration)
+		if iteration != 1 {
+			detail += "s"
+		}
+		detail += "."
+	}
+	r.status(ansiGreen, "✓", "Ralph planning updated the artifacts", detail)
+}
+
 func (r loopRenderer) interrupted(mode string) {
 	label := "Ralph interrupted"
 	if mode != "" {
 		label = fmt.Sprintf("Ralph %s interrupted", strings.TrimSpace(mode))
 	}
 	r.status(ansiYellow, "●", label, "No further changes were requested.")
-}
-
-func (r loopRenderer) planningReady() {
-	r.status(ansiGreen, "✓", "Ralph planning updated the artifacts", fmt.Sprintf("Ready to continue from %s.", relPath(r.repoRoot, r.pair.SpecPath)))
 }
 
 func (r loopRenderer) panel(icon, title string, body []string, footer string) {
