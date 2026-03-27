@@ -339,14 +339,17 @@ func runAutomatic(ctx context.Context, repoRoot string, pair SpecPair, maxIterat
 	if runEphemeralPrompt == nil {
 		return errors.New("ralph: no ephemeral runner registered")
 	}
+	renderer := newLoopRenderer(os.Stderr, repoRoot, pair)
 
 	for iteration := 1; ; iteration++ {
 		if err := ctx.Err(); err != nil {
+			renderer.interrupted("builder")
 			return nil
 		}
 		if iteration > maxIterations {
 			return ErrMaxIterationsReached
 		}
+		renderer.iteration(iteration, maxIterations)
 		if err := clearPromiseLines(pair.ProgressPath); err != nil {
 			return err
 		}
@@ -357,6 +360,7 @@ func runAutomatic(ctx context.Context, repoRoot string, pair SpecPair, maxIterat
 			OnCompleteHook: onCompleteHook,
 		}, os.Stdout, os.Stderr)
 		if runErr != nil {
+			renderer.retry(iteration, summarizePromptFailure("implementation iteration", result, runErr))
 			if noteErr := writeControllerNote(pair.ProgressPath, summarizePromptFailure("implementation iteration", result, runErr)); noteErr != nil {
 				return noteErr
 			}
@@ -365,15 +369,17 @@ func runAutomatic(ctx context.Context, repoRoot string, pair SpecPair, maxIterat
 
 		promise, err := readProgressPromise(pair.ProgressPath)
 		if err != nil {
+			renderer.retry(iteration, err.Error())
 			if noteErr := writeControllerNote(pair.ProgressPath, fmt.Sprintf("Controller note: Ralph could not validate %s after iteration %d: %v", relPath(repoRoot, pair.ProgressPath), iteration, err)); noteErr != nil {
 				return noteErr
 			}
 			continue
 		}
 		if promise == promiseDone {
-			fmt.Fprintln(os.Stderr, "Ralph completed successfully")
+			renderer.completed(iteration)
 			return nil
 		}
+		renderer.continuing(iteration)
 	}
 }
 
@@ -387,6 +393,8 @@ func runPlanning(ctx context.Context, repoRoot string, pair SpecPair, planningRe
 	if runEphemeralPrompt == nil {
 		return errors.New("ralph: no ephemeral runner registered")
 	}
+	renderer := newLoopRenderer(os.Stderr, repoRoot, pair)
+	renderer.planning(planningRequest)
 	questionTool, err := newPlanningQuestionTool()
 	if err != nil {
 		return err
@@ -401,7 +409,7 @@ func runPlanning(ctx context.Context, repoRoot string, pair SpecPair, planningRe
 	}, os.Stdout, os.Stderr)
 	if runErr != nil {
 		if errors.Is(runErr, context.Canceled) {
-			fmt.Fprintln(os.Stderr, "Ralph planning interrupted")
+			renderer.interrupted("planning")
 			return nil
 		}
 		return runErr
@@ -414,6 +422,7 @@ func runPlanning(ctx context.Context, repoRoot string, pair SpecPair, planningRe
 	if progress == "" {
 		return fmt.Errorf("ralph planning did not initialize %s", relPath(repoRoot, pair.ProgressPath))
 	}
+	renderer.planningReady()
 	_ = result
 	return nil
 }
@@ -502,57 +511,38 @@ func resolveSnapshotPair(ctx context.Context, repoRoot, specTarget string) (Spec
 }
 
 func buildPlanningPrompt(repoRoot string, pair SpecPair, planningRequest string) string {
-	return fmt.Sprintf(strings.TrimSpace(`
-You are running inside a Ralph planning iteration for this repository.
+	specPath := relPath(repoRoot, pair.SpecPath)
+	progressPath := relPath(repoRoot, pair.ProgressPath)
+	request := renderPromptBlock(planningRequest)
 
-This is a fresh ephemeral run. The durable user/planner-owned specification and the planner-initialized progress file live on disk.
-
-Read these files first if they exist:
-- %s
-- %s
-- AGENTS.md
-- specs/
-- README.md
-- existing implementation files relevant to the request
-
-Create or revise %s in place and create or revise %s in place.
-
-Keep %s as the planner-owned durable spec with these sections:
-
-# Goal
-<durable project goal>
-
-# User Specification
-<durable user requirements, constraints, and exclusions>
-
-# Plan
-<durable implementation plan or checklist>
-
-Requirements:
-1. Treat %s as planner-owned durable state. Keep it progress-free and revise it surgically when it already exists.
-2. Treat %s as builder-facing mutable state. Keep it limited to concrete next tasks, ordering, remaining work, and short notes that still matter.
-3. Keep both files technical, concise, and limited to durable facts that are already established.
-4. If uncertainty would materially change the goal, scope, constraints, acceptance criteria, or sequencing, use the question tool and ask 1-3 focused clarifying questions before proceeding. Free-form answers are allowed.
-5. Planning mode only. Do not edit implementation files or run builds, tests, migrations, or other verification commands.
-6. Do not leave %s or %s in %s.
-7. The builder Ralph will treat %s as read-only durable input and continue execution from %s.
-
-New planning request from /plan:
-%s
-`),
-		relPath(repoRoot, pair.SpecPath),     // read spec
-		relPath(repoRoot, pair.ProgressPath), // read progress
-		relPath(repoRoot, pair.SpecPath),     // task spec
-		relPath(repoRoot, pair.ProgressPath), // task progress
-		relPath(repoRoot, pair.SpecPath),     // keep spec
-		relPath(repoRoot, pair.SpecPath),     // req 1
-		relPath(repoRoot, pair.ProgressPath), // req 2
-		promiseDone,                          // req 6 first promise
-		promiseContinue,                      // req 6 second promise
-		relPath(repoRoot, pair.ProgressPath), // req 6 path
-		relPath(repoRoot, pair.SpecPath),     // req 7 spec
-		relPath(repoRoot, pair.ProgressPath), // req 7 progress
-		renderPromptBlock(planningRequest),   // request
+	return strings.TrimSpace(
+		"\nYou are running inside a Ralph planning iteration for this repository.\n\n" +
+			"This is a fresh ephemeral run. The durable user/planner-owned specification and the planner-initialized progress file live on disk.\n\n" +
+			"Read these files first if they exist:\n" +
+			"- " + specPath + "\n" +
+			"- " + progressPath + "\n" +
+			"- AGENTS.md\n" +
+			"- specs/\n" +
+			"- README.md\n" +
+			"- existing implementation files relevant to the request\n\n" +
+			"Create or revise " + specPath + " in place and create or revise " + progressPath + " in place.\n\n" +
+			"Keep " + specPath + " as the planner-owned durable spec with these sections:\n\n" +
+			"# Goal\n" +
+			"<durable project goal>\n\n" +
+			"# User Specification\n" +
+			"<durable user requirements, constraints, and exclusions>\n\n" +
+			"# Plan\n" +
+			"<durable implementation plan or checklist>\n\n" +
+			"Requirements:\n" +
+			"1. Treat " + specPath + " as planner-owned durable state. Keep it progress-free and revise it surgically when it already exists.\n" +
+			"2. Treat " + progressPath + " as builder-facing mutable state. Keep it limited to concrete next tasks, ordering, remaining work, and short notes that still matter.\n" +
+			"3. Keep both files technical, concise, and limited to durable facts that are already established.\n" +
+			"4. If uncertainty would materially change the goal, scope, constraints, acceptance criteria, or sequencing, use the question tool and ask 1-3 focused clarifying questions before proceeding. Free-form answers are allowed.\n" +
+			"5. Planning mode only. Do not edit implementation files or run builds, tests, migrations, or other verification commands.\n" +
+			"6. Do not leave " + promiseDone + " or " + promiseContinue + " in " + progressPath + ".\n" +
+			"7. The builder Ralph will treat " + specPath + " as read-only durable input and continue execution from " + progressPath + ".\n\n" +
+			"New planning request from /plan:\n" +
+			request + "\n",
 	)
 }
 
@@ -628,41 +618,28 @@ func planningArtifactsChangedHook(repoRoot, specPath, progressPath, initialSpec,
 }
 
 func buildImplementationPrompt(repoRoot string, pair SpecPair) string {
-	return fmt.Sprintf(strings.TrimSpace(`
-You are running inside a Ralph builder iteration for this repository.
+	specPath := relPath(repoRoot, pair.SpecPath)
+	progressPath := relPath(repoRoot, pair.ProgressPath)
 
-This is a fresh ephemeral run. The durable planner specification and your mutable progress file live on disk.
-
-Read these files first if they exist:
-- %s
-- %s
-- AGENTS.md
-- relevant source files, tests, and specs
-
-Rules:
-1. Treat %s as read-only durable input. Do not modify it.
-2. Use %s as your mutable working state. Preserve still-relevant task breakdown, remaining work, and controller notes. If it does not exist yet, create it before finishing.
-3. At the start of the iteration, choose one concrete highest-leverage open task from %s.
-4. Do only that one task this iteration. Prefer foundational work that unlocks or de-risks later work.
-5. Run the relevant checks for that work before finishing.
-6. Update %s to reflect what changed, what remains, and any short notes that still matter.
-7. End %s with exactly one whole-line promise:
-   - %s
-   - %s
-8. Write %s only if the entire current specification is complete and verified. Otherwise write %s.
-`),
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.ProgressPath),
-		relPath(repoRoot, pair.SpecPath),
-		relPath(repoRoot, pair.ProgressPath),
-		relPath(repoRoot, pair.ProgressPath),
-		relPath(repoRoot, pair.ProgressPath),
-		relPath(repoRoot, pair.ProgressPath),
-		relPath(repoRoot, pair.ProgressPath),
-		promiseDone,
-		promiseContinue,
-		promiseDone,
-		promiseContinue,
+	return strings.TrimSpace(
+		"\nYou are running inside a Ralph builder iteration for this repository.\n\n" +
+			"This is a fresh ephemeral run. The durable planner specification and your mutable progress file live on disk.\n\n" +
+			"Read these files first if they exist:\n" +
+			"- " + specPath + "\n" +
+			"- " + progressPath + "\n" +
+			"- AGENTS.md\n" +
+			"- relevant source files, tests, and specs\n\n" +
+			"Rules:\n" +
+			"1. Treat " + specPath + " as read-only durable input. Do not modify it.\n" +
+			"2. Use " + progressPath + " as your mutable working state. Preserve still-relevant task breakdown, remaining work, and controller notes. If it does not exist yet, create it before finishing.\n" +
+			"3. At the start of the iteration, choose one concrete highest-leverage open task from " + progressPath + ".\n" +
+			"4. Do only that one task this iteration. Prefer foundational work that unlocks or de-risks later work.\n" +
+			"5. Run the relevant checks for that work before finishing.\n" +
+			"6. Update " + progressPath + " to reflect what changed, what remains, and any short notes that still matter.\n" +
+			"7. End " + progressPath + " with exactly one whole-line promise:\n" +
+			"   - " + promiseDone + "\n" +
+			"   - " + promiseContinue + "\n" +
+			"8. Write " + promiseDone + " only if the entire current specification is complete and verified. Otherwise write " + promiseContinue + ".\n",
 	)
 }
 
@@ -675,14 +652,11 @@ func progressPromiseHook(progressPath string) libagent.OnCompleteHook {
 		if err != nil && !os.IsNotExist(err) && !looksLikePromiseValidationError(err) {
 			return "", false, err
 		}
-		return fmt.Sprintf(
-			"Before ending this builder iteration, reopen %s and update it coherently with the builder rules. Preserve still-relevant progress, remaining work, and controller notes. Add exactly one whole-line promise: %s or %s. Write %s only if the entire current specification is complete, verified, and there is no important remaining work. Finishing only the current task is not enough for %s. Then respond again.",
-			progressPath,
-			promiseDone,
-			promiseContinue,
-			promiseDone,
-			promiseDone,
-		), false, nil
+		return "Before ending this builder iteration, reopen " + progressPath +
+			" and update it coherently with the builder rules. Preserve still-relevant progress, remaining work, and controller notes. " +
+			"Add exactly one whole-line promise: " + promiseDone + " or " + promiseContinue + ". " +
+			"Write " + promiseDone + " only if the entire current specification is complete, verified, and there is no important remaining work. " +
+			"Finishing only the current task is not enough for " + promiseDone + ". Then respond again.", false, nil
 	}
 }
 
