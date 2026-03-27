@@ -29,6 +29,7 @@ func loadSkillArtifacts() ([]artifacts.Item, error) {
 		func(s Skill) string { return s.Name },
 		loadSkillsFromPath("embedded://skills", artifacts.SourceEmbedded),
 		loadSkillsFromPath(paths.UserSkillsDir(), artifacts.SourceUser),
+		loadSkillsFromPath(paths.LegacyUserSkillsDir(), artifacts.SourceUser),
 		loadSkillsFromPath(filepath.Join(".", paths.ProjectSkillsDirRel), artifacts.SourceProject),
 	)
 	items := make([]artifacts.Item, 0, len(merged))

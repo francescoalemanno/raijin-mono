@@ -51,6 +51,15 @@ func UserSkillsDir() string {
 	return RaijinPath("agents", "skills")
 }
 
+// LegacyUserSkillsDir returns the legacy path to user skills ($HOME/.agents/skills).
+func LegacyUserSkillsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".agents", "skills")
+}
+
 // UserPromptsDir returns the path to the user prompts directory.
 func UserPromptsDir() string {
 	return RaijinPath("agents", "prompts")
