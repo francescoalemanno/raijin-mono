@@ -407,7 +407,7 @@ func (a *Agent) runLoop(ctx context.Context, prompts []Message) error {
 	mediaSupport := mediaSupportFromModelInfo(runtimeModel.ModelInfo)
 	tools := AdaptTools(a.tools)
 	systemPrompt := a.systemPrompt
-	transformContext := composeTransformContext(a.transformContext, runtimeMediaTransform(mediaSupport))
+	transformContext := composeTransformContext(a.transformContext, runtimeMediaTransform(mediaSupport, runtimeModel.EffectiveMaxImages()))
 	done := make(chan struct{})
 	runCtx, cancel := context.WithCancel(ctx)
 	a.mu.Lock()

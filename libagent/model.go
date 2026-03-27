@@ -10,6 +10,7 @@ import (
 const (
 	DefaultMaxTokens     = 32000
 	DefaultContextWindow = 200000
+	DefaultMaxImages     = 20
 )
 
 // LanguageModel re-exports the runtime model interface so packages outside
@@ -37,6 +38,10 @@ type ModelConfig struct {
 	// options when BuildProviderOptions is called.
 	ProviderOptions map[string]any `json:"provider_options,omitempty" toml:"provider_options,omitempty"`
 
+	// MaxImages caps how many image attachments from recent history are kept in
+	// runtime context for this model. Nil uses the default runtime budget.
+	MaxImages *int `json:"max_images,omitempty" toml:"max_images,omitempty"`
+
 	MaxTokens     int64    `json:"max_tokens,omitempty" toml:"max_tokens,omitempty"`
 	ContextWindow int64    `json:"context_window,omitempty" toml:"context_window,omitempty"`
 	Temperature   *float64 `json:"temperature,omitempty" toml:"temperature,omitempty"`
@@ -47,7 +52,23 @@ type ModelConfig struct {
 // Normalize returns a copy of ModelConfig with defaults applied.
 func (m ModelConfig) Normalize() ModelConfig {
 	m.ThinkingLevel = NormalizeThinkingLevel(m.ThinkingLevel)
+	if m.MaxImages != nil {
+		value := *m.MaxImages
+		if value < 0 {
+			m.MaxImages = nil
+		} else {
+			m.MaxImages = &value
+		}
+	}
 	return m
+}
+
+// EffectiveMaxImages returns the configured image attachment budget.
+func (m ModelConfig) EffectiveMaxImages() int {
+	if m.MaxImages == nil || *m.MaxImages < 0 {
+		return DefaultMaxImages
+	}
+	return *m.MaxImages
 }
 
 // RuntimeModel bundles a resolved language model with its config and catalog metadata.
@@ -83,6 +104,11 @@ func (r RuntimeModel) EffectiveContextWindow() int64 {
 		return r.ModelInfo.ContextWindow
 	}
 	return r.ModelCfg.ContextWindow
+}
+
+// EffectiveMaxImages returns the configured image attachment budget for runtime context.
+func (r RuntimeModel) EffectiveMaxImages() int {
+	return r.ModelCfg.EffectiveMaxImages()
 }
 
 // MediaSupport reports runtime media capability metadata derived from catalog model info.

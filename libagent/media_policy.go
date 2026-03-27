@@ -5,6 +5,10 @@ import (
 	"strings"
 )
 
+const (
+	excisedAttachmentText = "[ATTACHMENT EXCISED, if needed re-read it to see it again]"
+)
+
 func mediaSupportFromModelInfo(info ModelInfo) MediaSupport {
 	known := len(info.Capabilities) > 0 || info.SupportsImages
 	if !known {
@@ -16,12 +20,13 @@ func mediaSupportFromModelInfo(info ModelInfo) MediaSupport {
 	}
 }
 
-func runtimeMediaTransform(support MediaSupport) TransformContextFn {
-	if !support.Known || support.Enabled {
-		return nil
-	}
+func runtimeMediaTransform(support MediaSupport, maxImages int) TransformContextFn {
 	return func(_ context.Context, messages []Message) ([]Message, error) {
-		return stripUnsupportedMedia(messages), nil
+		out := limitImageAttachments(messages, maxImages)
+		if support.Known && !support.Enabled {
+			out = stripUnsupportedMedia(out)
+		}
+		return out, nil
 	}
 }
 
@@ -48,7 +53,8 @@ func stripUnsupportedMedia(messages []Message) []Message {
 		case *UserMessage:
 			filtered := make([]FilePart, 0, len(m.Files))
 			for _, f := range m.Files {
-				if strings.HasPrefix(f.MediaType, "image/") || strings.HasPrefix(f.MediaType, "video/") {
+				mediaType := strings.ToLower(strings.TrimSpace(f.MediaType))
+				if strings.HasPrefix(mediaType, "image/") || strings.HasPrefix(mediaType, "video/") {
 					continue
 				}
 				filtered = append(filtered, f)
@@ -75,6 +81,67 @@ func stripUnsupportedMedia(messages []Message) []Message {
 		default:
 			out = append(out, msg)
 		}
+	}
+	return out
+}
+
+func limitImageAttachments(messages []Message, maxImages int) []Message {
+	if maxImages < 0 || len(messages) == 0 {
+		return messages
+	}
+
+	remaining := maxImages
+	out := make([]Message, len(messages))
+	changed := false
+
+	for msgIdx := len(messages) - 1; msgIdx >= 0; msgIdx-- {
+		msg := messages[msgIdx]
+		um, ok := msg.(*UserMessage)
+		if !ok || len(um.Files) == 0 {
+			out[msgIdx] = msg
+			continue
+		}
+
+		keep := make([]bool, len(um.Files))
+		excised := 0
+		for fileIdx := len(um.Files) - 1; fileIdx >= 0; fileIdx-- {
+			f := um.Files[fileIdx]
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.MediaType)), "image/") {
+				keep[fileIdx] = true
+				continue
+			}
+			if remaining > 0 {
+				keep[fileIdx] = true
+				remaining--
+				continue
+			}
+			excised++
+		}
+		if excised == 0 {
+			out[msgIdx] = msg
+			continue
+		}
+
+		clone := CloneMessage(um).(*UserMessage)
+		filtered := make([]FilePart, 0, len(clone.Files)-excised)
+		for fileIdx, f := range clone.Files {
+			if keep[fileIdx] {
+				filtered = append(filtered, f)
+			}
+		}
+		clone.Files = filtered
+		excisedText := strings.TrimRight(strings.Repeat(excisedAttachmentText+"\n", excised), "\n")
+		if strings.TrimSpace(clone.Content) == "" {
+			clone.Content = excisedText
+		} else {
+			clone.Content = strings.TrimRight(clone.Content, "\n") + "\n" + excisedText
+		}
+		out[msgIdx] = clone
+		changed = true
+	}
+
+	if !changed {
+		return messages
 	}
 	return out
 }
