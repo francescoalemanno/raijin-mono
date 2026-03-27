@@ -112,8 +112,8 @@ var syntheticGeneratedModels = []ModelInfo{
 		DefaultMaxTokens: 65536,
 		CanReason:        true,
 		SupportsImages:   true,
-		CostPer1MIn:      0.6,
-		CostPer1MOut:     3,
+		CostPer1MIn:      0.45,
+		CostPer1MOut:     3.4,
 	},
 	{
 		ProviderID:       SyntheticProviderID,
@@ -123,8 +123,8 @@ var syntheticGeneratedModels = []ModelInfo{
 		DefaultMaxTokens: 65536,
 		CanReason:        true,
 		SupportsImages:   true,
-		CostPer1MIn:      0.6,
-		CostPer1MOut:     3,
+		CostPer1MIn:      0.45,
+		CostPer1MOut:     3.4,
 	},
 	{
 		ProviderID:       SyntheticProviderID,
