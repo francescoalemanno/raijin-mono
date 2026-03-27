@@ -42,6 +42,8 @@ No MCP. No hidden sub-agents. No permission popups.
 - Compact long history with `/compact` or let Raijin auto-compact once the session reaches 60% estimated context fill or 150k estimated tokens, targeting roughly 20% usage after compaction
 - Use `/plan` as the guided Ralph entrypoint for creating, reviewing, revising, and running repo-local plans in `.raijin/ralph/`
 
+Ralph keeps durable specs and progress files under `.raijin/ralph/`. Builder iterations keep progress promise-free while active and report completion in the final response with `<promise>DONE</promise>` or `<promise>CONTINUE</promise>`; the controller persists accepted `DONE` markers for the dashboard.
+
 Raijin runs in one-shot CLI mode and supports prompt features such as attachments, skills, shell substitution, and templates.
 
 Use `raijin --ephemeral "prompt"` to run a one-shot prompt without loading or writing session history.
