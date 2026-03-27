@@ -447,6 +447,7 @@ const (
 type planSpecListEntry struct {
 	Pair    ralph.SpecPair
 	Status  ralph.PlanningStatus
+	SortKey string
 	Label   string
 	Preview string
 }
@@ -647,40 +648,40 @@ func defaultRunPlanRootPicker(hasSpecs bool) (planRootAction, bool, error) {
 	items := []fzfPickerItem{
 		{
 			key:     string(planRootActionCreate),
-			label:   "Create new spec",
-			preview: "Create a brand new Ralph spec from a planning request.\n\nThis allocates a new spec file, runs planning mode, and then returns to a scoped Ralph menu for that new spec.",
+			label:   "✦ Create new spec",
+			preview: "Create a brand new Ralph spec from a planning request.\n\nThis allocates a new spec file, runs planning mode, and then returns to the scoped Ralph view for that new spec.",
 		},
 	}
 	if hasSpecs {
 		items = append([]fzfPickerItem{
 			{
 				key:     string(planRootActionContinue),
-				label:   "Continue existing spec",
-				preview: "Select an existing spec, inspect its full spec/progress preview, and then choose the next action from a spec-scoped Ralph menu.\n\nThis is the primary entrypoint for ongoing multi-plan work.",
+				label:   "↻ Continue spec",
+				preview: "Select an existing spec, inspect its structured spec/progress preview, and then choose the next action from the scoped Ralph menu.\n\nThis is the primary entrypoint for ongoing multi-plan work.",
 			},
 			{
 				key:     string(planRootActionEdit),
-				label:   "Edit spec",
+				label:   "✎ Edit spec",
 				preview: "Select an existing spec and open it directly in your editor.\n\nThis is the manual alternative to AI-guided revise, and returns to a scoped Ralph menu for the edited spec.",
 			},
 			{
 				key:     string(planRootActionReview),
-				label:   "Review spec",
+				label:   "◱ Review spec",
 				preview: "Select an existing spec and render its current spec and progress files without running Ralph.",
 			},
 			{
 				key:     string(planRootActionRevise),
-				label:   "Revise spec",
+				label:   "⟳ Revise spec",
 				preview: "Select an existing spec, provide a planning request, and revise that spec in place.",
 			},
 			{
 				key:     string(planRootActionRun),
-				label:   "Run spec",
+				label:   "▶ Run spec",
 				preview: "Select an existing spec and immediately run Ralph builder mode for it.",
 			},
 		}, items...)
 	}
-	chosen, ok, err := pickPlanFZFKey(items, string(planRootActionContinue), "Ralph")
+	chosen, ok, err := pickPlanFZFKey(items, string(planRootActionContinue), "Ralph Dashboard")
 	return planRootAction(chosen), ok, err
 }
 
@@ -693,32 +694,32 @@ func defaultRunPlanScopedActionPicker(pair ralph.SpecPair, status ralph.Planning
 	items := []fzfPickerItem{
 		{
 			key:     string(planScopedActionRun),
-			label:   "Run spec",
+			label:   "▶ Run spec",
 			preview: "Run Ralph builder mode for this spec.\n\n" + preview,
 		},
 		{
 			key:     string(planScopedActionEdit),
-			label:   "Edit spec",
+			label:   "✎ Edit spec",
 			preview: "Open this spec directly in your editor for manual changes.\n\n" + preview,
 		},
 		{
 			key:     string(planScopedActionReview),
-			label:   "Review spec",
+			label:   "◱ Review spec",
 			preview: "Render the current spec and progress without modifying anything.\n\n" + preview,
 		},
 		{
 			key:     string(planScopedActionRevise),
-			label:   "Revise spec",
+			label:   "⟳ Revise spec",
 			preview: "Open a planning iteration and revise this spec in place.\n\n" + preview,
 		},
 		{
 			key:     string(planScopedActionScratch),
-			label:   "Replan from scratch",
+			label:   "↺ Replan from scratch",
 			preview: "Reset this spec/progress pair and rebuild the spec from a new planning request.\n\n" + preview,
 		},
 		{
 			key:     string(planScopedActionClose),
-			label:   "Close",
+			label:   "✕ Close",
 			preview: "Exit the scoped Ralph menu without taking action.\n\n" + preview,
 		},
 	}
@@ -776,23 +777,23 @@ func buildPlanScopedMenuHeader(pair ralph.SpecPair) string {
 	if strings.TrimSpace(name) == "" {
 		name = filepath.Base(pair.SpecPath)
 	}
-	return "Ralph: " + name
+	return "Ralph · " + name
 }
 
 func buildPlanSpecPickerHeader(purpose planSpecPickerPurpose) string {
 	switch purpose {
 	case planSpecPickerPurposeContinue:
-		return "Select spec to continue"
+		return "Continue a Ralph spec"
 	case planSpecPickerPurposeEdit:
-		return "Select spec to edit"
+		return "Edit a Ralph spec"
 	case planSpecPickerPurposeReview:
-		return "Select spec to review"
+		return "Review a Ralph spec"
 	case planSpecPickerPurposeRevise:
-		return "Select spec to revise"
+		return "Revise a Ralph spec"
 	case planSpecPickerPurposeRun:
-		return "Select spec to run"
+		return "Run a Ralph spec"
 	default:
-		return "Select Ralph spec"
+		return "Select a Ralph spec"
 	}
 }
 
@@ -806,6 +807,7 @@ func buildPlanSpecPickerItems(ctx context.Context, pairs []ralph.SpecPair) ([]fz
 		entries = append(entries, planSpecListEntry{
 			Pair:    pair,
 			Status:  status,
+			SortKey: buildPlanSpecSortKey(pair),
 			Label:   buildPlanSpecLabel(pair, status),
 			Preview: buildPlanSpecPreview(pair, status, readOptionalPlanFile(pair.ProgressPath)),
 		})
@@ -817,7 +819,7 @@ func buildPlanSpecPickerItems(ctx context.Context, pairs []ralph.SpecPair) ([]fz
 		if iCompleted != jCompleted {
 			return !iCompleted
 		}
-		return entries[i].Label < entries[j].Label
+		return entries[i].SortKey < entries[j].SortKey
 	})
 
 	items := make([]fzfPickerItem, 0, len(entries))
@@ -835,15 +837,17 @@ func buildPlanSpecPickerItems(ctx context.Context, pairs []ralph.SpecPair) ([]fz
 }
 
 func buildPlanSpecLabel(pair ralph.SpecPair, status ralph.PlanningStatus) string {
+	stateIcon := "◉"
 	stateLabel := "active"
 	if status.State == ralph.PlanningStateCompleted {
+		stateIcon = "✓"
 		stateLabel = "completed"
 	}
 	name := pair.Slug
 	if strings.TrimSpace(name) == "" {
 		name = filepath.Base(pair.SpecPath)
 	}
-	return fmt.Sprintf("[%s] %s — %s", stateLabel, name, relativePlanPath(status.RepoRoot, pair.SpecPath))
+	return fmt.Sprintf("%s %s  ·  %s  ·  %s", stateIcon, name, stateLabel, relativePlanPath(status.RepoRoot, pair.SpecPath))
 }
 
 func buildPlanSpecPreview(pair ralph.SpecPair, status ralph.PlanningStatus, progress string) string {
@@ -854,9 +858,18 @@ func buildPlanSpecPreview(pair ralph.SpecPair, status ralph.PlanningStatus, prog
 	if strings.TrimSpace(repoRoot) == "" {
 		repoRoot, _ = os.Getwd()
 	}
+	stateLabel := "Active"
+	stateIcon := "◉"
+	if status.State == ralph.PlanningStateCompleted {
+		stateLabel = "Completed"
+		stateIcon = "✓"
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Status: %s\nSpec: %s\nProgress: %s\n\n", status.State, relativePlanPath(repoRoot, pair.SpecPath), relativePlanPath(repoRoot, pair.ProgressPath))
-	b.WriteString("=== spec ===\n")
+	fmt.Fprintf(&b, "%s Ralph snapshot\n\n", stateIcon)
+	fmt.Fprintf(&b, "State     %s\n", stateLabel)
+	fmt.Fprintf(&b, "Spec      %s\n", relativePlanPath(repoRoot, pair.SpecPath))
+	fmt.Fprintf(&b, "Progress  %s\n\n", relativePlanPath(repoRoot, pair.ProgressPath))
+	b.WriteString("── Spec\n")
 	spec := strings.TrimRight(readOptionalPlanFile(pair.SpecPath), "\n")
 	if spec == "" {
 		b.WriteString("(empty)\n")
@@ -864,15 +877,23 @@ func buildPlanSpecPreview(pair ralph.SpecPair, status ralph.PlanningStatus, prog
 		b.WriteString(spec)
 		b.WriteString("\n")
 	}
-	b.WriteString("\n=== progress ===\n")
+	b.WriteString("\n── Progress\n")
 	progress = strings.TrimRight(progress, "\n")
 	if progress == "" {
-		b.WriteString("(empty)\n")
+		b.WriteString("(no progress yet)\n")
 	} else {
 		b.WriteString(progress)
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func buildPlanSpecSortKey(pair ralph.SpecPair) string {
+	name := pair.Slug
+	if strings.TrimSpace(name) == "" {
+		name = filepath.Base(pair.SpecPath)
+	}
+	return strings.ToLower(name + " " + pair.SpecPath)
 }
 
 func readOptionalPlanFile(path string) string {
@@ -929,7 +950,7 @@ func runPlanningRequest(request, specPath string, reset bool) error {
 		SpecPath:        specPath,
 	})
 	if errors.Is(err, context.Canceled) {
-		fmt.Fprintln(os.Stderr, "Ralph interrupted")
+		fmt.Fprintln(os.Stderr, renderStatusWarning("●")+" Ralph interrupted")
 		return nil
 	}
 	return err
@@ -944,7 +965,7 @@ func runExistingPlan(specPath string) error {
 		SpecPath: specPath,
 	})
 	if errors.Is(err, context.Canceled) {
-		fmt.Fprintln(os.Stderr, "Ralph interrupted")
+		fmt.Fprintln(os.Stderr, renderStatusWarning("●")+" Ralph interrupted")
 		return nil
 	}
 	return err

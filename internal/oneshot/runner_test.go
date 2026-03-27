@@ -929,8 +929,8 @@ func TestDefaultRunPlanRootPickerUsesFullscreenFZF(t *testing.T) {
 		if !cfg.UseFullscreen {
 			t.Fatalf("expected Ralph root picker to use fullscreen FZF")
 		}
-		if cfg.Header != "Ralph" {
-			t.Fatalf("cfg.Header = %q, want Ralph", cfg.Header)
+		if cfg.Header != "Ralph Dashboard" {
+			t.Fatalf("cfg.Header = %q, want Ralph Dashboard", cfg.Header)
 		}
 		data, err := io.ReadAll(stdin)
 		if err != nil {
@@ -986,15 +986,15 @@ func TestDefaultRunPlanSpecPickerUsesFullscreenFZF(t *testing.T) {
 		if !cfg.UseFullscreen {
 			t.Fatalf("expected Ralph spec picker to use fullscreen FZF")
 		}
-		if cfg.Header != "Select spec to run" {
-			t.Fatalf("cfg.Header = %q, want %q", cfg.Header, "Select spec to run")
+		if cfg.Header != "Run a Ralph spec" {
+			t.Fatalf("cfg.Header = %q, want %q", cfg.Header, "Run a Ralph spec")
 		}
 		data, err := io.ReadAll(stdin)
 		if err != nil {
 			t.Fatalf("ReadAll(stdin): %v", err)
 		}
 		text := string(data)
-		if !strings.Contains(text, "spec-fox-align-cedar") && !strings.Contains(text, "[active] fox-align-cedar") {
+		if !strings.Contains(text, "fox-align-cedar") || !strings.Contains(text, "active") {
 			t.Fatalf("stdin missing Ralph spec picker item: %q", text)
 		}
 		selected := strings.TrimSpace(strings.Split(text, "\n")[0])
@@ -1139,16 +1139,16 @@ func TestBuildPlanSpecPickerItemsSortsActiveBeforeCompletedAndIncludesRawPreview
 	if got := keyToPair[items[0].key].SpecPath; got != active.SpecPath {
 		t.Fatalf("first item spec = %q, want active spec %q", got, active.SpecPath)
 	}
-	if !strings.Contains(items[0].label, "[active]") {
+	if !strings.Contains(items[0].label, "active") || !strings.Contains(items[0].label, "◉") {
 		t.Fatalf("first label = %q, want active label", items[0].label)
 	}
-	if !strings.Contains(items[1].label, "[completed]") {
+	if !strings.Contains(items[1].label, "completed") || !strings.Contains(items[1].label, "✓") {
 		t.Fatalf("second label = %q, want completed label", items[1].label)
 	}
-	if !strings.Contains(items[0].preview, "# Goal\n\nactive goal") || !strings.Contains(items[0].preview, "active progress") {
+	if !strings.Contains(items[0].preview, "◉ Ralph snapshot") || !strings.Contains(items[0].preview, "# Goal\n\nactive goal") || !strings.Contains(items[0].preview, "active progress") {
 		t.Fatalf("active preview missing raw contents: %q", items[0].preview)
 	}
-	if !strings.Contains(items[1].preview, "# Goal\n\ncompleted goal") || !strings.Contains(items[1].preview, "done\nPROMISE: DONE") {
+	if !strings.Contains(items[1].preview, "✓ Ralph snapshot") || !strings.Contains(items[1].preview, "# Goal\n\ncompleted goal") || !strings.Contains(items[1].preview, "done\nPROMISE: DONE") {
 		t.Fatalf("completed preview missing raw contents: %q", items[1].preview)
 	}
 }
