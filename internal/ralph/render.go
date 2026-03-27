@@ -47,20 +47,20 @@ func (r loopRenderer) iteration(iteration, maxIterations int) {
 }
 
 func (r loopRenderer) continuing(iteration int) {
-	r.status(ansiBlue, "→", fmt.Sprintf("Ralph continuing after iteration %d", iteration), "Progress requested another pass.")
+	r.status(ansiBlue, "→", fmt.Sprintf("Ralph continuing after iteration %d", iteration), "The builder response requested another pass.")
 }
 
 func (r loopRenderer) retry(iteration int, reason string) {
 	message := fmt.Sprintf("Ralph will retry after iteration %d", iteration)
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		reason = "Progress still needs a valid promise marker."
+		reason = "The builder response still needs a valid promise marker."
 	}
 	r.status(ansiYellow, "↺", message, summarizeLoopText(reason, 120))
 }
 
 func (r loopRenderer) completed(iteration int) {
-	detail := "Progress is marked DONE."
+	detail := "The builder response marked this spec as complete."
 	if iteration > 0 {
 		detail = fmt.Sprintf("Completed in %d iteration", iteration)
 		if iteration != 1 {

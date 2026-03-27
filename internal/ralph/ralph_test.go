@@ -61,7 +61,7 @@ func assertContainsAll(t *testing.T, got string, want ...string) {
 
 func TestReadSnapshotReturnsSpecAndProgress(t *testing.T) {
 	repo := t.TempDir()
-	pair := writeNamedSpecPair(t, repo, "otter-thread-sage", testSpecContent("Ship the builder"), "working\nPROMISE: CONTINUE\n")
+	pair := writeNamedSpecPair(t, repo, "otter-thread-sage", testSpecContent("Ship the builder"), "working\n"+promiseDone+"\n")
 
 	got, err := ReadSnapshot(context.Background(), repo, pair.SpecPath)
 	if err != nil {
@@ -79,7 +79,7 @@ func TestReadSnapshotReturnsSpecAndProgress(t *testing.T) {
 	if !strings.Contains(got.Spec, "# Goal") {
 		t.Fatalf("Spec = %q, want goal section", got.Spec)
 	}
-	if !strings.Contains(got.Progress, promiseContinue) {
+	if !strings.Contains(got.Progress, promiseDone) {
 		t.Fatalf("Progress = %q, want promise", got.Progress)
 	}
 }
@@ -133,7 +133,7 @@ func TestResolveSpecSelectionSupportsSlugPathAndCustomSpecPaths(t *testing.T) {
 	}
 }
 
-func TestInspectPlanningStateUsesProgressPromise(t *testing.T) {
+func TestInspectPlanningStateUsesProgressPromiseMarker(t *testing.T) {
 	repo := t.TempDir()
 
 	status, err := InspectPlanningState(context.Background(), repo, "")
@@ -154,7 +154,7 @@ func TestInspectPlanningStateUsesProgressPromise(t *testing.T) {
 		t.Fatalf("state = %q, want planned", status.State)
 	}
 
-	writeProgressFile(t, pair.ProgressPath, "still working\nPROMISE: CONTINUE\n")
+	writeProgressFile(t, pair.ProgressPath, "still working\n"+promiseContinue+"\n")
 	status, err = InspectPlanningState(context.Background(), repo, pair.SpecPath)
 	if err != nil {
 		t.Fatalf("InspectPlanningState(continue): %v", err)
@@ -172,7 +172,7 @@ func TestInspectPlanningStateUsesProgressPromise(t *testing.T) {
 		t.Fatalf("state = %q, want planned when promise is missing", status.State)
 	}
 
-	writeProgressFile(t, pair.ProgressPath, "done\nPROMISE: DONE\n")
+	writeProgressFile(t, pair.ProgressPath, "done\n"+promiseDone+"\n")
 	status, err = InspectPlanningState(context.Background(), repo, pair.SpecPath)
 	if err != nil {
 		t.Fatalf("InspectPlanningState(done): %v", err)
@@ -190,35 +190,92 @@ func TestInspectPlanningStateUsesProgressPromise(t *testing.T) {
 	}
 }
 
-func TestReadProgressPromiseAcceptsNonAlphabeticPrefix(t *testing.T) {
-	repo := t.TempDir()
-	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
-	writeProgressFile(t, progressPath, "working\n> PROMISE: DONE\n")
-
-	promise, err := readProgressPromise(progressPath)
-	if err != nil {
-		t.Fatalf("readProgressPromise(prefixed): %v", err)
+func TestReadRequiredPromiseMarkerRequiresFinalExactLine(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+		err     string
+	}{
+		{
+			name:    "done",
+			content: "work complete\n" + promiseDone + "\n",
+			want:    promiseDone,
+		},
+		{
+			name:    "continue",
+			content: "more work\n" + promiseContinue + "\n",
+			want:    promiseContinue,
+		},
+		{
+			name:    "missing",
+			content: "more work\n",
+			err:     "missing promise marker",
+		},
+		{
+			name:    "invalid inline",
+			content: "more work <promise>DONE</promise>\n",
+			err:     "invalid promise marker",
+		},
+		{
+			name:    "not final line",
+			content: promiseDone + "\nextra\n",
+			err:     "final non-empty line",
+		},
 	}
-	if promise != promiseDone {
-		t.Fatalf("promise = %q, want %q", promise, promiseDone)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			promise, err := readRequiredPromiseMarker(tc.content, "final builder response")
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("err = %v, want substring %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("readRequiredPromiseMarker: %v", err)
+			}
+			if promise != tc.want {
+				t.Fatalf("promise = %q, want %q", promise, tc.want)
+			}
+		})
 	}
 }
 
-func TestClearPromiseLinesRemovesNonAlphabeticPrefixPromise(t *testing.T) {
+func TestClearProgressPromiseMarkersRemovesExactMarkers(t *testing.T) {
 	repo := t.TempDir()
 	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
-	writeProgressFile(t, progressPath, "keep me\n> PROMISE: CONTINUE\nand me\n")
+	writeProgressFile(t, progressPath, "keep me\n"+promiseContinue+"\nand me\n"+promiseDone+"\n")
 
-	if err := clearPromiseLines(progressPath); err != nil {
-		t.Fatalf("clearPromiseLines: %v", err)
+	if err := clearProgressPromiseMarkers(progressPath); err != nil {
+		t.Fatalf("clearProgressPromiseMarkers: %v", err)
 	}
 
 	got := readOptionalFile(progressPath)
-	if strings.Contains(got, "PROMISE:") {
-		t.Fatalf("progress still contains promise line: %q", got)
+	if strings.Contains(got, "<promise>") {
+		t.Fatalf("progress still contains promise marker: %q", got)
 	}
 	if !strings.Contains(got, "keep me") || !strings.Contains(got, "and me") {
 		t.Fatalf("progress lost non-promise content: %q", got)
+	}
+}
+
+func TestAppendProgressDonePromiseIsIdempotent(t *testing.T) {
+	repo := t.TempDir()
+	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
+	writeProgressFile(t, progressPath, "final validation passed\n")
+
+	if err := appendProgressDonePromise(progressPath); err != nil {
+		t.Fatalf("appendProgressDonePromise(first): %v", err)
+	}
+	if err := appendProgressDonePromise(progressPath); err != nil {
+		t.Fatalf("appendProgressDonePromise(second): %v", err)
+	}
+
+	got := readOptionalFile(progressPath)
+	if strings.Count(got, promiseDone) != 1 {
+		t.Fatalf("progress = %q, want exactly one done marker", got)
 	}
 }
 
@@ -266,8 +323,6 @@ func TestRunPlanCreatesNamedSpecAndInitializesProgress(t *testing.T) {
 			"question tool",
 			"ask 1-3 focused clarifying questions",
 			"Planning mode only",
-			promiseDone,
-			promiseContinue,
 		)
 		if strings.Contains(prompt, "plan.md") {
 			t.Fatalf("planning prompt should not reference legacy plan.md: %q", prompt)
@@ -343,18 +398,6 @@ func TestPlanningArtifactsChangedHookReinjectsWhenSpecOrProgressDidNotChange(t *
 	}
 	if !ok || inject != "" {
 		t.Fatalf("hook changed = %q, %v, want accept", inject, ok)
-	}
-
-	writeProgressFile(t, progressPath, "Initialized builder tasks\nPROMISE: CONTINUE\n")
-	inject, ok, err = hook(context.Background(), libagent.NewAssistantMessage("done", "", nil, time.Now()), nil)
-	if err != nil {
-		t.Fatalf("hook promise present: %v", err)
-	}
-	if ok {
-		t.Fatalf("hook promise present ok = true, want false")
-	}
-	if !strings.Contains(inject, "must not leave a promise line") {
-		t.Fatalf("inject = %q, want promise removal reminder", inject)
 	}
 }
 
@@ -491,9 +534,9 @@ func TestRunPlanKeepsPartialDraftWhenClarificationIsCanceled(t *testing.T) {
 	}
 }
 
-func TestRunAutoClearsPromisesAndCompletesFromProgressFile(t *testing.T) {
+func TestRunAutoUsesFinalResponsePromiseAndPersistsDoneFooter(t *testing.T) {
 	repo := t.TempDir()
-	pair := writeNamedSpecPair(t, repo, "otter-thread-sage", testSpecContent("Ship the refactor"), "stale note\nPROMISE: CONTINUE\n")
+	pair := writeNamedSpecPair(t, repo, "otter-thread-sage", testSpecContent("Ship the refactor"), "stale note\n"+promiseDone+"\n")
 
 	origPrompt := runEphemeralPrompt
 	t.Cleanup(func() { runEphemeralPrompt = origPrompt })
@@ -513,8 +556,8 @@ func TestRunAutoClearsPromisesAndCompletesFromProgressFile(t *testing.T) {
 			t.Fatalf("builder run should not inject planning tools, got %d extra tools", len(opts.ExtraTools))
 		}
 		progressBefore := readOptionalFile(pair.ProgressPath)
-		if strings.Contains(progressBefore, "PROMISE:") {
-			t.Fatalf("promise line should be cleared before iteration %d, got %q", callCount, progressBefore)
+		if strings.Contains(progressBefore, "<promise>") {
+			t.Fatalf("promise marker should be cleared before iteration %d, got %q", callCount, progressBefore)
 		}
 		if !strings.Contains(prompt, promiseDone) || !strings.Contains(prompt, promiseContinue) {
 			t.Fatalf("builder prompt missing promise instructions: %q", prompt)
@@ -526,7 +569,8 @@ func TestRunAutoClearsPromisesAndCompletesFromProgressFile(t *testing.T) {
 			"Do only that one task this iteration",
 			"Run the relevant checks",
 			"Update .raijin/ralph/progress-otter-thread-sage.txt to reflect what changed",
-			"entire current specification is complete and verified",
+			"End your final response with exactly one whole-line marker",
+			"full specification is complete and verified",
 		)
 		if strings.Contains(prompt, "%!s(MISSING)") {
 			t.Fatalf("builder prompt has missing interpolation: %q", prompt)
@@ -548,13 +592,22 @@ func TestRunAutoClearsPromisesAndCompletesFromProgressFile(t *testing.T) {
 			if !strings.Contains(inject, "Preserve still-relevant progress") {
 				t.Fatalf("inject = %q, want progress-preservation reminder", inject)
 			}
+			if !strings.Contains(inject, "End your final response with exactly one whole-line promise marker") {
+				t.Fatalf("inject = %q, want final-response promise reminder", inject)
+			}
 			if !strings.Contains(inject, "Finishing only the current task is not enough") {
 				t.Fatalf("inject = %q, want conservative DONE reminder", inject)
 			}
-			writeProgressFile(t, pair.ProgressPath, "working through task breakdown\nPROMISE: CONTINUE\n")
+			inject, ok, err = onCompleteHook(context.Background(), libagent.NewAssistantMessage("iteration one\n"+promiseContinue, "", nil, time.Now()), nil)
+			if err != nil {
+				t.Fatalf("onCompleteHook(iteration one corrected): %v", err)
+			}
+			if !ok || inject != "" {
+				t.Fatalf("onCompleteHook(iteration one corrected) = %q, %v", inject, ok)
+			}
 		case 2:
-			writeProgressFile(t, pair.ProgressPath, "final validation passed\nPROMISE: DONE\n")
-			inject, ok, err := onCompleteHook(context.Background(), libagent.NewAssistantMessage("iteration two", "", nil, time.Now()), nil)
+			writeProgressFile(t, pair.ProgressPath, "final validation passed\n")
+			inject, ok, err := onCompleteHook(context.Background(), libagent.NewAssistantMessage("iteration two\n"+promiseDone, "", nil, time.Now()), nil)
 			if err != nil {
 				t.Fatalf("onCompleteHook(iteration two): %v", err)
 			}
@@ -585,6 +638,13 @@ func TestRunAutoClearsPromisesAndCompletesFromProgressFile(t *testing.T) {
 	}
 	if status.State != PlanningStateCompleted {
 		t.Fatalf("state = %q, want completed", status.State)
+	}
+	finalProgress := readOptionalFile(pair.ProgressPath)
+	if strings.Count(finalProgress, promiseDone) != 1 {
+		t.Fatalf("final progress = %q, want exactly one persisted done marker", finalProgress)
+	}
+	if strings.Contains(finalProgress, promiseContinue) {
+		t.Fatalf("final progress = %q, should not persist continue marker", finalProgress)
 	}
 	if fileExists(filepath.Join(repo, ".raijin", "ralph", "feedback.md")) {
 		t.Fatalf("feedback.md should not exist")

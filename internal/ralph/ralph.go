@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/francescoalemanno/raijin-mono/internal/shell"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -25,8 +24,8 @@ const (
 	ModePlan Mode = "plan"
 
 	defaultMaxIterations = 25
-	promiseDone          = "PROMISE: DONE"
-	promiseContinue      = "PROMISE: CONTINUE"
+	promiseDone          = "<promise>DONE</promise>"
+	promiseContinue      = "<promise>CONTINUE</promise>"
 )
 
 var ErrMaxIterationsReached = errors.New("ralph: maximum iterations reached")
@@ -222,7 +221,7 @@ func InspectPlanningState(ctx context.Context, repoRoot, specTarget string) (Pla
 		return PlanningStatus{RepoRoot: resolvedRoot, State: PlanningStateEmpty}, nil
 	}
 
-	promise, err := readProgressPromiseForState(pair.ProgressPath)
+	promise, err := readPersistedProgressPromise(pair.ProgressPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return PlanningStatus{
@@ -350,11 +349,12 @@ func runAutomatic(ctx context.Context, repoRoot string, pair SpecPair, maxIterat
 			return ErrMaxIterationsReached
 		}
 		renderer.iteration(iteration, maxIterations)
-		if err := clearPromiseLines(pair.ProgressPath); err != nil {
+		if err := clearProgressPromiseMarkers(pair.ProgressPath); err != nil {
 			return err
 		}
 
-		onCompleteHook := progressPromiseHook(pair.ProgressPath)
+		var acceptedPromise string
+		onCompleteHook := finalResponsePromiseHook(pair.ProgressPath, &acceptedPromise)
 		result, runErr := runEphemeralPrompt(ctx, repoRoot, EphemeralPromptOptions{
 			Prompt:         buildImplementationPrompt(repoRoot, pair),
 			OnCompleteHook: onCompleteHook,
@@ -367,19 +367,22 @@ func runAutomatic(ctx context.Context, repoRoot string, pair SpecPair, maxIterat
 			continue
 		}
 
-		promise, err := readProgressPromise(pair.ProgressPath)
-		if err != nil {
-			renderer.retry(iteration, err.Error())
-			if noteErr := writeControllerNote(pair.ProgressPath, fmt.Sprintf("Controller note: Ralph could not validate %s after iteration %d: %v", relPath(repoRoot, pair.ProgressPath), iteration, err)); noteErr != nil {
-				return noteErr
+		switch acceptedPromise {
+		case promiseDone:
+			if err := appendProgressDonePromise(pair.ProgressPath); err != nil {
+				return err
 			}
-			continue
-		}
-		if promise == promiseDone {
 			renderer.completed(iteration)
 			return nil
+		case promiseContinue:
+			renderer.continuing(iteration)
+		default:
+			reason := fmt.Sprintf("Controller could not validate the final builder promise after iteration %d.", iteration)
+			renderer.retry(iteration, reason)
+			if noteErr := writeControllerNote(pair.ProgressPath, fmt.Sprintf("Controller note: Ralph could not validate the final builder promise after iteration %d.", iteration)); noteErr != nil {
+				return noteErr
+			}
 		}
-		renderer.continuing(iteration)
 	}
 }
 
@@ -397,6 +400,9 @@ func runPlanning(ctx context.Context, repoRoot string, pair SpecPair, planningRe
 	renderer.planning(planningRequest)
 	questionTool, err := newPlanningQuestionTool()
 	if err != nil {
+		return err
+	}
+	if err := clearProgressPromiseMarkers(pair.ProgressPath); err != nil {
 		return err
 	}
 	initialSpec := readOptionalFile(pair.SpecPath)
@@ -539,8 +545,7 @@ func buildPlanningPrompt(repoRoot string, pair SpecPair, planningRequest string)
 			"3. Keep both files technical, concise, and limited to durable facts that are already established.\n" +
 			"4. If uncertainty would materially change the goal, scope, constraints, acceptance criteria, or sequencing, use the question tool and ask 1-3 focused clarifying questions before proceeding. Free-form answers are allowed.\n" +
 			"5. Planning mode only. Do not edit implementation files or run builds, tests, migrations, or other verification commands.\n" +
-			"6. Do not leave " + promiseDone + " or " + promiseContinue + " in " + progressPath + ".\n" +
-			"7. The builder Ralph will treat " + specPath + " as read-only durable input and continue execution from " + progressPath + ".\n\n" +
+			"6. The builder Ralph will treat " + specPath + " as read-only durable input and continue execution from " + progressPath + ".\n\n" +
 			"New planning request from /plan:\n" +
 			request + "\n",
 	)
@@ -601,14 +606,7 @@ func planningArtifactsChangedHook(repoRoot, specPath, progressPath, initialSpec,
 		}
 		if strings.TrimSpace(currentProgress) == "" || currentProgress == initialProgress {
 			return fmt.Sprintf(
-				"Before ending planning, initialize or revise %s so the builder Ralph can pick up concrete tasks from it. Remove any promise line, keep only durable builder-facing task breakdown and next-step context, and save the updated progress file to %s.",
-				relPath(repoRoot, progressPath),
-				relPath(repoRoot, progressPath),
-			), false, nil
-		}
-		if _, promiseLike := extractPromiseLineFromContent(currentProgress); promiseLike {
-			return fmt.Sprintf(
-				"Planning must not leave a promise line in %s. Reopen it, remove any PROMISE line, keep the initialized task breakdown for the builder, and save %s again before ending.",
+				"Before ending planning, initialize or revise %s so the builder Ralph can pick up concrete tasks from it. Keep only durable builder-facing task breakdown and next-step context, and save the updated progress file to %s.",
 				relPath(repoRoot, progressPath),
 				relPath(repoRoot, progressPath),
 			), false, nil
@@ -636,36 +634,27 @@ func buildImplementationPrompt(repoRoot string, pair SpecPair) string {
 			"4. Do only that one task this iteration. Prefer foundational work that unlocks or de-risks later work.\n" +
 			"5. Run the relevant checks for that work before finishing.\n" +
 			"6. Update " + progressPath + " to reflect what changed, what remains, and any short notes that still matter.\n" +
-			"7. End " + progressPath + " with exactly one whole-line promise:\n" +
-			"   - " + promiseDone + "\n" +
-			"   - " + promiseContinue + "\n" +
-			"8. Write " + promiseDone + " only if the entire current specification is complete and verified. Otherwise write " + promiseContinue + ".\n",
+			"7. End your final response with exactly one whole-line marker: " + promiseDone + " if the full specification is complete and verified, otherwise " + promiseContinue + ".\n",
 	)
 }
 
-func progressPromiseHook(progressPath string) libagent.OnCompleteHook {
-	return func(_ context.Context, _ *libagent.AssistantMessage, _ []libagent.Message) (string, bool, error) {
-		promise, err := readProgressPromise(progressPath)
-		if err == nil && (promise == promiseDone || promise == promiseContinue) {
+func finalResponsePromiseHook(progressPath string, acceptedPromise *string) libagent.OnCompleteHook {
+	return func(_ context.Context, final *libagent.AssistantMessage, _ []libagent.Message) (string, bool, error) {
+		promise, err := readRequiredPromiseMarker(libagent.AssistantText(final), "final builder response")
+		if err == nil {
+			if acceptedPromise != nil {
+				*acceptedPromise = promise
+			}
 			return "", true, nil
 		}
-		if err != nil && !os.IsNotExist(err) && !looksLikePromiseValidationError(err) {
-			return "", false, err
+		if acceptedPromise != nil {
+			*acceptedPromise = ""
 		}
 		return "Before ending this builder iteration, reopen " + progressPath +
 			" and update it coherently with the builder rules. Preserve still-relevant progress, remaining work, and controller notes. " +
-			"Add exactly one whole-line promise: " + promiseDone + " or " + promiseContinue + ". " +
-			"Write " + promiseDone + " only if the entire current specification is complete, verified, and there is no important remaining work. " +
+			"End your final response with exactly one whole-line promise marker: " + promiseDone + " if the entire current specification is complete, verified, and there is no important remaining work; otherwise " + promiseContinue + ". " +
 			"Finishing only the current task is not enough for " + promiseDone + ". Then respond again.", false, nil
 	}
-}
-
-func looksLikePromiseValidationError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "promise line")
 }
 
 func defaultResolveRepoRoot(ctx context.Context, requested string) (string, error) {
@@ -764,51 +753,51 @@ func resetPair(pair SpecPair) error {
 	return nil
 }
 
-func readProgressPromise(path string) (string, error) {
+func readPersistedProgressPromise(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	found, invalid := collectPromiseLines(string(data))
-	if invalid != "" {
-		return "", fmt.Errorf("invalid promise line in %s: %q", path, invalid)
-	}
-	if len(found) == 0 {
-		return "", fmt.Errorf("missing promise line in %s", path)
-	}
-	if len(found) > 1 {
-		return "", fmt.Errorf("multiple promise lines in %s", path)
-	}
-	return found[0], nil
-}
-
-func readProgressPromiseForState(path string) (string, error) {
-	promise, err := readProgressPromise(path)
-	if err != nil && strings.Contains(err.Error(), "missing promise line") {
-		return promiseContinue, nil
-	}
+	promise, _, err := readOptionalPromiseMarker(string(data), path)
 	return promise, err
 }
 
-func extractPromiseLineFromContent(content string) (promise string, promiseLike bool) {
-	found, invalid := collectPromiseLines(content)
-	if invalid != "" {
-		return "", true
+func readRequiredPromiseMarker(content, location string) (string, error) {
+	promise, found, err := readOptionalPromiseMarker(content, location)
+	if err != nil {
+		return "", err
 	}
-	if len(found) > 0 {
-		return found[0], true
+	if !found {
+		return "", fmt.Errorf("missing promise marker in %s", location)
 	}
-	return "", false
+	return promise, nil
 }
 
-func collectPromiseLines(content string) (found []string, invalid string) {
+func readOptionalPromiseMarker(content, location string) (promise string, found bool, err error) {
+	promises, invalid := collectPromiseMarkers(content)
+	if invalid != "" {
+		return "", false, fmt.Errorf("invalid promise marker in %s: %q", location, invalid)
+	}
+	if len(promises) == 0 {
+		return "", false, nil
+	}
+	if len(promises) > 1 {
+		return "", false, fmt.Errorf("multiple promise markers in %s", location)
+	}
+	if last := lastNonEmptyTrimmedLine(content); last != promises[0] {
+		return "", false, fmt.Errorf("promise marker must be the final non-empty line in %s", location)
+	}
+	return promises[0], true, nil
+}
+
+func collectPromiseMarkers(content string) (found []string, invalid string) {
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
 		}
-		promise, promiseLike := extractPromiseLine(trimmed)
+		promise, promiseLike := extractPromiseMarker(trimmed)
 		if promise != "" {
 			found = append(found, promise)
 			continue
@@ -820,7 +809,7 @@ func collectPromiseLines(content string) (found []string, invalid string) {
 	return found, ""
 }
 
-func clearPromiseLines(path string) error {
+func clearProgressPromiseMarkers(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -828,53 +817,72 @@ func clearPromiseLines(path string) error {
 		}
 		return err
 	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	filtered := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if _, promiseLike := extractPromiseLine(strings.TrimSpace(line)); promiseLike {
-			continue
-		}
-		filtered = append(filtered, line)
+	content, err := stripPromiseMarkers(string(data))
+	if err != nil {
+		return fmt.Errorf("strip promise markers from %s: %w", path, err)
 	}
-	content := strings.TrimRight(strings.Join(filtered, "\n"), "\n")
 	if content == "" {
 		return os.WriteFile(path, nil, 0o644)
 	}
 	return os.WriteFile(path, []byte(content+"\n"), 0o644)
 }
 
-func extractPromiseLine(trimmed string) (promise string, promiseLike bool) {
+func appendProgressDonePromise(path string) error {
+	content, err := stripPromiseMarkers(readOptionalFile(path))
+	if err != nil {
+		return fmt.Errorf("strip promise markers from %s: %w", path, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if content == "" {
+		return os.WriteFile(path, []byte(promiseDone+"\n"), 0o644)
+	}
+	return os.WriteFile(path, []byte(content+"\n"+promiseDone+"\n"), 0o644)
+}
+
+func stripPromiseMarkers(content string) (string, error) {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		promise, promiseLike := extractPromiseMarker(trimmed)
+		if promise != "" {
+			continue
+		}
+		if promiseLike {
+			return "", fmt.Errorf("invalid promise marker: %q", trimmed)
+		}
+		filtered = append(filtered, line)
+	}
+	return strings.TrimRight(strings.Join(filtered, "\n"), "\n"), nil
+}
+
+func extractPromiseMarker(trimmed string) (promise string, promiseLike bool) {
 	trimmed = strings.TrimSpace(trimmed)
 	if trimmed == "" {
 		return "", false
 	}
-	idx := strings.Index(trimmed, "PROMISE:")
-	if idx < 0 {
-		return "", false
-	}
-	prefix := trimmed[:idx]
-	if containsAlphabetic(prefix) {
-		return "", false
-	}
-	remainder := strings.TrimSpace(trimmed[idx:])
-	switch remainder {
+	switch trimmed {
 	case promiseDone, promiseContinue:
-		return remainder, true
+		return trimmed, true
 	default:
-		if strings.HasPrefix(remainder, "PROMISE:") {
+		if strings.Contains(trimmed, "<promise>") || strings.Contains(trimmed, "</promise>") {
 			return "", true
 		}
 		return "", false
 	}
 }
 
-func containsAlphabetic(s string) bool {
-	for _, r := range s {
-		if unicode.IsLetter(r) {
-			return true
+func lastNonEmptyTrimmedLine(content string) string {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed != "" {
+			return trimmed
 		}
 	}
-	return false
+	return ""
 }
 
 func writeControllerNote(path, note string) error {
