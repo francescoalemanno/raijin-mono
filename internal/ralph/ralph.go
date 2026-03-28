@@ -845,8 +845,7 @@ func readPersistedProgressPromise(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	promise, _, err := readOptionalPromiseMarker(string(data), path)
-	return promise, err
+	return readPersistedPromiseMarker(string(data)), nil
 }
 
 func readRequiredPromiseMarker(content, location string) (string, error) {
@@ -869,10 +868,6 @@ func readRequiredPlanningPromiseMarker(content, location string) (string, error)
 		return "", fmt.Errorf("missing promise marker in %s", location)
 	}
 	return promise, nil
-}
-
-func readOptionalPromiseMarker(content, location string) (promise string, found bool, err error) {
-	return readOptionalPromiseMarkerSet(content, location, builderPromiseMarkers, builderPromiseFragments)
 }
 
 func readOptionalPromiseMarkerSet(content, location string, markers, fragments []string) (promise string, found bool, err error) {
@@ -919,10 +914,7 @@ func clearProgressPromiseMarkers(path string) error {
 		}
 		return err
 	}
-	content, err := stripPromiseMarkersSet(string(data), allPromiseMarkers, allPromiseFragments)
-	if err != nil {
-		return fmt.Errorf("strip promise markers from %s: %w", path, err)
-	}
+	content := stripPersistedPromiseMarkersSet(string(data), allPromiseMarkers, allPromiseFragments)
 	if content == "" {
 		return os.WriteFile(path, nil, 0o644)
 	}
@@ -930,10 +922,7 @@ func clearProgressPromiseMarkers(path string) error {
 }
 
 func appendProgressDonePromise(path string) error {
-	content, err := stripPromiseMarkersSet(readOptionalFile(path), allPromiseMarkers, allPromiseFragments)
-	if err != nil {
-		return fmt.Errorf("strip promise markers from %s: %w", path, err)
-	}
+	content := stripPersistedPromiseMarkersSet(readOptionalFile(path), allPromiseMarkers, allPromiseFragments)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -943,21 +932,28 @@ func appendProgressDonePromise(path string) error {
 	return os.WriteFile(path, []byte(content+"\n"+promiseDone+"\n"), 0o644)
 }
 
-func stripPromiseMarkersSet(content string, markers, fragments []string) (string, error) {
+func readPersistedPromiseMarker(content string) string {
+	last := lastNonEmptyTrimmedLine(content)
+	for _, marker := range allPromiseMarkers {
+		if last == marker {
+			return marker
+		}
+	}
+	return ""
+}
+
+func stripPersistedPromiseMarkersSet(content string, markers, fragments []string) string {
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 	filtered := make([]string, 0, len(lines))
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		promise, promiseLike := extractPromiseMarker(trimmed, markers, fragments)
-		if promise != "" {
+		if promise != "" || promiseLike {
 			continue
-		}
-		if promiseLike {
-			return "", fmt.Errorf("invalid promise marker: %q", trimmed)
 		}
 		filtered = append(filtered, line)
 	}
-	return strings.TrimRight(strings.Join(filtered, "\n"), "\n"), nil
+	return strings.TrimRight(strings.Join(filtered, "\n"), "\n")
 }
 
 func extractPromiseMarker(trimmed string, markers, fragments []string) (promise string, promiseLike bool) {

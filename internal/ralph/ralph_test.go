@@ -261,6 +261,44 @@ func TestClearProgressPromiseMarkersRemovesExactMarkers(t *testing.T) {
 	}
 }
 
+func TestReadPersistedPromiseMarkerIgnoresMalformedHistoricalMarkers(t *testing.T) {
+	content := strings.Join([]string{
+		"stale thinking",
+		"\x1b[90m<promise>CONTINUE</promise>\x1b[0m",
+		"still working",
+	}, "\n")
+
+	if got := readPersistedPromiseMarker(content); got != "" {
+		t.Fatalf("readPersistedPromiseMarker(...) = %q, want empty", got)
+	}
+}
+
+func TestReadPersistedPromiseMarkerUsesOnlyFinalExactMarker(t *testing.T) {
+	content := "work complete\n" + promiseDone + "\n"
+
+	if got := readPersistedPromiseMarker(content); got != promiseDone {
+		t.Fatalf("readPersistedPromiseMarker(...) = %q, want %q", got, promiseDone)
+	}
+}
+
+func TestClearProgressPromiseMarkersDropsMalformedHistoricalMarkerLines(t *testing.T) {
+	repo := t.TempDir()
+	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
+	writeProgressFile(t, progressPath, "keep me\n\x1b[90m<promise>CONTINUE</promise>\x1b[0m\nand me\n")
+
+	if err := clearProgressPromiseMarkers(progressPath); err != nil {
+		t.Fatalf("clearProgressPromiseMarkers: %v", err)
+	}
+
+	got := readOptionalFile(progressPath)
+	if strings.Contains(got, "<promise>") {
+		t.Fatalf("progress still contains malformed promise marker line: %q", got)
+	}
+	if !strings.Contains(got, "keep me") || !strings.Contains(got, "and me") {
+		t.Fatalf("progress lost non-promise content: %q", got)
+	}
+}
+
 func TestAppendProgressDonePromiseIsIdempotent(t *testing.T) {
 	repo := t.TempDir()
 	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
@@ -274,6 +312,24 @@ func TestAppendProgressDonePromiseIsIdempotent(t *testing.T) {
 	}
 
 	got := readOptionalFile(progressPath)
+	if strings.Count(got, promiseDone) != 1 {
+		t.Fatalf("progress = %q, want exactly one done marker", got)
+	}
+}
+
+func TestAppendProgressDonePromiseIgnoresMalformedHistoricalMarkers(t *testing.T) {
+	repo := t.TempDir()
+	progressPath := filepath.Join(repo, ".raijin", "ralph", "progress-otter-thread-sage.txt")
+	writeProgressFile(t, progressPath, "final validation passed\nwrapped <promise>CONTINUE</promise>\n")
+
+	if err := appendProgressDonePromise(progressPath); err != nil {
+		t.Fatalf("appendProgressDonePromise: %v", err)
+	}
+
+	got := readOptionalFile(progressPath)
+	if strings.Contains(got, promiseContinue) {
+		t.Fatalf("progress retained stale continue marker: %q", got)
+	}
 	if strings.Count(got, promiseDone) != 1 {
 		t.Fatalf("progress = %q, want exactly one done marker", got)
 	}
