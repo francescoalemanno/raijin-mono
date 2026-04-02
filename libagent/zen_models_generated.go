@@ -377,8 +377,16 @@ var zenGeneratedModels = []ModelInfo{
 		ProviderID:       ZenProviderID,
 		ModelID:          "nemotron-3-super-free",
 		Name:             "Nemotron 3 Super Free",
-		ContextWindow:    1000000,
+		ContextWindow:    204800,
 		DefaultMaxTokens: 128000,
+		CanReason:        true,
+	},
+	{
+		ProviderID:       ZenProviderID,
+		ModelID:          "qwen3.6-plus-free",
+		Name:             "Qwen3.6 Plus Free",
+		ContextWindow:    1048576,
+		DefaultMaxTokens: 64000,
 		CanReason:        true,
 	},
 }
@@ -434,6 +442,5 @@ var zenGoGeneratedModels = []ModelInfo{
 // zenGoAnthropicModels lists Go models that use Anthropic API format.
 // All other Go models use OpenAI-compatible format.
 var zenGoAnthropicModels = map[string]bool{
-	"minimax-m2.5": true,
 	"minimax-m2.7": true,
 }
