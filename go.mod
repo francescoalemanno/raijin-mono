@@ -14,7 +14,7 @@ require (
 require (
 	charm.land/bubbles/v2 v2.0.0
 	charm.land/bubbletea/v2 v2.0.2
-	charm.land/catwalk v0.31.2
+	charm.land/catwalk v0.34.2
 	charm.land/fantasy v0.17.1
 	github.com/alecthomas/chroma/v2 v2.20.0
 	github.com/charmbracelet/bubbletea v1.3.10
