@@ -48,6 +48,8 @@ Raijin runs in one-shot CLI mode and supports prompt features such as attachment
 
 Use `raijin --ephemeral "prompt"` to run a one-shot prompt without loading or writing session history.
 
+Use `raijin -new` to start a fresh REPL session. Use `raijin -new="prompt"` to start a fresh REPL session and submit that prompt immediately as the first turn.
+
 ## Slash commands
 
 - `/help` - show command help
@@ -122,6 +124,8 @@ go build -o raijin .
 
 ```bash
 raijin "fix the bug in main.go"
+raijin -new
+raijin -new="audit the repo and suggest the next fix"
 raijin --ephemeral "review this patch without saving chat history"
 raijin "add unit tests for auth"
 raijin "refactor this messy function"
