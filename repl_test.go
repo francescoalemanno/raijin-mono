@@ -19,6 +19,57 @@ func TestReplSubprocessArgs(t *testing.T) {
 	}
 }
 
+func TestExtractNewFlag(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantArgs   []string
+		wantPrompt string
+		wantSet    bool
+	}{
+		{
+			name:       "missing",
+			args:       []string{"--profile-dir", "profiles"},
+			wantArgs:   []string{"--profile-dir", "profiles"},
+			wantPrompt: "",
+			wantSet:    false,
+		},
+		{
+			name:       "bare flag",
+			args:       []string{"--new", "--profile-dir", "profiles"},
+			wantArgs:   []string{"--profile-dir", "profiles"},
+			wantPrompt: "",
+			wantSet:    true,
+		},
+		{
+			name:       "separate prompt",
+			args:       []string{"-new", "fix this bug", "--profile-dir", "profiles"},
+			wantArgs:   []string{"--profile-dir", "profiles"},
+			wantPrompt: "fix this bug",
+			wantSet:    true,
+		},
+		{
+			name:       "equals prompt",
+			args:       []string{"--new=fix this bug", "--profile-dir", "profiles"},
+			wantArgs:   []string{"--profile-dir", "profiles"},
+			wantPrompt: "fix this bug",
+			wantSet:    true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotArgs, gotNew := extractNewFlag(tc.args)
+			if !reflect.DeepEqual(gotArgs, tc.wantArgs) {
+				t.Fatalf("extractNewFlag() args = %#v, want %#v", gotArgs, tc.wantArgs)
+			}
+			if gotNew.present != tc.wantSet || gotNew.prompt != tc.wantPrompt {
+				t.Fatalf("extractNewFlag() new = %#v, want present=%v prompt=%q", gotNew, tc.wantSet, tc.wantPrompt)
+			}
+		})
+	}
+}
+
 func TestIsREPLExitInput(t *testing.T) {
 	cases := []struct {
 		in   string

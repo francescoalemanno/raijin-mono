@@ -27,6 +27,7 @@ import (
 const (
 	replPrompt             = "raijin❯ "
 	replContinuationPrompt = "   ...❯ "
+	replStartupSubmitDelay = 100 * time.Millisecond
 )
 
 type replRunStats struct {
@@ -46,6 +47,8 @@ type replRunDoneMsg struct {
 	stats replRunStats
 	err   error
 }
+
+type replStartupMsg struct{}
 
 type replPickerDoneMsg struct {
 	result replPickerResult
@@ -77,6 +80,9 @@ type replModel struct {
 	historyIndex  int
 	historyDraft  string
 	historyActive bool
+
+	startupPrompt string
+	startupQueued bool
 }
 
 type replPickerExec struct {
@@ -114,7 +120,7 @@ func newREPLEditor() textarea.Model {
 	return editor
 }
 
-func RunSubprocessREPL(baseArgs []string) error {
+func RunSubprocessREPL(baseArgs []string, initialPrompt string, forceNew bool) error {
 	stdinFD := int(os.Stdin.Fd())
 	stdoutFD := int(os.Stdout.Fd())
 	if !term.IsTerminal(stdinFD) || !term.IsTerminal(stdoutFD) {
@@ -126,18 +132,24 @@ func RunSubprocessREPL(baseArgs []string) error {
 	if err != nil {
 		return err
 	}
+	if forceNew {
+		if err := handleNew(Options{}); err != nil {
+			return err
+		}
+	}
 	initialStatus := replStatusQuery(baseArgs, binding)
 	fmt.Fprintln(os.Stdout, RenderThemedAccent("Raijin")+" "+RenderThemedDim("v"+version.Version+" · subprocess mode"))
 	fmt.Fprintln(os.Stdout, RenderThemedDim("ctrl+d or /exit to quit · tab autocomplete · up/down history · ctrl+x edit"))
 	fmt.Fprintln(os.Stdout, renderPrintedStatusLine(initialStatus))
 
 	model := replModel{
-		baseArgs:     append([]string(nil), baseArgs...),
-		binding:      binding,
-		status:       initialStatus,
-		statusLoaded: true,
-		editor:       newREPLEditor(),
-		historyIndex: -1,
+		baseArgs:      append([]string(nil), baseArgs...),
+		binding:       binding,
+		status:        initialStatus,
+		statusLoaded:  true,
+		editor:        newREPLEditor(),
+		historyIndex:  -1,
+		startupPrompt: strings.TrimSpace(initialPrompt),
 	}
 	p := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	if _, err := p.Run(); err != nil {
@@ -156,11 +168,17 @@ func (m replModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		if m.startupPrompt != "" && !m.startupQueued {
+			m.startupQueued = true
+			return m, tea.Tick(replStartupSubmitDelay, func(time.Time) tea.Msg { return replStartupMsg{} })
+		}
 		return m, nil
 	case replStatusMsg:
 		m.status = msg.label
 		m.statusLoaded = true
 		return m, tea.Println(renderPrintedStatusLine(m.status))
+	case replStartupMsg:
+		return m.submitPrompt(m.startupPrompt)
 	case replRunDoneMsg:
 		return m, tea.Batch(replFeedbackCmd(msg.stats, msg.err), replStatusCmd(m.baseArgs, m.binding))
 	case replEditorDoneMsg:
@@ -366,7 +384,10 @@ func (m *replModel) submit() (tea.Model, tea.Cmd) {
 	prompt := strings.TrimSpace(line)
 	m.editor.Reset()
 	m.resetHistoryNav()
+	return m.submitPrompt(prompt)
+}
 
+func (m *replModel) submitPrompt(prompt string) (tea.Model, tea.Cmd) {
 	if prompt == "" {
 		return *m, tea.Println(replPrompt)
 	}
@@ -374,6 +395,7 @@ func (m *replModel) submit() (tea.Model, tea.Cmd) {
 		return *m, tea.Quit
 	}
 
+	m.startupPrompt = ""
 	m.history = append(m.history, prompt)
 	cmd, err := replPromptExecCmd(m.baseArgs, m.binding, prompt)
 	if err != nil {
@@ -845,8 +867,15 @@ func replSubprocessArgs(baseArgs []string, prompt string) []string {
 
 func replSanitizeBaseArgs(baseArgs []string) []string {
 	out := make([]string, 0, len(baseArgs))
-	for _, arg := range baseArgs {
-		if arg == "--new" {
+	for i := 0; i < len(baseArgs); i++ {
+		arg := baseArgs[i]
+		switch {
+		case arg == "--new" || arg == "-new":
+			if i+1 < len(baseArgs) && !strings.HasPrefix(baseArgs[i+1], "-") {
+				i++
+			}
+			continue
+		case strings.HasPrefix(arg, "--new="), strings.HasPrefix(arg, "-new="):
 			continue
 		}
 		out = append(out, arg)

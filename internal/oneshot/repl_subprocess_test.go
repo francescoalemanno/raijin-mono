@@ -63,6 +63,40 @@ func TestReplEmptySubmitRepeatsPrompt(t *testing.T) {
 	}
 }
 
+func TestReplStartupPromptSubmitsOnce(t *testing.T) {
+	m := replModel{
+		historyIndex:  -1,
+		startupPrompt: "hello world",
+	}
+
+	if cmd := m.Init(); cmd != nil {
+		t.Fatal("Init() should not submit startup prompt immediately")
+	}
+
+	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if cmd == nil {
+		t.Fatal("WindowSizeMsg should queue startup submit")
+	}
+
+	queued := updated.(replModel)
+	if !queued.startupQueued {
+		t.Fatal("startupQueued should be set after initial window size")
+	}
+
+	updated, cmd = queued.Update(replStartupMsg{})
+	if cmd == nil {
+		t.Fatal("startup submit returned nil command")
+	}
+
+	next := updated.(replModel)
+	if len(next.history) != 1 || next.history[0] != "hello world" {
+		t.Fatalf("history = %#v, want startup prompt", next.history)
+	}
+	if next.startupPrompt != "" {
+		t.Fatalf("startupPrompt = %q, want cleared", next.startupPrompt)
+	}
+}
+
 func TestReplEnterSubmitsAndClearsEditor(t *testing.T) {
 	m := replModel{historyIndex: -1}
 	m.setEditorState("hello world", len([]rune("hello world")))
@@ -199,6 +233,34 @@ func TestReplSanitizeBaseArgsRemovesNewFlag(t *testing.T) {
 	got := replSanitizeBaseArgs([]string{"--new", "--profile-dir", "profiles"})
 	if len(got) != 2 || got[0] != "--profile-dir" || got[1] != "profiles" {
 		t.Fatalf("replSanitizeBaseArgs() = %#v", got)
+	}
+}
+
+func TestReplSanitizeBaseArgsRemovesNewFlagValueForms(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "equals form",
+			args: []string{"--new=hello world", "--profile-dir", "profiles"},
+			want: []string{"--profile-dir", "profiles"},
+		},
+		{
+			name: "separate prompt value",
+			args: []string{"-new", "hello world", "--profile-dir", "profiles"},
+			want: []string{"--profile-dir", "profiles"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := replSanitizeBaseArgs(tc.args)
+			if strings.Join(got, "\x00") != strings.Join(tc.want, "\x00") {
+				t.Fatalf("replSanitizeBaseArgs() = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }
 

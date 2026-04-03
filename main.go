@@ -18,8 +18,10 @@ import (
 )
 
 func main() {
+	parsedArgs, newFlag := extractNewFlag(os.Args[1:])
+
 	versionFlag := flag.Bool("version", false, "show version")
-	newFlag := flag.Bool("new", false, "force a new session")
+	_ = flag.String("new", "", "start a new REPL session; optionally submit the first prompt")
 	ephemeralFlag := flag.Bool("ephemeral", false, "run a one-shot prompt without loading or persisting session history")
 	initFlag := flag.String("init", "", "print shell integration script (zsh, bash, fish)")
 	completionsFlag := flag.Bool("completions", false, "print available commands, templates, and skills for shell completion")
@@ -29,7 +31,10 @@ func main() {
 	removeSessionFlag := flag.String("remove-session", "", "remove persisted session by id (full or short)")
 	profileDirFlag := flag.String("profile-dir", "", "write live profiling artifacts under this directory")
 	pprofAddrFlag := flag.String("pprof-addr", "", "serve runtime pprof on this address (for example 127.0.0.1:6060)")
-	flag.Parse()
+	if err := flag.CommandLine.Parse(parsedArgs); err != nil {
+		fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
+		os.Exit(2)
+	}
 
 	if *versionFlag {
 		fmt.Println("raijin " + version.Version)
@@ -112,13 +117,18 @@ func main() {
 
 	runtimeModel = buildRuntimeModel(modelCfg, runtimeModel)
 
-	oneShotText := strings.TrimSpace(strings.Join(flag.Args(), " "))
+	oneShotText := strings.TrimSpace(strings.Join(flag.CommandLine.Args(), " "))
+	if newFlag.present && oneShotText != "" {
+		fmt.Fprintln(os.Stderr, "-new starts REPL mode and does not accept positional prompts; use -new=\"your prompt\"")
+		os.Exit(1)
+	}
+
 	if oneShotText == "" {
 		if *ephemeralFlag {
 			fmt.Fprintln(os.Stderr, "--ephemeral is only supported for one-shot prompts")
 			os.Exit(1)
 		}
-		if err := oneshot.RunSubprocessREPL(os.Args[1:]); err != nil {
+		if err := oneshot.RunSubprocessREPL(parsedArgs, newFlag.prompt, newFlag.present); err != nil {
 			fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
 			os.Exit(1)
 		}
@@ -129,13 +139,49 @@ func main() {
 		RuntimeModel: runtimeModel,
 		ModelCfg:     modelCfg,
 		Store:        store,
-		ForceNew:     *newFlag,
+		ForceNew:     newFlag.present,
 		Ephemeral:    *ephemeralFlag,
 	}
 	if err := oneshot.Run(opts, oneShotText); err != nil {
 		fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))
 		os.Exit(1)
 	}
+}
+
+type newFlagValue struct {
+	present bool
+	prompt  string
+}
+
+func extractNewFlag(args []string) ([]string, newFlagValue) {
+	out := make([]string, 0, len(args))
+	var newFlag newFlagValue
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			out = append(out, args[i:]...)
+			return out, newFlag
+		case arg == "-new" || arg == "--new":
+			newFlag.present = true
+			newFlag.prompt = ""
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				newFlag.prompt = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(arg, "-new="):
+			newFlag.present = true
+			newFlag.prompt = strings.TrimPrefix(arg, "-new=")
+		case strings.HasPrefix(arg, "--new="):
+			newFlag.present = true
+			newFlag.prompt = strings.TrimPrefix(arg, "--new=")
+		default:
+			out = append(out, arg)
+		}
+	}
+
+	return out, newFlag
 }
 
 func loadDefaultRuntimeModel(store *modelconfig.ModelStore) (libagent.ModelConfig, libagent.RuntimeModel) {
