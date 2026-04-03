@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	modelconfig "github.com/francescoalemanno/raijin-mono/internal/config"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -75,7 +75,7 @@ func (m apiKeyInput) Init() tea.Cmd { return nil }
 
 func (m apiKeyInput) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			m.quitting = true
@@ -118,9 +118,8 @@ func (m apiKeyInput) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Delete word backward
 			m.deleteWordBackward()
 		default:
-			// Handle character input - use Runes to properly support unicode and paste
-			if len(msg.Runes) > 0 {
-				for _, r := range msg.Runes {
+			if text := msg.Key().Text; text != "" {
+				for _, r := range text {
 					if r >= ' ' || r == '\t' {
 						m.insertRune(r)
 					}
@@ -208,7 +207,7 @@ func isWordSep(r rune) bool {
 	return r == ' ' || r == '\t' || r == '\n' || r == '/' || r == '-' || r == '_'
 }
 
-func (m apiKeyInput) View() string {
+func (m apiKeyInput) View() tea.View {
 	var b strings.Builder
 	b.WriteString(flTitleStyle.Render(m.prompt))
 	b.WriteString("\n")
@@ -219,7 +218,9 @@ func (m apiKeyInput) View() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(flDimStyle.Render("enter confirm · esc cancel · ←/→ move · ctrl+w delete word · ctrl+u clear"))
-	return b.String()
+	view := tea.NewView(b.String())
+	view.AltScreen = true
+	return view
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +309,7 @@ func promptAPIKey(providerName, prefill string) (string, bool) {
 		value:  prefill,
 		cursor: len([]rune(prefill)),
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m)
 	final, err := p.Run()
 	if err != nil {
 		return "", true

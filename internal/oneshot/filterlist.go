@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/francescoalemanno/raijin-mono/internal/fzf"
 )
@@ -58,7 +58,7 @@ func (m filterList[T]) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Height > 0 {
 			m.height = msg.Height
 		}
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		key := msg.String()
 
 		// Any key other than ctrl+x resets pending delete.
@@ -136,7 +136,7 @@ var (
 	flPromptStyle = oneshotAccentStyle.Bold(true)
 )
 
-func (m filterList[T]) View() string {
+func (m filterList[T]) View() tea.View {
 	var b strings.Builder
 
 	b.WriteString(flTitleStyle.Render(m.title))
@@ -185,7 +185,9 @@ func (m filterList[T]) View() string {
 	} else {
 		b.WriteString(flDimStyle.Render("↑/↓ navigate · enter select · type to filter · esc cancel"))
 	}
-	return b.String()
+	view := tea.NewView(b.String())
+	view.AltScreen = true
+	return view
 }
 
 func (m filterList[T]) visibleRows() int {

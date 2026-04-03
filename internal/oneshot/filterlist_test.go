@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestFilterListDeleteRequiresTwoCtrlXPresses(t *testing.T) {
@@ -19,7 +19,7 @@ func TestFilterListDeleteRequiresTwoCtrlXPresses(t *testing.T) {
 	)
 	m.deletableFn = func(item int) bool { return true }
 
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	model, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'x', Mod: tea.ModCtrl}))
 	afterFirst := model.(filterList[int])
 	if !afterFirst.pendingDelete {
 		t.Fatalf("expected pending delete after first ctrl+x")
@@ -28,7 +28,7 @@ func TestFilterListDeleteRequiresTwoCtrlXPresses(t *testing.T) {
 		t.Fatalf("did not expect deleted item after first ctrl+x")
 	}
 
-	model, _ = afterFirst.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	model, _ = afterFirst.Update(tea.KeyPressMsg(tea.Key{Code: 'x', Mod: tea.ModCtrl}))
 	afterSecond := model.(filterList[int])
 	if afterSecond.deleted == nil || *afterSecond.deleted != 42 {
 		t.Fatalf("expected deleted item=42 after second ctrl+x, got %#v", afterSecond.deleted)
@@ -49,7 +49,7 @@ func TestFilterListDeleteSkippedWhenItemIsNotDeletable(t *testing.T) {
 	)
 	m.deletableFn = func(item int) bool { return false }
 
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	model, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'x', Mod: tea.ModCtrl}))
 	after := model.(filterList[int])
 	if after.pendingDelete {
 		t.Fatalf("did not expect pending delete when deletableFn=false")
@@ -70,13 +70,13 @@ func TestFilterListNonCtrlXClearsDeleteConfirmation(t *testing.T) {
 	)
 	m.deletableFn = func(item int) bool { return true }
 
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlX})
+	model, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'x', Mod: tea.ModCtrl}))
 	pending := model.(filterList[int])
 	if !pending.pendingDelete {
 		t.Fatalf("expected pending delete before reset")
 	}
 
-	model, _ = pending.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model, _ = pending.Update(tea.KeyPressMsg(tea.Key{Text: "a", Code: 'a'}))
 	reset := model.(filterList[int])
 	if reset.pendingDelete {
 		t.Fatalf("expected pending delete to clear on non-ctrl+x key")
@@ -105,7 +105,7 @@ func TestFilterListFullPageUsesViewportHeight(t *testing.T) {
 
 	model, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 12})
 	updated := model.(filterList[int])
-	view := updated.View()
+	view := updated.View().Content
 
 	// title + filter + 8 items + count + footer = 12 lines
 	lineCount := len(strings.Split(strings.TrimRight(view, "\n"), "\n"))

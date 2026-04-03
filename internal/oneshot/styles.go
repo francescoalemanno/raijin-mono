@@ -3,34 +3,31 @@ package oneshot
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 const userSeparatorWidth = 24
 
-func adaptiveStyle(light, dark string) lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-		Light: light,
-		Dark:  dark,
-	})
+func themeStyle(color string) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 }
 
 var (
-	oneshotAccentStyle   = adaptiveStyle("4", "6")
-	oneshotSuccessStyle  = adaptiveStyle("2", "10")
-	oneshotWarningStyle  = adaptiveStyle("3", "11")
-	oneshotDangerStyle   = adaptiveStyle("1", "9")
-	oneshotMutedStyle    = adaptiveStyle("8", "8")
-	oneshotNormalStyle   = adaptiveStyle("0", "7")
-	oneshotProviderStyle = adaptiveStyle("5", "13").Bold(true)
+	oneshotAccentStyle   = themeStyle("6")
+	oneshotSuccessStyle  = themeStyle("10")
+	oneshotWarningStyle  = themeStyle("11")
+	oneshotDangerStyle   = themeStyle("9")
+	oneshotMutedStyle    = themeStyle("8")
+	oneshotNormalStyle   = themeStyle("7")
+	oneshotProviderStyle = themeStyle("13").Bold(true)
 	oneshotDimStyle      = lipgloss.NewStyle().Faint(true)
 
-	oneshotUserPrefixStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "2", Dark: "10"}).Bold(true)
-	oneshotInfoIconStyle   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "4", Dark: "12"}).Bold(true)
-	oneshotOkIconStyle     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "2", Dark: "10"}).Bold(true)
-	oneshotWarnIconStyle   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "3", Dark: "11"}).Bold(true)
-	oneshotErrIconStyle    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "1", Dark: "9"}).Bold(true)
-	oneshotTimestampStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "8", Dark: "8"}).Faint(true)
+	oneshotUserPrefixStyle = themeStyle("10").Bold(true)
+	oneshotInfoIconStyle   = themeStyle("12").Bold(true)
+	oneshotOkIconStyle     = themeStyle("10").Bold(true)
+	oneshotWarnIconStyle   = themeStyle("11").Bold(true)
+	oneshotErrIconStyle    = themeStyle("9").Bold(true)
+	oneshotTimestampStyle  = themeStyle("8").Faint(true)
 )
 
 func renderUserPrefix() string {
@@ -65,37 +62,37 @@ func renderDimText(s string) string {
 	return oneshotDimStyle.Render(s)
 }
 
-// RenderThemedDim renders muted text using the shared adaptive theme.
+// RenderThemedDim renders muted text using the shared theme.
 func RenderThemedDim(s string) string {
 	return oneshotDimStyle.Render(s)
 }
 
-// RenderThemedAccent renders accent text using the shared adaptive theme.
+// RenderThemedAccent renders accent text using the shared theme.
 func RenderThemedAccent(s string) string {
 	return oneshotInfoIconStyle.Render(s)
 }
 
-// RenderThemedModel renders provider/model text using the shared adaptive theme.
+// RenderThemedModel renders provider/model text using the shared theme.
 func RenderThemedModel(s string) string {
 	return oneshotProviderStyle.Render(s)
 }
 
-// RenderThemedWarn renders warning text using the shared adaptive theme.
+// RenderThemedWarn renders warning text using the shared theme.
 func RenderThemedWarn(s string) string {
 	return oneshotWarnIconStyle.Render(s)
 }
 
-// RenderThemedOK renders success text using the shared adaptive theme.
+// RenderThemedOK renders success text using the shared theme.
 func RenderThemedOK(s string) string {
 	return oneshotOkIconStyle.Render(s)
 }
 
-// RenderThemedErr renders error text using the shared adaptive theme.
+// RenderThemedErr renders error text using the shared theme.
 func RenderThemedErr(s string) string {
 	return oneshotErrIconStyle.Render(s)
 }
 
-// RenderThemedInfo renders info text using the shared adaptive theme.
+// RenderThemedInfo renders info text using the shared theme.
 func RenderThemedInfo(s string) string {
 	return oneshotInfoIconStyle.Render(s)
 }

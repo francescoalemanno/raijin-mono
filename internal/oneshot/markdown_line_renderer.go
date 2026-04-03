@@ -7,8 +7,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2/quick"
-	"github.com/charmbracelet/lipgloss"
 )
 
 var (
@@ -151,10 +151,7 @@ func (r *lineMarkdownRenderer) renderCodeLine(line string) string {
 }
 
 func markdownCodeStyleName() string {
-	if lipgloss.HasDarkBackground() {
-		return "monokai"
-	}
-	return "github"
+	return "monokai"
 }
 
 func (r *lineMarkdownRenderer) renderMarkdownLine(line string) string {

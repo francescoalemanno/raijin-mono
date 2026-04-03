@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
 )
@@ -136,7 +136,7 @@ func runReasoningSelector(current libagent.ThinkingLevel) (libagent.ThinkingLeve
 		},
 	)
 
-	p := tea.NewProgram(fl, tea.WithAltScreen())
+	p := tea.NewProgram(fl)
 	final, err := p.Run()
 	if err != nil {
 		return "", false, err
