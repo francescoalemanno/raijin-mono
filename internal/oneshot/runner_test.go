@@ -1590,11 +1590,12 @@ func TestRunHistoryUsesStandardRendererMarkdownPath(t *testing.T) {
 			t.Fatalf("Run(/history): %v", err)
 		}
 	})
+	plain := ansiRE.ReplaceAllString(out, "")
 
-	if !strings.Contains(out, "bold\n") {
+	if !strings.Contains(plain, "bold\n") {
 		t.Fatalf("expected rendered markdown content, got %q", out)
 	}
-	if strings.Contains(out, "**bold**") {
+	if strings.Contains(plain, "**bold**") {
 		t.Fatalf("expected markdown markers to be rendered, got %q", out)
 	}
 }

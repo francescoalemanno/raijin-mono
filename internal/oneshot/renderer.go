@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/francescoalemanno/raijin-mono/internal/compaction"
 	"github.com/francescoalemanno/raijin-mono/internal/tools"
 	libagent "github.com/francescoalemanno/raijin-mono/libagent"
@@ -32,6 +32,7 @@ var activeRendererStack struct {
 
 type rendererOptions struct {
 	persistentSpinner bool
+	deferSpinnerPaint bool
 	now               func() time.Time
 	spinnerInterval   time.Duration
 	modelLabel        string
@@ -100,6 +101,7 @@ type renderer struct {
 	spinnerInterval     time.Duration
 	spinnerStopCh       chan struct{}
 	spinnerDoneCh       chan struct{}
+	spinnerDeferred     bool
 	modelLabel          string
 	contextWindow       int64
 	contextMessages     []libagent.Message
@@ -166,6 +168,7 @@ func newRendererWithOptions(stderr, stdout io.Writer, agentTools []libagent.Tool
 		replyMD:         newLineMarkdownRendererWithWidth(termWidth),
 		spinnerEnabled:  isTTY && opts.persistentSpinner,
 		spinnerInterval: opts.spinnerInterval,
+		spinnerDeferred: isTTY && opts.persistentSpinner && opts.deferSpinnerPaint,
 		modelLabel:      strings.TrimSpace(opts.modelLabel),
 		contextWindow:   opts.contextWindow,
 		contextMessages: append([]libagent.Message(nil), opts.initialMessages...),
@@ -225,6 +228,7 @@ func (r *renderer) handleEvent(event libagent.AgentEvent) {
 }
 
 func (r *renderer) onContextCompaction(event libagent.AgentEvent) {
+	r.activateSpinnerLocked()
 	if event.ContextCompaction == nil {
 		return
 	}
@@ -240,6 +244,7 @@ func (r *renderer) onContextCompaction(event libagent.AgentEvent) {
 }
 
 func (r *renderer) onMessageUpdate(event libagent.AgentEvent) {
+	r.activateSpinnerLocked()
 	delta := event.Delta
 	if delta == nil {
 		return
@@ -282,6 +287,7 @@ func (r *renderer) onMessageUpdate(event libagent.AgentEvent) {
 }
 
 func (r *renderer) onToolStart(id, name, input string) {
+	r.activateSpinnerLocked()
 	if p, ok := r.pending[id]; ok {
 		p.executing = true
 		if p.startTime.IsZero() {
@@ -310,6 +316,7 @@ func (r *renderer) onToolStart(id, name, input string) {
 }
 
 func (r *renderer) onToolPreviewStart(id, name, input string) {
+	r.activateSpinnerLocked()
 	if p, ok := r.pending[id]; ok {
 		if strings.TrimSpace(input) != "" {
 			p.args = input
@@ -387,6 +394,7 @@ func (r *renderer) onMessageEnd(event libagent.AgentEvent) {
 		r.flushReplyTail()
 		r.flushThinking()
 		r.renderUserMessage(m)
+		r.activateSpinnerLocked()
 	case *libagent.ToolResultMessage:
 		r.appendContextMessageLocked(m)
 		if p, ok := r.pending[m.ToolCallID]; ok {
@@ -417,28 +425,39 @@ func (r *renderer) renderUserMessage(m *libagent.UserMessage) {
 	}
 	prefix := renderUserPrefix()
 	separator := renderUserSeparator()
+	prepared := false
+	prepare := func() {
+		if prepared {
+			return
+		}
+		r.prepareForStdoutLocked()
+		prepared = true
+	}
+	defer func() {
+		if prepared {
+			r.restoreAfterStdoutLocked()
+		}
+	}()
 	printedSeparator := false
 	printSeparator := func() {
 		if printedSeparator {
 			return
 		}
-		r.prepareForStdoutLocked()
+		prepare()
 		fmt.Fprint(r.stdout, separator)
 		fmt.Fprint(r.stdout, "\n")
-		r.restoreAfterStdoutLocked()
 		printedSeparator = true
 	}
 
 	text := strings.TrimSpace(m.Content)
 	if text != "" {
 		printSeparator()
-		r.prepareForStdoutLocked()
+		prepare()
 		for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
 			fmt.Fprint(r.stdout, prefix)
 			fmt.Fprint(r.stdout, strings.TrimRight(line, "\r"))
 			fmt.Fprint(r.stdout, "\n")
 		}
-		r.restoreAfterStdoutLocked()
 	}
 
 	for _, f := range m.Files {
@@ -448,13 +467,12 @@ func (r *renderer) renderUserMessage(m *libagent.UserMessage) {
 			name = "(unnamed)"
 		}
 		mime := strings.TrimSpace(f.MediaType)
-		r.prepareForStdoutLocked()
+		prepare()
 		if mime != "" {
 			fmt.Fprintf(r.stdout, "%s[attached] %s (%s)\n", prefix, name, mime)
 		} else {
 			fmt.Fprintf(r.stdout, "%s[attached] %s\n", prefix, name)
 		}
-		r.restoreAfterStdoutLocked()
 	}
 }
 
@@ -915,10 +933,12 @@ func (r *renderer) startPersistentSpinner() {
 		return
 	}
 
-	r.spinnerStateStart = r.now()
-	r.spinnerPhase = r.spinnerPhaseLocked()
-	r.spinnerLabel = r.spinnerLabelLocked()
-	r.redrawSpinnerLocked()
+	if !r.spinnerDeferred {
+		r.spinnerStateStart = r.now()
+		r.spinnerPhase = r.spinnerPhaseLocked()
+		r.spinnerLabel = r.spinnerLabelLocked()
+		r.redrawSpinnerLocked()
+	}
 
 	stopCh := make(chan struct{})
 	doneCh := make(chan struct{})
@@ -967,6 +987,17 @@ func (r *renderer) stopPersistentSpinner() {
 	if doneCh != nil {
 		<-doneCh
 	}
+}
+
+func (r *renderer) activateSpinnerLocked() {
+	if !r.spinnerEnabled || !r.spinnerStateStart.IsZero() {
+		return
+	}
+	r.spinnerDeferred = false
+	r.spinnerStateStart = r.now()
+	r.spinnerPhase = r.spinnerPhaseLocked()
+	r.spinnerLabel = r.spinnerLabelLocked()
+	r.redrawSpinnerLocked()
 }
 
 func (r *renderer) spinnerLabelLocked() string {

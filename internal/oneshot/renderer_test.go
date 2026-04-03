@@ -423,6 +423,7 @@ func TestRendererLiveSpinnerSuspendsAroundStdoutWrites(t *testing.T) {
 	current := time.Unix(300, 0)
 	r := newRendererWithOptions(&tty, &tty, nil, true, rendererOptions{
 		persistentSpinner: true,
+		deferSpinnerPaint: true,
 		now:               func() time.Time { return current },
 		spinnerInterval:   time.Hour,
 		modelLabel:        "openai/gpt-test",
@@ -445,6 +446,42 @@ func TestRendererLiveSpinnerSuspendsAroundStdoutWrites(t *testing.T) {
 	}
 	if !r.spinnerVisible {
 		t.Fatalf("expected spinner to be restored after stdout writes")
+	}
+}
+
+func TestRendererLiveSpinnerDoesNotRedrawBetweenUserSeparatorAndPrompt(t *testing.T) {
+	var tty bytes.Buffer
+	current := time.Unix(305, 0)
+	r := newRendererWithOptions(&tty, &tty, nil, true, rendererOptions{
+		persistentSpinner: true,
+		now:               func() time.Time { return current },
+		spinnerInterval:   time.Hour,
+		modelLabel:        "openai/gpt-test",
+		contextWindow:     10000,
+	})
+	r.startPersistentSpinner()
+	defer r.stopPersistentSpinner()
+
+	tty.Reset()
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: &libagent.UserMessage{
+			Content: "ciao",
+		},
+	})
+
+	out := ansiRE.ReplaceAllString(tty.String(), "")
+	separatorIdx := strings.Index(out, "────")
+	if separatorIdx < 0 {
+		t.Fatalf("expected user separator in output, got %q", out)
+	}
+	promptIdx := strings.Index(out, "❯ ciao\n")
+	if promptIdx < 0 {
+		t.Fatalf("expected rendered user prompt in output, got %q", out)
+	}
+	modelIdx := strings.Index(out, "openai/gpt-test")
+	if modelIdx >= 0 && modelIdx < promptIdx {
+		t.Fatalf("expected spinner footer after prompt render, got %q", out)
 	}
 }
 
@@ -564,7 +601,7 @@ func TestRendererReplyOutputRendersMarkdownLineByLine(t *testing.T) {
 		Delta: &libagent.StreamDelta{Type: "text_delta", Delta: "**bold**\n"},
 	})
 
-	got := stdout.String()
+	got := ansiRE.ReplaceAllString(stdout.String(), "")
 	if !strings.Contains(got, "bold\n") {
 		t.Fatalf("expected rendered markdown line in stdout, got %q", got)
 	}

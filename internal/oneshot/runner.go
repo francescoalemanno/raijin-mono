@@ -1110,6 +1110,7 @@ func handleRetry(opts Options) error {
 	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
 	r := newRendererWithOptions(os.Stderr, os.Stdout, sess.Tools(), isTTY, rendererOptions{
 		persistentSpinner: true,
+		deferSpinnerPaint: true,
 		modelLabel:        statusModelLabel(opts),
 		contextWindow:     opts.RuntimeModel.EffectiveContextWindow(),
 		initialMessages:   msgs,
@@ -1528,6 +1529,7 @@ func runSessionAgentCallWithRenderer(ctx context.Context, opts Options, sess *se
 	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
 	r := newRendererWithOptions(stderr, stdout, sess.Tools(), isTTY, rendererOptions{
 		persistentSpinner: true,
+		deferSpinnerPaint: true,
 		modelLabel:        statusModelLabel(opts),
 		contextWindow:     opts.RuntimeModel.EffectiveContextWindow(),
 		initialMessages:   msgs,
