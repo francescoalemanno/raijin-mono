@@ -52,6 +52,7 @@ type Options struct {
 	ForceNew     bool
 	Ephemeral    bool
 	NoThinking   bool
+	NoEcho       bool
 }
 
 const assistantCaptureEnv = "RAIJIN_ASSISTANT_CAPTURE_FILE"
@@ -1115,6 +1116,8 @@ func handleRetry(opts Options) error {
 		modelLabel:        statusModelLabel(opts),
 		contextWindow:     opts.RuntimeModel.EffectiveContextWindow(),
 		initialMessages:   msgs,
+		noThinking:        opts.NoThinking,
+		noEcho:            opts.NoEcho,
 	})
 	if r.contextWindow <= 0 {
 		r.contextWindow = opts.ModelCfg.ContextWindow
@@ -1535,6 +1538,7 @@ func runSessionAgentCallWithRenderer(ctx context.Context, opts Options, sess *se
 		contextWindow:     opts.RuntimeModel.EffectiveContextWindow(),
 		initialMessages:   msgs,
 		noThinking:        opts.NoThinking,
+		noEcho:            opts.NoEcho,
 	})
 	if r.contextWindow <= 0 {
 		r.contextWindow = opts.ModelCfg.ContextWindow

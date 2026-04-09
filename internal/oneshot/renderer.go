@@ -39,6 +39,7 @@ type rendererOptions struct {
 	contextWindow     int64
 	initialMessages   []libagent.Message
 	noThinking        bool
+	noEcho            bool
 }
 
 // pendingLine tracks a tool or thinking event currently in progress.
@@ -108,6 +109,7 @@ type renderer struct {
 	contextMessages     []libagent.Message
 	interactiveDialogs  int
 	noThinking          bool
+	noEcho              bool
 }
 
 func newRenderer(stderr, stdout io.Writer, agentTools []libagent.Tool, isTTY bool) *renderer {
@@ -175,6 +177,7 @@ func newRendererWithOptions(stderr, stdout io.Writer, agentTools []libagent.Tool
 		contextWindow:     opts.contextWindow,
 		contextMessages: append([]libagent.Message(nil), opts.initialMessages...),
 		noThinking:      opts.noThinking,
+		noEcho:          opts.noEcho,
 	}
 }
 
@@ -424,6 +427,9 @@ func (r *renderer) onMessageEnd(event libagent.AgentEvent) {
 
 func (r *renderer) renderUserMessage(m *libagent.UserMessage) {
 	if m == nil {
+		return
+	}
+	if r.noEcho {
 		return
 	}
 	prefix := renderUserPrefix()
