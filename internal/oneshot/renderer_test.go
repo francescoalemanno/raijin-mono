@@ -1002,6 +1002,82 @@ func TestRendererHandlesAllAgentEventTypesAndKnownDeltaTypes(t *testing.T) {
 	}
 }
 
+func TestRendererNoThinkingSuppressesThinkingOutput(t *testing.T) {
+	var stderr bytes.Buffer
+	var stdout bytes.Buffer
+	r := newRendererWithOptions(&stderr, &stdout, nil, false, rendererOptions{
+		noThinking: true,
+	})
+
+	// Simulate reasoning events
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "reasoning_start", ID: "r1"},
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "reasoning_delta", ID: "r1", Delta: "This is my reasoning.\nMore thoughts."},
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "reasoning_end", ID: "r1"},
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: &libagent.AssistantMessage{
+			Role: "assistant",
+		},
+	})
+
+	// With noThinking enabled, thinking content should not appear in stdout
+	if got := stdout.String(); got != "" {
+		t.Fatalf("expected no thinking output with noThinking=true, got %q", got)
+	}
+
+	// Reasoning status label should also be suppressed
+	if got := stderr.String(); strings.Contains(got, "Reasoning") {
+		t.Fatalf("expected no reasoning status with noThinking=true, got %q", got)
+	}
+}
+
+func TestRendererNoThinkingAllowsReplyOutput(t *testing.T) {
+	var stderr bytes.Buffer
+	var stdout bytes.Buffer
+	r := newRendererWithOptions(&stderr, &stdout, nil, false, rendererOptions{
+		noThinking: true,
+	})
+
+	// Simulate both reasoning and reply events
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "reasoning_start", ID: "r1"},
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "reasoning_delta", ID: "r1", Delta: "Hidden reasoning."},
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type:  libagent.AgentEventTypeMessageUpdate,
+		Delta: &libagent.StreamDelta{Type: "text_delta", Delta: "Visible response.\n"},
+	})
+	r.handleEvent(libagent.AgentEvent{
+		Type: libagent.AgentEventTypeMessageEnd,
+		Message: &libagent.AssistantMessage{
+			Role: "assistant",
+		},
+	})
+
+	// Thinking should be suppressed
+	if got := stdout.String(); strings.Contains(got, "Hidden reasoning") {
+		t.Fatalf("expected thinking to be suppressed, got %q", got)
+	}
+
+	// Reply should still appear
+	if got := stdout.String(); !strings.Contains(got, "Visible response") {
+		t.Fatalf("expected reply text in stdout, got %q", got)
+	}
+}
+
 func lastNonEmptyLine(s string) string {
 	lines := strings.Split(s, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {

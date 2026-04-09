@@ -23,6 +23,7 @@ func main() {
 	versionFlag := flag.Bool("version", false, "show version")
 	_ = flag.String("new", "", "start a new REPL session; optionally submit the first prompt")
 	ephemeralFlag := flag.Bool("ephemeral", false, "run a one-shot prompt without loading or persisting session history")
+	noThinkingFlag := flag.Bool("no-thinking", false, "suppress printing of reasoning/thinking blocks to terminal")
 	initFlag := flag.String("init", "", "print shell integration script (zsh, bash, fish)")
 	completionsFlag := flag.Bool("completions", false, "print available commands, templates, and skills for shell completion")
 	completeFlag := flag.String("complete", "", "resolve completion for a token or input line (interactive fzf)")
@@ -141,6 +142,7 @@ func main() {
 		Store:        store,
 		ForceNew:     newFlag.present,
 		Ephemeral:    *ephemeralFlag,
+		NoThinking:   *noThinkingFlag,
 	}
 	if err := oneshot.Run(opts, oneShotText); err != nil {
 		fmt.Fprintln(os.Stderr, libagent.FormatErrorForCLI(err))

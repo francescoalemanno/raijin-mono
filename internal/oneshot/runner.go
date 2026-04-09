@@ -51,6 +51,7 @@ type Options struct {
 	Store        *modelconfig.ModelStore
 	ForceNew     bool
 	Ephemeral    bool
+	NoThinking   bool
 }
 
 const assistantCaptureEnv = "RAIJIN_ASSISTANT_CAPTURE_FILE"
@@ -1533,6 +1534,7 @@ func runSessionAgentCallWithRenderer(ctx context.Context, opts Options, sess *se
 		modelLabel:        statusModelLabel(opts),
 		contextWindow:     opts.RuntimeModel.EffectiveContextWindow(),
 		initialMessages:   msgs,
+		noThinking:        opts.NoThinking,
 	})
 	if r.contextWindow <= 0 {
 		r.contextWindow = opts.ModelCfg.ContextWindow

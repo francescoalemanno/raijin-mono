@@ -38,6 +38,7 @@ type rendererOptions struct {
 	modelLabel        string
 	contextWindow     int64
 	initialMessages   []libagent.Message
+	noThinking        bool
 }
 
 // pendingLine tracks a tool or thinking event currently in progress.
@@ -106,6 +107,7 @@ type renderer struct {
 	contextWindow       int64
 	contextMessages     []libagent.Message
 	interactiveDialogs  int
+	noThinking          bool
 }
 
 func newRenderer(stderr, stdout io.Writer, agentTools []libagent.Tool, isTTY bool) *renderer {
@@ -170,8 +172,9 @@ func newRendererWithOptions(stderr, stdout io.Writer, agentTools []libagent.Tool
 		spinnerInterval: opts.spinnerInterval,
 		spinnerDeferred: isTTY && opts.persistentSpinner && opts.deferSpinnerPaint,
 		modelLabel:      strings.TrimSpace(opts.modelLabel),
-		contextWindow:   opts.contextWindow,
+		contextWindow:     opts.contextWindow,
 		contextMessages: append([]libagent.Message(nil), opts.initialMessages...),
+		noThinking:      opts.noThinking,
 	}
 }
 
@@ -487,6 +490,9 @@ func (r *renderer) bestParams(p *pendingLine) string {
 }
 
 func (r *renderer) startThinking() {
+	if r.noThinking {
+		return
+	}
 	if r.thinking {
 		return
 	}
@@ -498,6 +504,9 @@ func (r *renderer) startThinking() {
 }
 
 func (r *renderer) flushThinking() {
+	if r.noThinking {
+		return
+	}
 	r.flushThinkingTail()
 	if !r.thinking {
 		return
@@ -563,6 +572,9 @@ func (r *renderer) appendReplyDelta(delta string) {
 }
 
 func (r *renderer) appendThinkingDelta(delta string) {
+	if r.noThinking {
+		return
+	}
 	if delta == "" {
 		return
 	}
@@ -726,6 +738,9 @@ func (r *renderer) flushThinkingBufferedLines() {
 }
 
 func (r *renderer) writeThinkingLine(line string) {
+	if r.noThinking {
+		return
+	}
 	line = strings.TrimRight(line, "\r")
 	r.prepareForStdoutLocked()
 	if line == "" {
