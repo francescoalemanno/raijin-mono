@@ -151,6 +151,17 @@ var zenGeneratedModels = []ModelInfo{
 	},
 	{
 		ProviderID:        ZenProviderID,
+		ModelID:           "glm-5.1",
+		Name:              "GLM-5.1",
+		ContextWindow:     204800,
+		DefaultMaxTokens:  131072,
+		CanReason:         true,
+		CostPer1MIn:       1.4,
+		CostPer1MOut:      4.4,
+		CostPer1MInCached: 0.26,
+	},
+	{
+		ProviderID:        ZenProviderID,
 		ModelID:           "gpt-5",
 		Name:              "GPT-5",
 		ContextWindow:     400000,
@@ -338,23 +349,6 @@ var zenGeneratedModels = []ModelInfo{
 		CostPer1MInCached: 0.08,
 	},
 	{
-		ProviderID:       ZenProviderID,
-		ModelID:          "mimo-v2-omni-free",
-		Name:             "MiMo V2 Omni Free",
-		ContextWindow:    262144,
-		DefaultMaxTokens: 64000,
-		CanReason:        true,
-		SupportsImages:   true,
-	},
-	{
-		ProviderID:       ZenProviderID,
-		ModelID:          "mimo-v2-pro-free",
-		Name:             "MiMo V2 Pro Free",
-		ContextWindow:    1048576,
-		DefaultMaxTokens: 64000,
-		CanReason:        true,
-	},
-	{
 		ProviderID:        ZenProviderID,
 		ModelID:           "minimax-m2.5",
 		Name:              "MiniMax M2.5",
@@ -381,14 +375,6 @@ var zenGeneratedModels = []ModelInfo{
 		DefaultMaxTokens: 128000,
 		CanReason:        true,
 	},
-	{
-		ProviderID:       ZenProviderID,
-		ModelID:          "qwen3.6-plus-free",
-		Name:             "Qwen3.6 Plus Free",
-		ContextWindow:    1048576,
-		DefaultMaxTokens: 64000,
-		CanReason:        true,
-	},
 }
 
 var zenGoGeneratedModels = []ModelInfo{
@@ -405,6 +391,17 @@ var zenGoGeneratedModels = []ModelInfo{
 	},
 	{
 		ProviderID:        ZenGoProviderID,
+		ModelID:           "glm-5.1",
+		Name:              "GLM-5.1",
+		ContextWindow:     204800,
+		DefaultMaxTokens:  131072,
+		CanReason:         true,
+		CostPer1MIn:       1.4,
+		CostPer1MOut:      4.4,
+		CostPer1MInCached: 0.26,
+	},
+	{
+		ProviderID:        ZenGoProviderID,
 		ModelID:           "kimi-k2.5",
 		Name:              "Kimi K2.5",
 		ContextWindow:     262144,
@@ -414,6 +411,29 @@ var zenGoGeneratedModels = []ModelInfo{
 		CostPer1MIn:       0.6,
 		CostPer1MOut:      3,
 		CostPer1MInCached: 0.1,
+	},
+	{
+		ProviderID:        ZenGoProviderID,
+		ModelID:           "mimo-v2-omni",
+		Name:              "MiMo V2 Omni",
+		ContextWindow:     262144,
+		DefaultMaxTokens:  64000,
+		CanReason:         true,
+		SupportsImages:    true,
+		CostPer1MIn:       0.4,
+		CostPer1MOut:      2,
+		CostPer1MInCached: 0.08,
+	},
+	{
+		ProviderID:        ZenGoProviderID,
+		ModelID:           "mimo-v2-pro",
+		Name:              "MiMo V2 Pro",
+		ContextWindow:     1048576,
+		DefaultMaxTokens:  64000,
+		CanReason:         true,
+		CostPer1MIn:       1,
+		CostPer1MOut:      3,
+		CostPer1MInCached: 0.2,
 	},
 	{
 		ProviderID:        ZenGoProviderID,
@@ -442,5 +462,6 @@ var zenGoGeneratedModels = []ModelInfo{
 // zenGoAnthropicModels lists Go models that use Anthropic API format.
 // All other Go models use OpenAI-compatible format.
 var zenGoAnthropicModels = map[string]bool{
+	"minimax-m2.5": true,
 	"minimax-m2.7": true,
 }

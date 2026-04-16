@@ -173,6 +173,16 @@ var syntheticGeneratedModels = []ModelInfo{
 		DefaultMaxTokens: 65536,
 		CanReason:        true,
 		CostPer1MIn:      1,
-		CostPer1MOut:     6,
+		CostPer1MOut:     3,
+	},
+	{
+		ProviderID:       SyntheticProviderID,
+		ModelID:          "hf:zai-org/GLM-5.1",
+		Name:             "zai-org/GLM-5.1",
+		ContextWindow:    196608,
+		DefaultMaxTokens: 65536,
+		CanReason:        true,
+		CostPer1MIn:      1,
+		CostPer1MOut:     3,
 	},
 }
